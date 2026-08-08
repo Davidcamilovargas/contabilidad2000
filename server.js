@@ -4,18 +4,22 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.ANTHROPIC_API_KEY;
+const API_KEY = process.env.GEMINI_API_KEY;
 
 if (!API_KEY) {
-  console.error('\n[ERROR] No se encontró ANTHROPIC_API_KEY en el archivo .env');
-  console.error('Copia .env.example a .env y agrega tu clave de API antes de iniciar el servidor.\n');
+  console.error('\n[ERROR] No se encontró GEMINI_API_KEY en el archivo .env');
+  console.error('Copia .env.example a .env y agrega tu clave gratuita de Google AI Studio antes de iniciar el servidor.\n');
   process.exit(1);
 }
 
 app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Endpoint que recibe el archivo (imagen o PDF) y llama a la API de Anthropic
+// Modelo gratuito de Gemini. Si en el futuro Google lo retira, cambia este valor
+// por el modelo Flash vigente (revisa https://ai.google.dev/gemini-api/docs/models).
+const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+
+// Endpoint que recibe el archivo (imagen o PDF) y llama a la API gratuita de Gemini
 app.post('/api/extract', async (req, res) => {
   const { base64, mediaType, isPdf } = req.body;
 
@@ -39,44 +43,49 @@ app.post('/api/extract', async (req, res) => {
 
 Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo. No inventes datos.`;
 
-  const fileBlock = isPdf
-    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
-    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } };
+  const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [
-          {
-            role: 'user',
-            content: [fileBlock, { type: 'text', text: prompt }]
-          }
-        ]
-      })
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': API_KEY
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { inline_data: { mime_type: effectiveMediaType, data: base64 } },
+                { text: prompt }
+              ]
+            }
+          ]
+        })
+      }
+    );
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error('Error de Anthropic API:', response.status, errText);
-      return res.status(response.status).json({ error: `Error de la API de Anthropic (${response.status})` });
+      console.error('Error de Gemini API:', response.status, errText);
+      let detail = errText;
+      try {
+        const parsedErr = JSON.parse(errText);
+        detail = parsedErr.error?.message || errText;
+      } catch (_) { /* dejar el texto crudo si no es JSON */ }
+      return res.status(response.status).json({ error: `Error de la API de Gemini (${response.status}): ${detail}` });
     }
 
     const data = await response.json();
-    const textBlock = (data.content || []).find(b => b.type === 'text');
+    const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!textBlock) {
+    if (!textOut) {
       return res.status(500).json({ error: 'No se recibió una respuesta de texto de la API.' });
     }
 
-    let clean = textBlock.text.trim();
+    let clean = textOut.trim();
     clean = clean.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
 
     let parsed;
@@ -89,8 +98,8 @@ Si algún campo no se puede determinar con certeza, usa una cadena vacía "" par
     res.json(parsed);
 
   } catch (err) {
-    console.error('Error al llamar a Anthropic:', err);
-    res.status(500).json({ error: 'Error de conexión con la API de Anthropic.' });
+    console.error('Error al llamar a Gemini:', err);
+    res.status(500).json({ error: 'Error de conexión con la API de Gemini.' });
   }
 });
 
