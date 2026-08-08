@@ -67,3 +67,4 @@ escaner-facturas-app/
 - Agregar gestión de varios clientes/NITs.
 - Exportar todo a Excel.
 - Desplegar la app en internet (ej. Render, Railway) para no depender de tu computador.
+# contabilidad2000
