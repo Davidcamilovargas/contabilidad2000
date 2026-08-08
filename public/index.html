@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escáner de Facturas</title>
+<style>
+  :root{
+    --paper:#EDEAE2;
+    --ink:#1F2A24;
+    --ink-soft:#4A554D;
+    --line:#C9C2B2;
+    --moss:#3D5A45;
+    --moss-deep:#28402F;
+    --stamp:#B5482E;
+    --card:#FBF9F4;
+    --ok-bg:#DCE7DC;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Iowan Old Style','Georgia',serif;
+    min-height:100vh;
+  }
+  .wrap{
+    max-width:900px;
+    margin:0 auto;
+    padding:36px 20px 80px;
+  }
+  header{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    border-bottom:2px solid var(--ink);
+    padding-bottom:14px;
+    margin-bottom:8px;
+  }
+  .brand{display:flex;align-items:baseline;gap:10px;}
+  h1{font-size:26px;margin:0;font-weight:600;letter-spacing:0.2px;}
+  .tag{
+    font-family:'Courier New',monospace;
+    font-size:11px;
+    letter-spacing:1.5px;
+    color:var(--ink-soft);
+    text-transform:uppercase;
+  }
+  .sub{
+    font-family:'Courier New',monospace;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    margin:10px 0 34px;
+    letter-spacing:0.3px;
+  }
+  .intake{
+    background:var(--card);
+    border:1px solid var(--line);
+    position:relative;
+    padding:0;
+  }
+  .intake::before{
+    content:"";
+    position:absolute;
+    top:0;left:0;right:0;
+    height:4px;
+    background:repeating-linear-gradient(90deg, var(--moss) 0 10px, transparent 10px 20px);
+    opacity:.5;
+  }
+  .intake-inner{
+    padding:34px 28px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    text-align:center;
+    gap:14px;
+  }
+  .intake-icon{
+    width:52px;height:52px;
+    border:1.5px solid var(--ink);
+    border-radius:2px;
+    display:flex;align-items:center;justify-content:center;
+    color:var(--moss-deep);
+  }
+  .intake h2{margin:0;font-size:18px;font-weight:600;}
+  .intake p{
+    margin:0;font-size:13.5px;color:var(--ink-soft);
+    max-width:380px;line-height:1.5;
+  }
+  .actions{
+    display:flex;gap:10px;margin-top:8px;
+    flex-wrap:wrap;justify-content:center;
+  }
+  button{font-family:inherit;cursor:pointer;border:none;}
+  .btn{
+    font-family:'Courier New',monospace;
+    font-size:12.5px;letter-spacing:1px;text-transform:uppercase;
+    padding:11px 20px;background:var(--ink);color:var(--paper);
+    transition:transform .12s ease, background .15s ease;
+  }
+  .btn:hover{background:var(--moss-deep);}
+  .btn:active{transform:scale(.97);}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--ink);}
+  .btn.ghost:hover{background:var(--ink);color:var(--paper);}
+  .btn:disabled{opacity:.4;cursor:not-allowed;}
+  input[type=file]{display:none;}
+
+  #previewWrap{margin-top:22px;display:none;}
+  #previewWrap.show{display:block;}
+  .preview-frame{
+    border:1px solid var(--line);background:var(--card);
+    padding:14px;display:flex;gap:16px;align-items:center;
+  }
+  .preview-frame img{width:84px;height:84px;object-fit:cover;border:1px solid var(--line);}
+  .pdf-icon{
+    width:84px;height:84px;display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    border:1px solid var(--line);background:#F2EFE7;color:var(--stamp);flex-shrink:0;
+  }
+  .pdf-icon span{font-family:'Courier New',monospace;font-size:11px;letter-spacing:1px;color:var(--ink-soft);}
+  .preview-meta{flex:1;}
+  .preview-meta .fname{font-size:14px;font-weight:600;}
+  .preview-meta .fsize{font-family:'Courier New',monospace;font-size:11.5px;color:var(--ink-soft);}
+
+  #status{
+    margin-top:18px;font-family:'Courier New',monospace;font-size:12.5px;
+    color:var(--moss-deep);letter-spacing:.5px;display:none;align-items:center;gap:10px;
+  }
+  #status.show{display:flex;}
+  .dot{width:7px;height:7px;background:var(--moss-deep);border-radius:50%;animation:pulse 1.1s infinite ease-in-out;}
+  @keyframes pulse{0%,100%{opacity:.25;}50%{opacity:1;}}
+
+  #err{
+    margin-top:18px;border:1px solid var(--stamp);background:#F7E6E1;
+    color:#7A2E1B;padding:12px 14px;font-size:13px;display:none;
+  }
+  #err.show{display:block;}
+
+  #result{margin-top:34px;display:none;}
+  #result.show{display:block;}
+  .result-head{
+    display:flex;align-items:baseline;justify-content:space-between;
+    border-bottom:1px solid var(--ink);padding-bottom:10px;margin-bottom:0;
+  }
+  .result-head h2{font-size:16px;margin:0;font-weight:600;}
+  .stamp{
+    font-family:'Courier New',monospace;font-size:11px;letter-spacing:1.5px;
+    color:var(--moss-deep);border:1px solid var(--moss-deep);
+    padding:3px 8px;transform:rotate(-2deg);
+  }
+  .ledger{background:var(--card);border:1px solid var(--line);border-top:none;}
+  .field-row{display:grid;grid-template-columns:180px 1fr;border-bottom:1px solid var(--line);}
+  .field-row:last-child{border-bottom:none;}
+  .field-label{
+    font-family:'Courier New',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;
+    color:var(--ink-soft);padding:13px 16px;background:#F2EFE7;
+    border-right:1px solid var(--line);display:flex;align-items:center;
+  }
+  .field-value{padding:6px 14px;display:flex;align-items:center;}
+  .field-value input{
+    width:100%;border:1px solid transparent;background:transparent;
+    font-family:inherit;font-size:14.5px;color:var(--ink);padding:7px 8px;border-radius:2px;
+  }
+  .field-value input:focus{outline:none;border-color:var(--moss);background:var(--ok-bg);}
+  .field-value.money input{font-weight:600;}
+  .result-actions{margin-top:18px;display:flex;gap:10px;justify-content:flex-end;}
+
+  @media (max-width:560px){
+    .field-row{grid-template-columns:1fr;}
+    .field-label{border-right:none;border-bottom:1px solid var(--line);}
+    h1{font-size:21px;}
+  }
+  footer{
+    margin-top:60px;padding-top:16px;border-top:1px solid var(--line);
+    font-family:'Courier New',monospace;font-size:11px;color:var(--ink-soft);
+    text-align:center;letter-spacing:.5px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand"><h1>Escáner de Facturas</h1></div>
+    <span class="tag">v0.2 · servidor local</span>
+  </header>
+  <div class="sub">Sube o fotografía una factura. La lectura y los campos se muestran abajo para revisar.</div>
+
+  <div class="intake">
+    <div class="intake-inner">
+      <div class="intake-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/>
+          <circle cx="12" cy="13" r="3.5"/>
+        </svg>
+      </div>
+      <h2>Capturar factura</h2>
+      <p>Admite fotos (JPG, PNG) tomadas con la cámara, o archivos de imagen y PDF guardados en tu dispositivo.</p>
+      <div class="actions">
+        <button class="btn" id="btnCamera">Tomar foto</button>
+        <button class="btn ghost" id="btnUpload">Subir archivo (imagen o PDF)</button>
+      </div>
+      <input type="file" id="fileCamera" accept="image/*" capture="environment">
+      <input type="file" id="fileUpload" accept="image/*,application/pdf">
+    </div>
+  </div>
+
+  <div id="previewWrap">
+    <div class="preview-frame">
+      <img id="previewImg" alt="Vista previa de la factura">
+      <div id="previewPdfIcon" class="pdf-icon">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>
+          <path d="M15 2v5h5"/>
+        </svg>
+        <span>PDF</span>
+      </div>
+      <div class="preview-meta">
+        <div class="fname" id="previewName">—</div>
+        <div class="fsize" id="previewSize">—</div>
+      </div>
+      <button class="btn" id="btnExtract">Leer factura</button>
+    </div>
+  </div>
+
+  <div id="status">
+    <span class="dot"></span>
+    <span id="statusText">Leyendo factura…</span>
+  </div>
+
+  <div id="err"></div>
+
+  <div id="result">
+    <div class="result-head">
+      <h2>Datos extraídos</h2>
+      <span class="stamp">revisar antes de usar</span>
+    </div>
+    <div class="ledger" id="ledger"></div>
+    <div class="result-actions">
+      <button class="btn ghost" id="btnAgain">Escanear otra</button>
+    </div>
+  </div>
+
+  <footer>Los datos se leen automáticamente y pueden contener errores — verifica siempre contra la factura original.</footer>
+</div>
+
+<script>
+const FIELDS = [
+  {key:"tipo_doc", label:"Tipo Doc (13/31)"},
+  {key:"nit_cc", label:"Nit o CC"},
+  {key:"dv", label:"DV"},
+  {key:"nombre_razon_social", label:"Nombre o Razón Social"},
+  {key:"letras_fe", label:"Letras F-E"},
+  {key:"numeros_fe", label:"Números F-E"},
+  {key:"fecha_factura", label:"Fecha Factura"},
+  {key:"valor_sin_iva", label:"Valor Sin IVA", money:true},
+  {key:"concepto", label:"Concepto"}
+];
+
+const btnCamera = document.getElementById('btnCamera');
+const btnUpload = document.getElementById('btnUpload');
+const fileCamera = document.getElementById('fileCamera');
+const fileUpload = document.getElementById('fileUpload');
+const previewWrap = document.getElementById('previewWrap');
+const previewImg = document.getElementById('previewImg');
+const previewPdfIcon = document.getElementById('previewPdfIcon');
+const previewName = document.getElementById('previewName');
+const previewSize = document.getElementById('previewSize');
+const btnExtract = document.getElementById('btnExtract');
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('statusText');
+const errEl = document.getElementById('err');
+const resultEl = document.getElementById('result');
+const ledger = document.getElementById('ledger');
+const btnAgain = document.getElementById('btnAgain');
+
+let currentBase64 = null;
+let currentMediaType = null;
+let currentIsPdf = false;
+
+btnCamera.addEventListener('click', () => fileCamera.click());
+btnUpload.addEventListener('click', () => fileUpload.click());
+fileCamera.addEventListener('change', e => handleFile(e.target.files[0]));
+fileUpload.addEventListener('change', e => handleFile(e.target.files[0]));
+
+function humanSize(bytes){
+  if(bytes < 1024) return bytes + " B";
+  if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
+  return (bytes/1024/1024).toFixed(2) + " MB";
+}
+
+function handleFile(file){
+  if(!file) return;
+  errEl.classList.remove('show');
+  resultEl.classList.remove('show');
+
+  currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    currentBase64 = dataUrl.split(',')[1];
+    currentMediaType = file.type || (currentIsPdf ? 'application/pdf' : 'image/jpeg');
+
+    if(currentIsPdf){
+      previewImg.style.display = 'none';
+      previewPdfIcon.style.display = 'flex';
+    } else {
+      previewImg.style.display = 'block';
+      previewPdfIcon.style.display = 'none';
+      previewImg.src = dataUrl;
+    }
+
+    previewName.textContent = file.name || (currentIsPdf ? "factura.pdf" : "captura.jpg");
+    previewSize.textContent = humanSize(file.size);
+    previewWrap.classList.add('show');
+    previewWrap.scrollIntoView({behavior:'smooth', block:'center'});
+  };
+  reader.readAsDataURL(file);
+}
+
+btnExtract.addEventListener('click', extractInvoice);
+btnAgain.addEventListener('click', () => {
+  previewWrap.classList.remove('show');
+  resultEl.classList.remove('show');
+  errEl.classList.remove('show');
+  fileCamera.value = '';
+  fileUpload.value = '';
+  currentIsPdf = false;
+  previewImg.style.display = 'block';
+  previewPdfIcon.style.display = 'none';
+  window.scrollTo({top:0, behavior:'smooth'});
+});
+
+async function extractInvoice(){
+  if(!currentBase64) return;
+  errEl.classList.remove('show');
+  resultEl.classList.remove('show');
+  statusText.textContent = "Leyendo factura…";
+  statusEl.classList.add('show');
+  btnExtract.disabled = true;
+
+  try{
+    // Le hablamos a NUESTRO servidor local, no a Anthropic directamente.
+    // El servidor guarda la clave de API de forma segura y hace la llamada por nosotros.
+    const response = await fetch('/api/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base64: currentBase64,
+        mediaType: currentMediaType,
+        isPdf: currentIsPdf
+      })
+    });
+
+    const data = await response.json();
+
+    if(!response.ok){
+      throw new Error(data.error || ('Error del servidor (' + response.status + ')'));
+    }
+
+    renderResult(data);
+
+  }catch(e){
+    errEl.textContent = "No se pudo leer la factura: " + e.message;
+    errEl.classList.add('show');
+  }finally{
+    statusEl.classList.remove('show');
+    btnExtract.disabled = false;
+  }
+}
+
+function renderResult(data){
+  ledger.innerHTML = '';
+  FIELDS.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+
+    const label = document.createElement('div');
+    label.className = 'field-label';
+    label.textContent = f.label;
+
+    const valueWrap = document.createElement('div');
+    valueWrap.className = 'field-value' + (f.money ? ' money' : '');
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = data[f.key] !== undefined && data[f.key] !== null ? data[f.key] : '';
+    input.dataset.key = f.key;
+    if(f.money && input.value !== ''){
+      const num = Number(input.value);
+      if(!isNaN(num)){
+        input.value = num.toLocaleString('es-CO');
+      }
+    }
+
+    valueWrap.appendChild(input);
+    row.appendChild(label);
+    row.appendChild(valueWrap);
+    ledger.appendChild(row);
+  });
+
+  resultEl.classList.add('show');
+  resultEl.scrollIntoView({behavior:'smooth', block:'start'});
+}
+</script>
+</body>
+</html>
