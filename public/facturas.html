@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
   .toolbar{
     display:flex; align-items:center; justify-content:space-between;
@@ -103,7 +104,10 @@
 
   <div class="toolbar reveal">
     <select id="monthSelect"></select>
-    <span class="total-chip">Total del mes: <b id="totalValue">$0</b></span>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <span class="total-chip">Total del mes: <b id="totalValue">$0</b></span>
+      <button class="btn ghost" id="btnExport">Exportar a Excel</button>
+    </div>
   </div>
 
   <div id="loading">
@@ -165,6 +169,7 @@ const footSubtotal = document.getElementById('footSubtotal');
 const footIva = document.getElementById('footIva');
 const footTotal = document.getElementById('footTotal');
 const countValue = document.getElementById('countValue');
+const btnExport = document.getElementById('btnExport');
 
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
@@ -268,6 +273,132 @@ async function loadInvoices(){
 }
 
 monthSelect.addEventListener('change', renderTable);
+
+btnExport.addEventListener('click', async () => {
+  const month = monthSelect.value;
+  const filtered = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+
+  if (filtered.length === 0) {
+    alert('No hay facturas en este mes para exportar.');
+    return;
+  }
+
+  btnExport.disabled = true;
+  btnExport.textContent = 'Generando…';
+
+  try {
+    const [y, m] = month.split('-');
+    const monthLabel = `${MONTH_NAMES[Number(m) - 1]} ${y}`;
+
+    // Colores tomados directo de la identidad visual de la app.
+    const COLOR_CARBON = 'FF141A18';
+    const COLOR_MOSS = 'FF3D5A45';
+    const COLOR_MOSS_SOFT = 'FFDCE7DC';
+    const COLOR_PAPER = 'FFF6F7F4';
+    const COLOR_WHITE = 'FFFFFFFF';
+    const COLOR_INK = 'FF1F2A24';
+    const COLOR_LINE = 'FFC9C2B2';
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Kárdex IA';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet(monthLabel.slice(0, 31), {
+      views: [{ state: 'frozen', ySplit: 3 }], // congela título + encabezado
+    });
+
+    const headers = [
+      'Tipo Doc', 'Nit o CC', 'DV', 'Nombre o Razón Social', 'Letras F-E',
+      'Números F-E', 'Fecha Factura', 'Valor Sin IVA', 'Valor IVA', 'Valor Con IVA', 'Concepto',
+    ];
+    const colWidths = [10, 15, 6, 32, 10, 12, 13, 15, 15, 15, 34];
+
+    sheet.columns = headers.map((h, i) => ({ width: colWidths[i] }));
+
+    // Fila 1: título de la hoja, fondo carbón (igual al sidebar de la app)
+    sheet.mergeCells(1, 1, 1, headers.length);
+    const titleCell = sheet.getCell(1, 1);
+    titleCell.value = `Kárdex IA — Facturas de ${monthLabel}`;
+    titleCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: COLOR_WHITE } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_CARBON } };
+    sheet.getRow(1).height = 26;
+
+    // Fila 2: encabezados de columna, fondo verde musgo
+    const headerRow = sheet.getRow(2);
+    headerRow.values = headers;
+    headerRow.height = 20;
+    headerRow.eachCell((cell) => {
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLOR_WHITE } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_MOSS } };
+      cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      cell.border = { bottom: { style: 'thin', color: { argb: COLOR_CARBON } } };
+    });
+
+    // Filas de datos
+    filtered.forEach((inv) => {
+      const sinIva = Number(inv.valor_sin_iva) || 0;
+      const iva = Number(inv.valor_iva) || 0;
+      const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null
+        ? Number(inv.valor_con_iva) || 0
+        : sinIva + iva;
+
+      const row = sheet.addRow([
+        inv.tipo_doc || '', inv.nit_cc || '', inv.dv || '', inv.nombre_razon_social || '',
+        inv.letras_fe || '', inv.numeros_fe || '', inv.fecha_factura || '',
+        sinIva, iva, conIva, inv.concepto || '',
+      ]);
+      row.eachCell((cell, colNumber) => {
+        cell.font = { name: 'Calibri', size: 10, color: { argb: COLOR_INK } };
+        cell.border = { bottom: { style: 'thin', color: { argb: COLOR_LINE } } };
+        if (colNumber >= 8 && colNumber <= 10) {
+          cell.numFmt = '#,##0';
+          cell.alignment = { horizontal: 'right' };
+        }
+      });
+    });
+
+    // Fila de totales, fondo verde suave + borde superior grueso (como el pie de tabla en la app)
+    const totalRow = sheet.addRow([
+      '', '', '', '', '', '', 'TOTAL',
+      filtered.reduce((s, inv) => s + (Number(inv.valor_sin_iva) || 0), 0),
+      filtered.reduce((s, inv) => s + (Number(inv.valor_iva) || 0), 0),
+      filtered.reduce((s, inv) => {
+        const sinIva = Number(inv.valor_sin_iva) || 0;
+        const iva = Number(inv.valor_iva) || 0;
+        const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
+        return s + conIva;
+      }, 0),
+      '',
+    ]);
+    totalRow.eachCell((cell, colNumber) => {
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLOR_INK } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_MOSS_SOFT } };
+      cell.border = { top: { style: 'medium', color: { argb: COLOR_CARBON } } };
+      if (colNumber >= 8 && colNumber <= 10) {
+        cell.numFmt = '#,##0';
+        cell.alignment = { horizontal: 'right' };
+      }
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `kardex-ia-facturas-${MONTH_NAMES[Number(m) - 1].toLowerCase()}-${y}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+  } catch (err) {
+    alert('No se pudo generar el Excel: ' + err.message);
+  } finally {
+    btnExport.disabled = false;
+    btnExport.textContent = 'Exportar a Excel';
+  }
+});
 
 tbody.addEventListener('click', async (e) => {
   if (!e.target.classList.contains('del-btn')) return;
