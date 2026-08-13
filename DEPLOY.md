@@ -6,7 +6,7 @@ Esto te da una URL pública (ej. `https://escaner-facturas.onrender.com`) que pu
 
 - Una cuenta de [GitHub](https://github.com) (gratis).
 - Una cuenta de [Render](https://render.com) (gratis, no pide tarjeta).
-- Tu clave de API de Anthropic (la misma que usas en tu `.env` local).
+- Tu clave de **Gemini** y tu `DATABASE_URL` de Supabase (las mismas de tu `.env` local).
 
 ## Paso 1: Subir el proyecto a GitHub
 
@@ -37,8 +37,14 @@ Esto te da una URL pública (ej. `https://escaner-facturas.onrender.com`) que pu
    - **Start Command**: `npm start`
    - **Instance Type**: `Free`
 5. En la sección **Environment Variables**, agrega:
-   - Key: `ANTHROPIC_API_KEY` → Value: tu clave real (la misma del `.env`)
+   - Key: `GEMINI_API_KEY` → Value: tu clave real de Gemini
+   - Key: `DATABASE_URL` → Value: tu cadena de conexión de Supabase
 6. Click en **Create Web Service**.
+
+> **Si ya tenías el servicio creado en Render** (de una versión anterior):
+> ve a tu servicio → **Settings → Environment Variables**, borra las que ya
+> no apliquen (como `ANTHROPIC_API_KEY`) y agrega `GEMINI_API_KEY` y
+> `DATABASE_URL` como se indica arriba.
 
 ## Paso 3: Esperar el despliegue
 

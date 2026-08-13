@@ -3,61 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Escáner de Facturas</title>
+<title>Kárdex IA — Escanear factura</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
 <style>
-  :root{
-    --paper:#EDEAE2;
-    --ink:#1F2A24;
-    --ink-soft:#4A554D;
-    --line:#C9C2B2;
-    --moss:#3D5A45;
-    --moss-deep:#28402F;
-    --stamp:#B5482E;
-    --card:#FBF9F4;
-    --ok-bg:#DCE7DC;
-  }
-  *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;}
-  body{
-    background:var(--paper);
-    color:var(--ink);
-    font-family:'Iowan Old Style','Georgia',serif;
-    min-height:100vh;
-  }
-  .wrap{
-    max-width:900px;
-    margin:0 auto;
-    padding:36px 20px 80px;
-  }
-  header{
-    display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    border-bottom:2px solid var(--ink);
-    padding-bottom:14px;
-    margin-bottom:8px;
-  }
-  .brand{display:flex;align-items:baseline;gap:10px;}
-  h1{font-size:26px;margin:0;font-weight:600;letter-spacing:0.2px;}
-  .tag{
-    font-family:'Courier New',monospace;
-    font-size:11px;
-    letter-spacing:1.5px;
-    color:var(--ink-soft);
-    text-transform:uppercase;
-  }
-  .sub{
-    font-family:'Courier New',monospace;
-    font-size:12.5px;
-    color:var(--ink-soft);
-    margin:10px 0 34px;
-    letter-spacing:0.3px;
-  }
+  /* Estilos propios de esta página (el resto vive en styles.css) */
   .intake{
-    background:var(--card);
+    background:var(--paper-raised);
     border:1px solid var(--line);
     position:relative;
     padding:0;
+    transition:border-color .25s var(--ease), box-shadow .25s var(--ease);
   }
   .intake::before{
     content:"";
@@ -66,6 +24,14 @@
     height:4px;
     background:repeating-linear-gradient(90deg, var(--moss) 0 10px, transparent 10px 20px);
     opacity:.5;
+    transform:scaleX(0);
+    transform-origin:left;
+    animation:drawLine 1s .5s var(--ease) forwards;
+  }
+  @keyframes drawLine{ to{ transform:scaleX(1); } }
+  .intake.dragover{
+    border-color:var(--moss);
+    box-shadow:0 0 0 4px var(--moss-soft);
   }
   .intake-inner{
     padding:34px 28px;
@@ -81,60 +47,84 @@
     border-radius:2px;
     display:flex;align-items:center;justify-content:center;
     color:var(--moss-deep);
+    transition:transform .35s var(--ease), border-color .35s var(--ease);
   }
-  .intake h2{margin:0;font-size:18px;font-weight:600;}
+  .intake:hover .intake-icon, .intake.dragover .intake-icon{
+    transform:scale(1.08) rotate(-4deg);
+    border-color:var(--moss);
+  }
+  .intake h2{margin:0;font-size:19px;font-weight:600;}
   .intake p{
     margin:0;font-size:13.5px;color:var(--ink-soft);
-    max-width:380px;line-height:1.5;
+    max-width:380px;line-height:1.55;
+  }
+  .drag-hint{
+    font-family:'JetBrains Mono',monospace;
+    font-size:10.5px; letter-spacing:1px; text-transform:uppercase;
+    color:var(--ink-faint);
   }
   .actions{
     display:flex;gap:10px;margin-top:8px;
     flex-wrap:wrap;justify-content:center;
   }
-  button{font-family:inherit;cursor:pointer;border:none;}
-  .btn{
-    font-family:'Courier New',monospace;
-    font-size:12.5px;letter-spacing:1px;text-transform:uppercase;
-    padding:11px 20px;background:var(--ink);color:var(--paper);
-    transition:transform .12s ease, background .15s ease;
-  }
-  .btn:hover{background:var(--moss-deep);}
-  .btn:active{transform:scale(.97);}
-  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--ink);}
-  .btn.ghost:hover{background:var(--ink);color:var(--paper);}
-  .btn:disabled{opacity:.4;cursor:not-allowed;}
   input[type=file]{display:none;}
 
   #previewWrap{margin-top:22px;display:none;}
-  #previewWrap.show{display:block;}
+  #previewWrap.show{display:block; animation:fadeUp .5s var(--ease) forwards;}
   .preview-frame{
-    border:1px solid var(--line);background:var(--card);
+    border:1px solid var(--line);background:var(--paper-raised);
     padding:14px;display:flex;gap:16px;align-items:center;
   }
-  .preview-frame img{width:84px;height:84px;object-fit:cover;border:1px solid var(--line);}
+  .preview-thumb{
+    position:relative; width:84px;height:84px; flex-shrink:0;
+    overflow:hidden; border:1px solid var(--line);
+  }
+  .preview-frame img{width:84px;height:84px;object-fit:cover;display:block;}
+  .scan-beam{
+    position:absolute; left:0; right:0; top:0; height:2px;
+    background:linear-gradient(90deg, transparent, var(--moss), transparent);
+    box-shadow:0 0 8px 1px rgba(61,90,69,0.7);
+    opacity:0; pointer-events:none;
+  }
+  .scan-beam.active{
+    opacity:1;
+    animation:scanSweep 1.4s ease-in-out infinite;
+  }
+  @keyframes scanSweep{
+    0%{ top:0; }
+    50%{ top:calc(100% - 2px); }
+    100%{ top:0; }
+  }
   .pdf-icon{
     width:84px;height:84px;display:none;
     flex-direction:column;align-items:center;justify-content:center;gap:4px;
     border:1px solid var(--line);background:#F2EFE7;color:var(--stamp);flex-shrink:0;
   }
-  .pdf-icon span{font-family:'Courier New',monospace;font-size:11px;letter-spacing:1px;color:var(--ink-soft);}
-  .preview-meta{flex:1;}
-  .preview-meta .fname{font-size:14px;font-weight:600;}
-  .preview-meta .fsize{font-family:'Courier New',monospace;font-size:11.5px;color:var(--ink-soft);}
+  .pdf-icon span{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1px;color:var(--ink-soft);}
+  .preview-meta{flex:1; min-width:0;}
+  .preview-meta .fname{font-size:14px;font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .preview-meta .fsize{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-soft);}
 
   #status{
-    margin-top:18px;font-family:'Courier New',monospace;font-size:12.5px;
+    margin-top:18px;font-family:'JetBrains Mono',monospace;font-size:12.5px;
     color:var(--moss-deep);letter-spacing:.5px;display:none;align-items:center;gap:10px;
   }
-  #status.show{display:flex;}
-  .dot{width:7px;height:7px;background:var(--moss-deep);border-radius:50%;animation:pulse 1.1s infinite ease-in-out;}
-  @keyframes pulse{0%,100%{opacity:.25;}50%{opacity:1;}}
+  #status.show{display:flex; animation:fadeUp .4s var(--ease) forwards;}
+  .dot{width:7px;height:7px;background:var(--moss-deep);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
   #err{
-    margin-top:18px;border:1px solid var(--stamp);background:#F7E6E1;
+    margin-top:18px;border:1px solid var(--stamp);background:var(--stamp-soft);
     color:#7A2E1B;padding:12px 14px;font-size:13px;display:none;
   }
-  #err.show{display:block;}
+  #err.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
+
+  #savedMsg{
+    margin-top:18px;border:1px solid var(--moss);background:var(--moss-soft);
+    color:var(--moss-deep);padding:12px 14px;font-size:13px;display:none;
+    font-family:'JetBrains Mono',monospace; letter-spacing:.3px;
+  }
+  #savedMsg.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
 
   #result{margin-top:34px;display:none;}
   #result.show{display:block;}
@@ -142,17 +132,27 @@
     display:flex;align-items:baseline;justify-content:space-between;
     border-bottom:1px solid var(--ink);padding-bottom:10px;margin-bottom:0;
   }
-  .result-head h2{font-size:16px;margin:0;font-weight:600;}
+  .result-head h2{font-size:17px;margin:0;font-weight:600;}
   .stamp{
-    font-family:'Courier New',monospace;font-size:11px;letter-spacing:1.5px;
-    color:var(--moss-deep);border:1px solid var(--moss-deep);
-    padding:3px 8px;transform:rotate(-2deg);
+    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1.5px;
+    color:var(--moss-deep);border:1.5px solid var(--moss-deep);
+    padding:3px 9px;transform:rotate(-2deg) scale(1.4);
+    opacity:0;
+    animation:stampHit .5s .3s var(--ease) forwards;
   }
-  .ledger{background:var(--card);border:1px solid var(--line);border-top:none;}
-  .field-row{display:grid;grid-template-columns:180px 1fr;border-bottom:1px solid var(--line);}
+  @keyframes stampHit{
+    0%{ opacity:0; transform:rotate(-2deg) scale(1.6); }
+    60%{ opacity:1; transform:rotate(-2deg) scale(0.95); }
+    100%{ opacity:1; transform:rotate(-2deg) scale(1); }
+  }
+  .ledger{background:var(--paper-raised);border:1px solid var(--line);border-top:none;}
+  .field-row{
+    display:grid;grid-template-columns:180px 1fr;border-bottom:1px solid var(--line);
+    opacity:0; animation:fadeUp .45s var(--ease) forwards;
+  }
   .field-row:last-child{border-bottom:none;}
   .field-label{
-    font-family:'Courier New',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;
+    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;
     color:var(--ink-soft);padding:13px 16px;background:#F2EFE7;
     border-right:1px solid var(--line);display:flex;align-items:center;
   }
@@ -160,33 +160,35 @@
   .field-value input{
     width:100%;border:1px solid transparent;background:transparent;
     font-family:inherit;font-size:14.5px;color:var(--ink);padding:7px 8px;border-radius:2px;
+    transition:background .2s var(--ease), border-color .2s var(--ease);
   }
-  .field-value input:focus{outline:none;border-color:var(--moss);background:var(--ok-bg);}
-  .field-value.money input{font-weight:600;}
+  .field-value input:focus{outline:none;border-color:var(--moss);background:var(--moss-soft);}
+  .field-value.money input{font-weight:600; font-family:'JetBrains Mono',monospace;}
   .result-actions{margin-top:18px;display:flex;gap:10px;justify-content:flex-end;}
 
   @media (max-width:560px){
     .field-row{grid-template-columns:1fr;}
     .field-label{border-right:none;border-bottom:1px solid var(--line);}
-    h1{font-size:21px;}
-  }
-  footer{
-    margin-top:60px;padding-top:16px;border-top:1px solid var(--line);
-    font-family:'Courier New',monospace;font-size:11px;color:var(--ink-soft);
-    text-align:center;letter-spacing:.5px;
   }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-  <header>
-    <div class="brand"><h1>Escáner de Facturas</h1></div>
-    <span class="tag">v0.2 · servidor local</span>
+  <header class="reveal">
+    <div class="brand">
+      <h1 id="titleLetters"></h1>
+    </div>
+    <span class="tag"><span class="live-dot"></span>en línea</span>
   </header>
-  <div class="sub">Sube o fotografía una factura. La lectura y los campos se muestran abajo para revisar.</div>
+  <div class="sub reveal">Kárdex IA — sube o fotografía una factura, revisa lo que leyó la IA, y guárdala en tu kárdex del mes.</div>
 
-  <div class="intake">
+  <nav class="tabs reveal">
+    <a href="/" class="active">Escanear</a>
+    <a href="/facturas.html">Facturas</a>
+  </nav>
+
+  <div class="intake reveal" id="intake">
     <div class="intake-inner">
       <div class="intake-icon">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
@@ -200,6 +202,7 @@
         <button class="btn" id="btnCamera">Tomar foto</button>
         <button class="btn ghost" id="btnUpload">Subir archivo (imagen o PDF)</button>
       </div>
+      <span class="drag-hint">o arrastra el archivo aquí</span>
       <input type="file" id="fileCamera" accept="image/*" capture="environment">
       <input type="file" id="fileUpload" accept="image/*,application/pdf">
     </div>
@@ -207,7 +210,10 @@
 
   <div id="previewWrap">
     <div class="preview-frame">
-      <img id="previewImg" alt="Vista previa de la factura">
+      <div class="preview-thumb">
+        <img id="previewImg" alt="Vista previa de la factura">
+        <div class="scan-beam" id="scanBeam"></div>
+      </div>
       <div id="previewPdfIcon" class="pdf-icon">
         <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>
@@ -229,6 +235,7 @@
   </div>
 
   <div id="err"></div>
+  <div id="savedMsg"></div>
 
   <div id="result">
     <div class="result-head">
@@ -238,6 +245,7 @@
     <div class="ledger" id="ledger"></div>
     <div class="result-actions">
       <button class="btn ghost" id="btnAgain">Escanear otra</button>
+      <button class="btn primary" id="btnSave">Guardar en el kárdex</button>
     </div>
   </div>
 
@@ -254,9 +262,23 @@ const FIELDS = [
   {key:"numeros_fe", label:"Números F-E"},
   {key:"fecha_factura", label:"Fecha Factura"},
   {key:"valor_sin_iva", label:"Valor Sin IVA", money:true},
+  {key:"valor_iva", label:"Valor IVA", money:true},
+  {key:"valor_con_iva", label:"Valor Con IVA", money:true},
   {key:"concepto", label:"Concepto"}
 ];
 
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? '\u00A0' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+const intake = document.getElementById('intake');
 const btnCamera = document.getElementById('btnCamera');
 const btnUpload = document.getElementById('btnUpload');
 const fileCamera = document.getElementById('fileCamera');
@@ -266,13 +288,16 @@ const previewImg = document.getElementById('previewImg');
 const previewPdfIcon = document.getElementById('previewPdfIcon');
 const previewName = document.getElementById('previewName');
 const previewSize = document.getElementById('previewSize');
+const scanBeam = document.getElementById('scanBeam');
 const btnExtract = document.getElementById('btnExtract');
 const statusEl = document.getElementById('status');
 const statusText = document.getElementById('statusText');
 const errEl = document.getElementById('err');
+const savedMsg = document.getElementById('savedMsg');
 const resultEl = document.getElementById('result');
 const ledger = document.getElementById('ledger');
 const btnAgain = document.getElementById('btnAgain');
+const btnSave = document.getElementById('btnSave');
 
 let currentBase64 = null;
 let currentMediaType = null;
@@ -283,6 +308,17 @@ btnUpload.addEventListener('click', () => fileUpload.click());
 fileCamera.addEventListener('change', e => handleFile(e.target.files[0]));
 fileUpload.addEventListener('change', e => handleFile(e.target.files[0]));
 
+['dragenter','dragover'].forEach(evt =>
+  intake.addEventListener(evt, e => { e.preventDefault(); intake.classList.add('dragover'); })
+);
+['dragleave','drop'].forEach(evt =>
+  intake.addEventListener(evt, e => { e.preventDefault(); intake.classList.remove('dragover'); })
+);
+intake.addEventListener('drop', e => {
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
 function humanSize(bytes){
   if(bytes < 1024) return bytes + " B";
   if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
@@ -292,6 +328,7 @@ function humanSize(bytes){
 function handleFile(file){
   if(!file) return;
   errEl.classList.remove('show');
+  savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
 
   currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
@@ -320,29 +357,32 @@ function handleFile(file){
 }
 
 btnExtract.addEventListener('click', extractInvoice);
-btnAgain.addEventListener('click', () => {
+btnAgain.addEventListener('click', resetAll);
+
+function resetAll(){
   previewWrap.classList.remove('show');
   resultEl.classList.remove('show');
   errEl.classList.remove('show');
+  savedMsg.classList.remove('show');
   fileCamera.value = '';
   fileUpload.value = '';
   currentIsPdf = false;
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   window.scrollTo({top:0, behavior:'smooth'});
-});
+}
 
 async function extractInvoice(){
   if(!currentBase64) return;
   errEl.classList.remove('show');
+  savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
   statusText.textContent = "Leyendo factura…";
   statusEl.classList.add('show');
+  scanBeam.classList.add('active');
   btnExtract.disabled = true;
 
   try{
-    // Le hablamos a NUESTRO servidor local, no a Anthropic directamente.
-    // El servidor guarda la clave de API de forma segura y hace la llamada por nosotros.
     const response = await fetch('/api/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -352,6 +392,11 @@ async function extractInvoice(){
         isPdf: currentIsPdf
       })
     });
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('El servidor no respondió correctamente (puede que la app estuviera "despertando"). Espera unos segundos y vuelve a intentar.');
+    }
 
     const data = await response.json();
 
@@ -366,15 +411,17 @@ async function extractInvoice(){
     errEl.classList.add('show');
   }finally{
     statusEl.classList.remove('show');
+    scanBeam.classList.remove('active');
     btnExtract.disabled = false;
   }
 }
 
 function renderResult(data){
   ledger.innerHTML = '';
-  FIELDS.forEach(f => {
+  FIELDS.forEach((f, i) => {
     const row = document.createElement('div');
     row.className = 'field-row';
+    row.style.animationDelay = (i * 0.06) + 's';
 
     const label = document.createElement('div');
     label.className = 'field-label';
@@ -403,6 +450,42 @@ function renderResult(data){
   resultEl.classList.add('show');
   resultEl.scrollIntoView({behavior:'smooth', block:'start'});
 }
+
+function currentFieldValues(){
+  const out = {};
+  FIELDS.forEach(f => {
+    const input = ledger.querySelector(`input[data-key="${f.key}"]`);
+    let val = input ? input.value : '';
+    // Los campos de dinero se muestran con puntos como separador de miles
+    // (formato es-CO, ej: 140.000). Antes de guardar hay que quitarlos del
+    // todo -- NO tratarlos como decimales, o "140.000" se vuelve 140.
+    if (f.money) val = val.replace(/\./g, '').replace(/[^\d-]/g, '');
+    out[f.key] = val;
+  });
+  return out;
+}
+
+btnSave.addEventListener('click', async () => {
+  btnSave.disabled = true;
+  errEl.classList.remove('show');
+  try {
+    const response = await fetch('/api/invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentFieldValues())
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'No se pudo guardar.');
+
+    savedMsg.textContent = '✓ Guardada en el kárdex — puedes verla en la pestaña Facturas.';
+    savedMsg.classList.add('show');
+    btnSave.textContent = '✓ Guardada';
+  } catch (e) {
+    errEl.textContent = 'No se pudo guardar la factura: ' + e.message;
+    errEl.classList.add('show');
+    btnSave.disabled = false;
+  }
+});
 </script>
 </body>
 </html>

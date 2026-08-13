@@ -1,70 +1,94 @@
-# Escáner de Facturas
+# Kárdex IA
 
-App para escanear facturas (foto, imagen o PDF) y extraer automáticamente los datos contables usando IA.
+Aplicación para escanear facturas (foto, imagen o PDF), extraer automáticamente
+los datos contables con IA, y guardarlas organizadas por mes en una base de
+datos real.
+
+**No reemplaza tu software contable** (Siigo, Alegra, Excel) — es la capa de
+captura previa: convierte el desorden de fotos/PDFs sueltos que mandan los
+clientes en datos organizados, listos para llevar a donde ya trabajas.
 
 ## Requisitos
 
-- [Node.js](https://nodejs.org/) versión 18 o superior instalado en tu computador.
-- Una clave de API de Anthropic. Consíguela gratis en: https://console.anthropic.com/settings/keys
-  (necesitas crear una cuenta en la Consola de Anthropic, distinta de tu cuenta de Claude.ai, y cargar algo de crédito para poder usar la API).
+- [Node.js](https://nodejs.org/) versión 18 o superior.
+- Una clave gratuita de **Google Gemini**: https://aistudio.google.com/apikey
+- Una base de datos PostgreSQL gratis en **Supabase**: https://supabase.com
+  (gratis, sin tarjeta, sin fecha de expiración — a diferencia del Postgres
+  gratis de Render, que se borra a los 30 días).
 
 ## Instalación (solo la primera vez)
 
 1. Abre esta carpeta en Visual Studio Code.
-2. Abre una terminal dentro de VS Code (`Terminal` → `Nueva terminal`).
-3. Instala las dependencias:
+2. Terminal → Nueva terminal, luego:
 
    ```bash
    npm install
    ```
 
-4. Copia el archivo `.env.example` y renómbralo a `.env`.
-5. Abre `.env` y reemplaza `sk-ant-tu-clave-aqui` con tu clave de API real:
+3. Copia `.env.example` a `.env`.
+4. Completa `.env` con tus valores reales:
 
    ```
-   ANTHROPIC_API_KEY=sk-ant-tu-clave-real-aqui
+   GEMINI_API_KEY=tu-clave-real-de-gemini
+   DATABASE_URL=tu-cadena-de-conexión-de-supabase
+   PORT=3000
    ```
 
-   **Importante:** nunca compartas tu archivo `.env` ni lo subas a GitHub — contiene tu clave privada.
+   Para `DATABASE_URL`: en Supabase, ve a **Project Settings → Database →
+   Connection string**, elige el modo **"Transaction pooler"**, y copia esa
+   cadena completa (reemplazando la contraseña por la real).
+
+   **Nunca compartas tu `.env` ni lo subas a GitHub** — el `.gitignore` ya lo
+   protege, pero verifícalo si tienes dudas.
 
 ## Cómo correr la app
-
-En la terminal, dentro de la carpeta del proyecto:
 
 ```bash
 npm start
 ```
 
-Verás un mensaje como:
+Debe mostrar:
 
 ```
-✔ Escáner de Facturas corriendo en http://localhost:3000
+✔ Kárdex IA corriendo en http://localhost:3000
+✔ Base de datos conectada y lista
 ```
 
-Abre esa dirección (`http://localhost:3000`) en tu navegador (Chrome, Edge, etc.) y ya puedes usar la app.
+Abre `http://localhost:3000`.
 
-## Cómo funciona
+## Qué puedes hacer
 
-- El navegador (frontend) le manda la imagen o PDF a **tu propio servidor** (`server.js`), corriendo en tu computador.
-- El servidor es el único que conoce tu clave de API, y es quien llama a Anthropic para leer la factura.
-- Esto evita exponer tu clave en el navegador, donde cualquiera podría verla y usarla.
+- **Escanear**: tomar foto o subir imagen/PDF de una factura, la IA lee los
+  datos, los revisas/corriges, y los guardas.
+- **Facturas**: ver todo lo guardado, filtrado por mes, con el total sumado.
+
+## Cómo funciona por dentro
+
+- El navegador le habla a **tu propio servidor** (`server.js`), nunca
+  directo a Google — así tu clave de API nunca queda expuesta.
+- El servidor guarda las facturas en **PostgreSQL** (vía Supabase), no en un
+  archivo — así los datos sobreviven a reinicios y redespliegues.
 
 ## Estructura del proyecto
 
 ```
-escaner-facturas-app/
-├── server.js          → servidor Node.js (backend)
-├── package.json        → dependencias del proyecto
-├── .env.example         → plantilla de configuración (copiar a .env)
-├── .env                 → tu clave real (créala tú, no se sube a ningún lado)
+kardex-ia/
+├── server.js            → backend: lee facturas con IA + guarda en Postgres
+├── package.json
+├── .env.example          → plantilla (copiar a .env)
+├── .gitignore
 └── public/
-    └── index.html        → interfaz de la app (frontend)
+    ├── index.html          → página Escanear
+    ├── facturas.html        → página Facturas (listado por mes)
+    └── styles.css            → estilos compartidos entre ambas páginas
 ```
+
+## Desplegar en internet
+
+Ver `DEPLOY.md` para el paso a paso completo con Render.
 
 ## Próximos pasos posibles
 
-- Guardar las facturas leídas en una base de datos o archivo, en vez de solo mostrarlas.
-- Agregar gestión de varios clientes/NITs.
-- Exportar todo a Excel.
-- Desplegar la app en internet (ej. Render, Railway) para no depender de tu computador.
-# contabilidad2000
+- Gestión de varios clientes/NITs bajo una sola cuenta.
+- Exportar a Excel/CSV.
+- Login (una cuenta por contador).
