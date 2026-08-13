@@ -83,6 +83,7 @@
     thead th:nth-child(1), tbody td:nth-child(1){ display:none; } /* Tipo */
     thead th:nth-child(4), tbody td:nth-child(4){ display:none; } /* Concepto */
     thead th:nth-child(7), tbody td:nth-child(7){ display:none; } /* IVA */
+    thead th:nth-child(9), tbody td:nth-child(9){ display:none; } /* Retenciones */
   }
 </style>
 </head>
@@ -126,6 +127,7 @@
           <th style="text-align:right">Sin IVA</th>
           <th style="text-align:right">IVA</th>
           <th style="text-align:right">Total</th>
+          <th style="text-align:right">Retenciones</th>
           <th></th>
         </tr>
       </thead>
@@ -136,6 +138,7 @@
           <td class="money" id="footSubtotal">$0</td>
           <td class="money" id="footIva">$0</td>
           <td class="money" id="footTotal">$0</td>
+          <td class="money" id="footRetenciones">$0</td>
           <td></td>
         </tr>
       </tfoot>
@@ -168,6 +171,7 @@ const totalValue = document.getElementById('totalValue');
 const footSubtotal = document.getElementById('footSubtotal');
 const footIva = document.getElementById('footIva');
 const footTotal = document.getElementById('footTotal');
+const footRetenciones = document.getElementById('footRetenciones');
 const countValue = document.getElementById('countValue');
 const btnExport = document.getElementById('btnExport');
 
@@ -213,6 +217,7 @@ function renderTable(){
   let sumSinIva = 0;
   let sumIva = 0;
   let sumConIva = 0;
+  let sumRetenciones = 0;
 
   filtered.forEach((inv, i) => {
     const sinIva = Number(inv.valor_sin_iva) || 0;
@@ -221,13 +226,21 @@ function renderTable(){
     const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null
       ? Number(inv.valor_con_iva) || 0
       : sinIva + iva;
+    const reteFuente = Number(inv.rete_fuente) || 0;
+    const reteIva = Number(inv.rete_iva) || 0;
+    const reteIca = Number(inv.rete_ica) || 0;
+    const totalRetenciones = reteFuente + reteIva + reteIca;
 
     sumSinIva += sinIva;
     sumIva += iva;
     sumConIva += conIva;
+    sumRetenciones += totalRetenciones;
 
     const tr = document.createElement('tr');
     tr.style.animationDelay = (i * 0.04) + 's';
+    const retencionTitle = totalRetenciones > 0
+      ? `Fuente: ${formatCOP(reteFuente)} · IVA: ${formatCOP(reteIva)} · ICA: ${formatCOP(reteIca)}`
+      : 'Sin retenciones registradas';
     tr.innerHTML = `
       <td>${inv.tipo_doc || '—'}</td>
       <td>${inv.nit_cc || '—'}${inv.dv ? '-' + inv.dv : ''}</td>
@@ -237,6 +250,7 @@ function renderTable(){
       <td class="money">${formatCOP(sinIva)}</td>
       <td class="money">${formatCOP(iva)}</td>
       <td class="money">${formatCOP(conIva)}</td>
+      <td class="money" title="${retencionTitle}">${totalRetenciones > 0 ? formatCOP(totalRetenciones) : '—'}</td>
       <td><button class="del-btn" data-id="${inv.id}">eliminar</button></td>
     `;
     tbody.appendChild(tr);
@@ -246,6 +260,7 @@ function renderTable(){
   footSubtotal.textContent = formatCOP(sumSinIva);
   footIva.textContent = formatCOP(sumIva);
   footTotal.textContent = formatCOP(sumConIva);
+  footRetenciones.textContent = formatCOP(sumRetenciones);
   countValue.textContent = filtered.length;
 
   const hasRows = filtered.length > 0;
@@ -309,9 +324,10 @@ btnExport.addEventListener('click', async () => {
 
     const headers = [
       'Tipo Doc', 'Nit o CC', 'DV', 'Nombre o Razón Social', 'Letras F-E',
-      'Números F-E', 'Fecha Factura', 'Valor Sin IVA', 'Valor IVA', 'Valor Con IVA', 'Concepto',
+      'Números F-E', 'Fecha Factura', 'Valor Sin IVA', 'Valor IVA', 'Valor Con IVA',
+      'Rete Fuente', 'Rete IVA', 'Rete ICA', 'Concepto',
     ];
-    const colWidths = [10, 15, 6, 32, 10, 12, 13, 15, 15, 15, 34];
+    const colWidths = [10, 15, 6, 32, 10, 12, 13, 15, 15, 15, 13, 12, 12, 34];
 
     sheet.columns = headers.map((h, i) => ({ width: colWidths[i] }));
 
@@ -335,6 +351,9 @@ btnExport.addEventListener('click', async () => {
       cell.border = { bottom: { style: 'thin', color: { argb: COLOR_CARBON } } };
     });
 
+    const MONEY_COL_START = 8;  // Valor Sin IVA
+    const MONEY_COL_END = 13;   // Rete ICA
+
     // Filas de datos
     filtered.forEach((inv) => {
       const sinIva = Number(inv.valor_sin_iva) || 0;
@@ -342,16 +361,19 @@ btnExport.addEventListener('click', async () => {
       const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null
         ? Number(inv.valor_con_iva) || 0
         : sinIva + iva;
+      const reteFuente = Number(inv.rete_fuente) || 0;
+      const reteIva = Number(inv.rete_iva) || 0;
+      const reteIca = Number(inv.rete_ica) || 0;
 
       const row = sheet.addRow([
         inv.tipo_doc || '', inv.nit_cc || '', inv.dv || '', inv.nombre_razon_social || '',
         inv.letras_fe || '', inv.numeros_fe || '', inv.fecha_factura || '',
-        sinIva, iva, conIva, inv.concepto || '',
+        sinIva, iva, conIva, reteFuente, reteIva, reteIca, inv.concepto || '',
       ]);
       row.eachCell((cell, colNumber) => {
         cell.font = { name: 'Calibri', size: 10, color: { argb: COLOR_INK } };
         cell.border = { bottom: { style: 'thin', color: { argb: COLOR_LINE } } };
-        if (colNumber >= 8 && colNumber <= 10) {
+        if (colNumber >= MONEY_COL_START && colNumber <= MONEY_COL_END) {
           cell.numFmt = '#,##0';
           cell.alignment = { horizontal: 'right' };
         }
@@ -369,13 +391,16 @@ btnExport.addEventListener('click', async () => {
         const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
         return s + conIva;
       }, 0),
+      filtered.reduce((s, inv) => s + (Number(inv.rete_fuente) || 0), 0),
+      filtered.reduce((s, inv) => s + (Number(inv.rete_iva) || 0), 0),
+      filtered.reduce((s, inv) => s + (Number(inv.rete_ica) || 0), 0),
       '',
     ]);
     totalRow.eachCell((cell, colNumber) => {
       cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLOR_INK } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_MOSS_SOFT } };
       cell.border = { top: { style: 'medium', color: { argb: COLOR_CARBON } } };
-      if (colNumber >= 8 && colNumber <= 10) {
+      if (colNumber >= MONEY_COL_START && colNumber <= MONEY_COL_END) {
         cell.numFmt = '#,##0';
         cell.alignment = { horizontal: 'right' };
       }

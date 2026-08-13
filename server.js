@@ -43,6 +43,9 @@ async function ensureSchema() {
       valor_sin_iva TEXT DEFAULT '',
       valor_iva TEXT DEFAULT '',
       valor_con_iva TEXT DEFAULT '',
+      rete_fuente TEXT DEFAULT '',
+      rete_iva TEXT DEFAULT '',
+      rete_ica TEXT DEFAULT '',
       concepto TEXT DEFAULT '',
       saved_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -51,6 +54,9 @@ async function ensureSchema() {
   // (sin estas columnas), se agregan ahora sin borrar los datos existentes.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valor_iva TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valor_con_iva TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_fuente TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_iva TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_ica TEXT DEFAULT '';`);
 }
 
 app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
@@ -59,7 +65,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
   'letras_fe', 'numeros_fe', 'fecha_factura',
-  'valor_sin_iva', 'valor_iva', 'valor_con_iva', 'concepto',
+  'valor_sin_iva', 'valor_iva', 'valor_con_iva',
+  'rete_fuente', 'rete_iva', 'rete_ica', 'concepto',
 ];
 
 function rowToInvoice(row) {
@@ -144,6 +151,9 @@ app.post('/api/extract', async (req, res) => {
   "valor_sin_iva": "subtotal ANTES de IVA, en pesos colombianos ENTEROS (ver regla de formato abajo)",
   "valor_iva": "valor del IVA (impuesto), en pesos colombianos ENTEROS. Si la factura no discrimina IVA, usa 0",
   "valor_con_iva": "valor TOTAL de la factura (subtotal + IVA + otros cargos), en pesos colombianos ENTEROS. Este debe ser el total final que paga el cliente",
+  "rete_fuente": "valor de Retención en la Fuente (Rete Fuente / ReteRenta) si el documento la muestra explícitamente, en pesos ENTEROS. Si el documento no muestra esta sección o el valor es 0, usa 0",
+  "rete_iva": "valor de Retención de IVA (ReteIVA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
+  "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "concepto": "breve descripción de qué es el gasto o servicio facturado, en pocas palabras"
 }
 
@@ -154,7 +164,9 @@ Ejemplo correcto: si el documento muestra "39.915,96", el JSON debe llevar 39916
 Ejemplo correcto: si el documento muestra "210.084,00", el JSON debe llevar 210084.
 Ejemplo correcto: si el documento muestra "1.487.500", el JSON debe llevar 1487500.
 
-Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, que en ese caso va en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.`;
+Muchas facturas electrónicas colombianas incluyen una sección "Retenciones" o "Valores informativos" con Rete fuente, Rete IVA y Rete ICA (casi siempre en 0 si no aplica) — revisa si el documento la tiene antes de responder.
+
+Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, rete_fuente, rete_iva y rete_ica, que en ese caso van en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.`;
 
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
 
@@ -210,7 +222,7 @@ Si algún campo no se puede determinar con certeza, usa una cadena vacía "" par
 
     // Capa de seguridad extra: si la IA devolvió centavos (ej. 39915.96) en
     // vez del entero pedido, se redondea aquí antes de mostrarlo/guardarlo.
-    for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva']) {
+    for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
       if (parsed[key] !== undefined && parsed[key] !== '' && !isNaN(Number(parsed[key]))) {
         parsed[key] = Math.round(Number(parsed[key]));
       }

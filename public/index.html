@@ -126,6 +126,15 @@
   }
   #savedMsg.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
 
+  #retencionHint{
+    margin-top:14px; border:1px solid #C9A227; background:#FBF3D9;
+    color:#7A5C0A; padding:12px 14px; font-size:12.5px; line-height:1.5;
+    display:none;
+  }
+  #retencionHint.show{ display:block; animation:fadeUp .4s var(--ease) forwards; }
+  #retencionHint b{ display:block; margin-bottom:2px; font-size:13px; }
+  #retencionHint .fine{ display:block; margin-top:6px; font-size:11px; color:#8C6D14; }
+
   #result{margin-top:34px;display:none;}
   #result.show{display:block;}
   .result-head{
@@ -243,6 +252,7 @@
       <span class="stamp">revisar antes de usar</span>
     </div>
     <div class="ledger" id="ledger"></div>
+    <div id="retencionHint"></div>
     <div class="result-actions">
       <button class="btn ghost" id="btnAgain">Escanear otra</button>
       <button class="btn primary" id="btnSave">Guardar en el kárdex</button>
@@ -264,8 +274,18 @@ const FIELDS = [
   {key:"valor_sin_iva", label:"Valor Sin IVA", money:true},
   {key:"valor_iva", label:"Valor IVA", money:true},
   {key:"valor_con_iva", label:"Valor Con IVA", money:true},
+  {key:"rete_fuente", label:"Rete Fuente", money:true},
+  {key:"rete_iva", label:"Rete IVA", money:true},
+  {key:"rete_ica", label:"Rete ICA", money:true},
   {key:"concepto", label:"Concepto"}
 ];
+
+// Umbrales orientativos de retención en la fuente para 2026 (UVT = $52.374).
+// IMPORTANTE: estas bases han cambiado varias veces este año por decisiones
+// judiciales — esto es solo una alerta informativa, NO una determinación
+// tributaria. El contador siempre debe verificar la norma vigente.
+const UMBRAL_RETENCION_SERVICIOS = 104748; // 2 UVT
+const UMBRAL_RETENCION_COMPRAS = 523740;   // 10 UVT
 
 (function animateTitle(){
   const text = "Kárdex IA";
@@ -330,6 +350,7 @@ function handleFile(file){
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
+  document.getElementById('retencionHint').classList.remove('show');
 
   currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
 
@@ -364,6 +385,7 @@ function resetAll(){
   resultEl.classList.remove('show');
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
+  document.getElementById('retencionHint').classList.remove('show');
   fileCamera.value = '';
   fileUpload.value = '';
   currentIsPdf = false;
@@ -377,6 +399,7 @@ async function extractInvoice(){
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
+  document.getElementById('retencionHint').classList.remove('show');
   statusText.textContent = "Leyendo factura…";
   statusEl.classList.add('show');
   scanBeam.classList.add('active');
@@ -449,6 +472,41 @@ function renderResult(data){
 
   resultEl.classList.add('show');
   resultEl.scrollIntoView({behavior:'smooth', block:'start'});
+
+  showRetencionHint(data);
+}
+
+const retencionHintEl = document.getElementById('retencionHint');
+
+function showRetencionHint(data){
+  const yaTieneRetencion =
+    (Number(data.rete_fuente) || 0) > 0 ||
+    (Number(data.rete_iva) || 0) > 0 ||
+    (Number(data.rete_ica) || 0) > 0;
+
+  if (yaTieneRetencion) {
+    retencionHintEl.innerHTML =
+      '<b>✓ Esta factura ya trae retención aplicada</b>' +
+      'El documento muestra un valor de retención — revisa los campos Rete Fuente / Rete IVA / Rete ICA arriba antes de guardar.';
+    retencionHintEl.classList.add('show');
+    return;
+  }
+
+  const concepto = (data.concepto || '').toLowerCase();
+  const subtotal = Number(data.valor_sin_iva) || 0;
+  const pareceServicio = /servicio|asesor|honorario|consultor|arriendo|alquiler|mantenimiento|reparaci|transporte/.test(concepto);
+  const umbral = pareceServicio ? UMBRAL_RETENCION_SERVICIOS : UMBRAL_RETENCION_COMPRAS;
+
+  if (subtotal > 0 && subtotal >= umbral) {
+    const tipoTexto = pareceServicio ? 'servicios (2 UVT)' : 'compras (10 UVT)';
+    retencionHintEl.innerHTML =
+      `<b>⚠ Esta factura podría requerir retención</b>` +
+      `El subtotal (${subtotal.toLocaleString('es-CO')}) supera el umbral orientativo de ${tipoTexto} ($${umbral.toLocaleString('es-CO')}), y el documento no muestra que ya se haya practicado. Verifica si tu empresa es agente retenedor y si aplica.` +
+      `<span class="fine">Umbral basado en la UVT 2026 vigente al momento de construir esta app — esta base cambió varias veces este año, confirma la norma actual antes de decidir. No es asesoría tributaria.</span>`;
+    retencionHintEl.classList.add('show');
+  } else {
+    retencionHintEl.classList.remove('show');
+  }
 }
 
 function currentFieldValues(){
