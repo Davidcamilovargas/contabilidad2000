@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Kárdex por proveedor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* ---------- alinear con la identidad oscura de landing.html ---------- */
+  :root{
+    --k-carbon:#0E1315;
+    --k-carbon-raised:#171E20;
+    --k-carbon-line:#2B3436;
+    --k-ember:#FF5A36;
+    --k-ember-soft:rgba(255,90,54,0.14);
+    --k-white:#FFFFFF;
+    --k-white-soft:rgba(255,255,255,0.62);
+    --k-white-faint:rgba(255,255,255,0.4);
+  }
+  body{ background:var(--k-carbon); color:var(--k-white); font-family:'Inter',-apple-system,sans-serif; }
+  h1{ font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.03em; }
+  h1 span{ animation-name:letterUp; }
+  header{ border-bottom-color:var(--k-carbon-line); }
+  .tag{ color:var(--k-white-faint); }
+  .live-dot{ background:var(--k-ember); }
+  .sub{ color:var(--k-white-soft); }
+
+  nav.tabs a{
+    background:transparent; border-color:var(--k-carbon-line); color:var(--k-white-soft);
+  }
+  nav.tabs a:hover{ background:rgba(255,255,255,0.06); color:var(--k-white); border-color:var(--k-carbon-line); }
+  nav.tabs a.active{ background:var(--k-ember); border-color:var(--k-ember); color:#fff; }
+
+  footer{ border-top-color:var(--k-carbon-line); color:var(--k-white-faint); }
+
+  .kardex-layout{
+    display:grid; grid-template-columns:280px 1fr; gap:20px;
+    align-items:start;
+  }
+  @media (max-width:760px){ .kardex-layout{ grid-template-columns:1fr; } }
+
+  /* ---------- lista de proveedores: tarjeta clara flotando sobre el fondo oscuro,
+     igual al mockup de producto en landing.html ---------- */
+  .prov-list{
+    background:#FBF9F4; border-radius:12px; overflow:hidden;
+    box-shadow:0 30px 60px -20px rgba(0,0,0,0.5);
+    max-height:640px; overflow-y:auto;
+  }
+  .prov-search{
+    width:100%; border:none; border-bottom:1px solid #DEDACD;
+    padding:13px 14px; font-family:'JetBrains Mono',monospace; font-size:12.5px;
+    background:transparent; color:#1B2420;
+  }
+  .prov-search::placeholder{ color:#8A9289; }
+  .prov-item{
+    display:block; width:100%; text-align:left; padding:13px 14px;
+    border-bottom:1px solid #DEDACD; background:none; cursor:pointer;
+    transition:background .15s var(--ease);
+  }
+  .prov-item:last-child{ border-bottom:none; }
+  .prov-item:hover{ background:#F2EFE7; }
+  .prov-item.active{ background:var(--k-ember-soft); }
+  .prov-item .name{ font-size:13.5px; font-weight:700; color:#1B2420; }
+  .prov-item .nit{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#8A9289; margin-top:2px; }
+  .prov-item .meta{
+    display:flex; justify-content:space-between; margin-top:6px;
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:#4E5A52;
+  }
+  .prov-item .meta .total{ font-weight:700; color:var(--k-ember); }
+  #provEmpty{ padding:30px 16px; text-align:center; font-size:12.5px; color:#8A9289; }
+
+  /* ---------- tarjeta de kárdex: misma tarjeta clara flotante ---------- */
+  .kardex-card{
+    background:#FBF9F4; border-radius:12px; overflow:hidden; min-height:400px;
+    box-shadow:0 30px 60px -20px rgba(0,0,0,0.5);
+    color:#1B2420;
+  }
+  .kardex-empty{
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    min-height:400px; text-align:center; padding:40px 20px; color:#8A9289;
+  }
+  .kardex-empty svg{ margin-bottom:14px; opacity:.5; }
+  .kardex-empty p{ font-size:13.5px; max-width:280px; line-height:1.5; }
+
+  .kardex-head{
+    padding:22px; border-bottom:2px solid #1B2420;
+    display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;
+  }
+  .kardex-head h2{ font-size:19px; margin:0; font-weight:800; font-family:'Archivo',sans-serif; letter-spacing:-0.01em; }
+  .kardex-head .nit{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#4E5A52; margin-top:4px; }
+  .kardex-summary{ text-align:right; }
+  .kardex-summary .label{ font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#8A9289; }
+  .kardex-summary .value{ font-family:'JetBrains Mono',monospace; font-size:21px; font-weight:700; color:var(--k-ember); margin-top:2px; }
+
+  .kardex-table{ width:100%; border-collapse:collapse; }
+  .kardex-table thead th{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:#8A9289; text-align:left; padding:10px 22px; background:#F2EFE7; border-bottom:1px solid #DEDACD;
+  }
+  .kardex-table tbody td{ padding:12px 22px; font-size:13.5px; border-bottom:1px solid #DEDACD; }
+  .kardex-table tbody tr:last-child td{ border-bottom:none; }
+  .kardex-table tbody tr{ opacity:0; animation:fadeUp .4s var(--ease) forwards; }
+  .kardex-table .date{ font-family:'JetBrains Mono',monospace; color:#4E5A52; white-space:nowrap; }
+  .kardex-table .concepto{ color:#4E5A52; font-size:12.5px; }
+  .kardex-table .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
+  .kardex-table .saldo{ font-weight:700; color:var(--k-ember); }
+
+  #loading{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--k-white-soft);
+    display:flex; align-items:center; gap:10px; padding:30px 0;
+  }
+  .dot{width:7px;height:7px;background:var(--k-ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
+
+  @media (max-width:560px){
+    .kardex-table thead th:nth-child(2), .kardex-table tbody td:nth-child(2){ display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="brand">
+      <h1 id="titleLetters"></h1>
+    </div>
+    <span class="tag"><span class="live-dot"></span>en línea</span>
+  </header>
+  <div class="sub reveal">El historial completo de cada proveedor, con saldo acumulado — como el kárdex de siempre.</div>
+
+  <nav class="tabs reveal">
+    <a href="/">Escanear</a>
+    <a href="/facturas.html">Facturas</a>
+    <a href="/kardex.html" class="active">Kárdex</a>
+  </nav>
+
+  <div id="loading">
+    <span class="dot"></span> Cargando proveedores…
+  </div>
+
+  <div class="kardex-layout" id="kardexLayout" style="display:none;">
+    <div class="prov-list">
+      <input type="text" id="provSearch" class="prov-search" placeholder="Buscar proveedor o NIT…">
+      <div id="provItems"></div>
+      <div id="provEmpty" style="display:none;">No hay proveedores guardados todavía.</div>
+    </div>
+
+    <div class="kardex-card" id="kardexCard">
+      <div class="kardex-empty">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
+          <rect x="4" y="3" width="16" height="18" rx="1.5"/>
+          <path d="M8 8h8M8 12h8M8 16h5"/>
+        </svg>
+        <p>Elige un proveedor de la lista para ver su historial completo y el saldo acumulado.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer>El saldo acumulado suma el valor con IVA de cada factura, en orden cronológico.</footer>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? '\u00A0' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+const loadingEl = document.getElementById('loading');
+const kardexLayout = document.getElementById('kardexLayout');
+const provItemsEl = document.getElementById('provItems');
+const provEmptyEl = document.getElementById('provEmpty');
+const provSearchEl = document.getElementById('provSearch');
+const kardexCard = document.getElementById('kardexCard');
+
+let allInvoices = [];
+let providers = [];
+let activeNit = null;
+
+function formatCOP(value){
+  const num = Number(value);
+  if (isNaN(num)) return value || '—';
+  return '$' + num.toLocaleString('es-CO');
+}
+
+// Convierte "DD/MM/AAAA" a un valor comparable (para ordenar cronológicamente)
+function fechaKey(fecha){
+  const [d, m, y] = (fecha || '').split('/');
+  if (!d || !m || !y) return 0;
+  return Number(y) * 10000 + Number(m) * 100 + Number(d);
+}
+
+function invoiceTotal(inv){
+  const sinIva = Number(inv.valor_sin_iva) || 0;
+  const iva = Number(inv.valor_iva) || 0;
+  return inv.valor_con_iva !== '' && inv.valor_con_iva != null
+    ? Number(inv.valor_con_iva) || 0
+    : sinIva + iva;
+}
+
+function buildProviders(){
+  const map = new Map();
+  allInvoices.forEach(inv => {
+    const key = (inv.nit_cc || 'sin-nit').trim();
+    if (!map.has(key)) {
+      map.set(key, { nit: inv.nit_cc || '—', dv: inv.dv || '', name: inv.nombre_razon_social || 'Sin nombre', count: 0, total: 0, invoices: [] });
+    }
+    const p = map.get(key);
+    p.invoices.push(inv);
+    p.count += 1;
+    p.total += invoiceTotal(inv);
+    // Usa el nombre más reciente registrado para este NIT
+    if (fechaKey(inv.fecha_factura) >= fechaKey(p.lastDate || '')) {
+      p.name = inv.nombre_razon_social || p.name;
+      p.lastDate = inv.fecha_factura;
+    }
+  });
+  return [...map.values()].sort((a, b) => b.total - a.total);
+}
+
+function renderProviderList(filter){
+  const q = (filter || '').toLowerCase().trim();
+  const filtered = providers.filter(p =>
+    p.name.toLowerCase().includes(q) || p.nit.includes(q)
+  );
+
+  provItemsEl.innerHTML = '';
+  filtered.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'prov-item' + (p.nit === activeNit ? ' active' : '');
+    btn.innerHTML = `
+      <div class="name">${p.name}</div>
+      <div class="nit">NIT ${p.nit}${p.dv ? '-' + p.dv : ''}</div>
+      <div class="meta"><span>${p.count} factura${p.count !== 1 ? 's' : ''}</span><span class="total">${formatCOP(p.total)}</span></div>
+    `;
+    btn.addEventListener('click', () => selectProvider(p.nit));
+    provItemsEl.appendChild(btn);
+  });
+
+  provEmptyEl.style.display = filtered.length === 0 ? 'block' : 'none';
+}
+
+function selectProvider(nit){
+  activeNit = nit;
+  renderProviderList(provSearchEl.value);
+
+  const provider = providers.find(p => p.nit === nit);
+  if (!provider) return;
+
+  const sorted = [...provider.invoices].sort((a, b) => fechaKey(a.fecha_factura) - fechaKey(b.fecha_factura));
+
+  let acumulado = 0;
+  const rows = sorted.map((inv, i) => {
+    acumulado += invoiceTotal(inv);
+    return `
+      <tr style="animation-delay:${i * 0.04}s">
+        <td class="date">${inv.fecha_factura || '—'}</td>
+        <td class="concepto">${inv.concepto || '—'}</td>
+        <td class="money">${formatCOP(invoiceTotal(inv))}</td>
+        <td class="money saldo">${formatCOP(acumulado)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  kardexCard.innerHTML = `
+    <div class="kardex-head">
+      <div>
+        <h2>${provider.name}</h2>
+        <div class="nit">NIT ${provider.nit}${provider.dv ? '-' + provider.dv : ''} · ${provider.count} factura${provider.count !== 1 ? 's' : ''}</div>
+      </div>
+      <div class="kardex-summary">
+        <div class="label">Saldo acumulado</div>
+        <div class="value">${formatCOP(acumulado)}</div>
+      </div>
+    </div>
+    <table class="kardex-table">
+      <thead>
+        <tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Valor</th><th style="text-align:right">Acumulado</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+provSearchEl.addEventListener('input', () => renderProviderList(provSearchEl.value));
+
+async function loadKardex(){
+  try {
+    const res = await fetch('/api/invoices');
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('El servidor no respondió correctamente.');
+    }
+    allInvoices = await res.json();
+    providers = buildProviders();
+
+    loadingEl.style.display = 'none';
+    kardexLayout.style.display = 'grid';
+    renderProviderList('');
+
+    if (providers.length > 0) selectProvider(providers[0].nit);
+  } catch (e) {
+    loadingEl.innerHTML = 'No se pudo cargar el kárdex: ' + e.message;
+  }
+}
+
+loadKardex();
+</script>
+</body>
+</html>
