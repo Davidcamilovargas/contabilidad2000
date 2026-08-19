@@ -227,7 +227,8 @@ app.post('/api/extract', async (req, res) => {
   "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "concepto": "breve descripción de qué es el gasto o servicio facturado, en pocas palabras",
   "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
-  "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía"
+  "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
+  "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro"
 }
 
 REGLA DE FORMATO PARA LOS 3 CAMPOS DE VALOR (muy importante, es el error más común):

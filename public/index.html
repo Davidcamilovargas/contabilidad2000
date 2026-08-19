@@ -215,6 +215,12 @@
     transition:background .2s var(--ease), border-color .2s var(--ease);
   }
   .field-value input:focus{outline:none;border-color:var(--ember);background:var(--ember-soft);}
+
+  .digit-warn{
+    display:none; grid-column:1 / -1; padding:0 16px 10px;
+    font-size:11.5px; color:#B0402D; font-family:'JetBrains Mono',monospace;
+  }
+  .digit-warn.show{ display:block; }
   .field-value.money input{font-weight:600; font-family:'JetBrains Mono',monospace;}
   .result-actions{margin-top:18px;display:flex;gap:10px;justify-content:flex-end;}
 
@@ -585,6 +591,18 @@ function renderResult(data){
     valueWrap.appendChild(input);
     row.appendChild(label);
     row.appendChild(valueWrap);
+
+    // Campos de retención: aviso si el valor digitado parece un error
+    // (ej. se te fue un cero de más) comparado contra lo usual.
+    if (['rete_fuente', 'rete_iva', 'rete_ica'].includes(f.key)) {
+      const warnEl = document.createElement('div');
+      warnEl.className = 'digit-warn';
+      row.appendChild(warnEl);
+      const check = () => checkDigitSanity(f.key, input, warnEl);
+      input.addEventListener('blur', check);
+      input.addEventListener('input', check);
+    }
+
     ledger.appendChild(row);
   });
 
@@ -592,6 +610,72 @@ function renderResult(data){
   resultEl.scrollIntoView({behavior:'smooth', block:'start'});
 
   showRetencionHint(data);
+}
+
+function parseMoneyValue(str){
+  const cleaned = String(str || '').replace(/\./g, '').replace(/[^\d-]/g, '');
+  return cleaned === '' ? 0 : Number(cleaned);
+}
+
+// Tarifas típicas orientativas (no exhaustivas) por tipo de retención,
+// usadas solo para detectar errores de digitación -- NO para calcular
+// el valor correcto a retener.
+const TARIFAS_TIPICAS = {
+  rete_fuente: [0.01, 0.025, 0.035, 0.04, 0.06, 0.10, 0.11],
+  rete_ica: [0.002, 0.003, 0.004, 0.005, 0.007, 0.008, 0.01, 0.012],
+  rete_iva: [0.15, 1.0],
+};
+
+function tarifaMasCercana(ratio, tarifas){
+  let mejor = null;
+  tarifas.forEach(t => {
+    const diff = Math.abs(ratio - t) / t;
+    if (!mejor || diff < mejor.diff) mejor = { tarifa: t, diff };
+  });
+  return mejor;
+}
+
+// Compara el valor digitado en un campo de retención contra su base
+// (subtotal para Fuente/ICA, valor de IVA para ReteIVA). Si el valor no
+// se parece a ninguna tarifa típica, PERO el valor dividido o
+// multiplicado por 10 sí se parece -- esa es la señal más confiable de
+// que sobra o falta un cero.
+function checkDigitSanity(key, input, warnEl){
+  const value = parseMoneyValue(input.value);
+  if (value <= 0) { warnEl.classList.remove('show'); return; }
+
+  const subtotalInput = ledger.querySelector('input[data-key="valor_sin_iva"]');
+  const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
+  const subtotal = subtotalInput ? parseMoneyValue(subtotalInput.value) : 0;
+  const iva = ivaInput ? parseMoneyValue(ivaInput.value) : 0;
+
+  const base = key === 'rete_iva' ? iva : subtotal;
+  if (base <= 0) { warnEl.classList.remove('show'); return; }
+
+  const ratio = value / base;
+  const tarifas = TARIFAS_TIPICAS[key];
+  const TOLERANCIA = 0.3; // 30% de margen -- las tarifas varían por declarante/no declarante, etc.
+
+  const directo = tarifaMasCercana(ratio, tarifas);
+  if (directo.diff <= TOLERANCIA) { warnEl.classList.remove('show'); return; } // se parece a una tarifa normal, sin aviso
+
+  const porDiez = tarifaMasCercana(ratio / 10, tarifas);
+  const porMenosDiez = tarifaMasCercana(ratio * 10, tarifas);
+
+  if (porDiez.diff <= TOLERANCIA) {
+    const sugerido = Math.round(base * porDiez.tarifa);
+    warnEl.textContent = `⚠ Este valor parece tener un cero de más — con esta base, una tarifa típica (${(porDiez.tarifa*100).toFixed(1)}%) daría cerca de $${sugerido.toLocaleString('es-CO')}. Verifica.`;
+    warnEl.classList.add('show');
+  } else if (porMenosDiez.diff <= TOLERANCIA) {
+    const sugerido = Math.round(base * porMenosDiez.tarifa);
+    warnEl.textContent = `⚠ Este valor parece tener un cero de menos — con esta base, una tarifa típica (${(porMenosDiez.tarifa*100).toFixed(1)}%) daría cerca de $${sugerido.toLocaleString('es-CO')}. Verifica.`;
+    warnEl.classList.add('show');
+  } else if (ratio > (key === 'rete_iva' ? 1.0 : 0.15)) {
+    warnEl.textContent = `⚠ Este valor (${(ratio*100).toFixed(1)}% de la base) es más alto de lo usual — revísalo.`;
+    warnEl.classList.add('show');
+  } else {
+    warnEl.classList.remove('show');
+  }
 }
 
 const retencionHintEl = document.getElementById('retencionHint');
@@ -610,17 +694,43 @@ function showRetencionHint(data){
     return;
   }
 
+  const esRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
   const concepto = (data.concepto || '').toLowerCase();
   const subtotal = Number(data.valor_sin_iva) || 0;
+  const iva = Number(data.valor_iva) || 0;
   const pareceServicio = /servicio|asesor|honorario|consultor|arriendo|alquiler|mantenimiento|reparaci|transporte/.test(concepto);
   const umbral = pareceServicio ? UMBRAL_RETENCION_SERVICIOS : UMBRAL_RETENCION_COMPRAS;
+  const tipoTexto = pareceServicio ? 'servicios (2 UVT)' : 'compras (10 UVT)';
 
-  if (subtotal > 0 && subtotal >= umbral) {
-    const tipoTexto = pareceServicio ? 'servicios (2 UVT)' : 'compras (10 UVT)';
-    retencionHintEl.innerHTML =
-      `<b>⚠ Esta factura podría requerir retención</b>` +
-      `El subtotal (${subtotal.toLocaleString('es-CO')}) supera el umbral orientativo de ${tipoTexto} ($${umbral.toLocaleString('es-CO')}), y el documento no muestra que ya se haya practicado. Verifica si tu empresa es agente retenedor y si aplica.` +
+  // Régimen Simple está exento de Rete Fuente y Rete ICA, pero NO de
+  // Rete IVA -- son reglas independientes, no se apagan juntas.
+  const posibleReteFuente = !esRegimenSimple && subtotal > 0 && subtotal >= umbral;
+  const posibleReteIva = iva > 0 && subtotal >= umbral;
+
+  let html = '';
+
+  if (esRegimenSimple) {
+    html += `<b>ℹ Proveedor de Régimen Simple detectado</b>` +
+      `Por norma, no le corresponde Rete Fuente ni Rete ICA. `;
+    if (posibleReteIva) {
+      html += `Pero sí podría corresponder <b>Rete IVA</b> — esa regla no cambia por ser Régimen Simple. Verifica si tu empresa es agente de retención de IVA.`;
+    } else {
+      html += `Tampoco se detectó un IVA que amerite revisar Rete IVA en este caso.`;
+    }
+    html += `<span class="fine">Basado en el art. 911 del Estatuto Tributario y normativa vigente al construir esta app — no es asesoría tributaria, confirma con tu criterio profesional.</span>`;
+    retencionHintEl.innerHTML = html;
+    retencionHintEl.classList.add('show');
+    return;
+  }
+
+  if (posibleReteFuente || posibleReteIva) {
+    const partes = [];
+    if (posibleReteFuente) partes.push(`Rete Fuente (umbral orientativo de ${tipoTexto})`);
+    if (posibleReteIva) partes.push('Rete IVA');
+    html = `<b>⚠ Esta factura podría requerir retención</b>` +
+      `El subtotal (${subtotal.toLocaleString('es-CO')}) supera el umbral orientativo, y el documento no muestra que ya se haya practicado. Revisa: ${partes.join(' y ')}. Verifica si tu empresa es agente retenedor y si aplica.` +
       `<span class="fine">Umbral basado en la UVT 2026 vigente al momento de construir esta app — esta base cambió varias veces este año, confirma la norma actual antes de decidir. No es asesoría tributaria.</span>`;
+    retencionHintEl.innerHTML = html;
     retencionHintEl.classList.add('show');
   } else {
     retencionHintEl.classList.remove('show');
