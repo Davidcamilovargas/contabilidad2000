@@ -53,6 +53,15 @@ async function ensureSchema() {
       saved_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS clients (
+      id UUID PRIMARY KEY,
+      nombre TEXT DEFAULT '',
+      nit TEXT DEFAULT '',
+      dv TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   // Migración automática: si la tabla ya existía de una versión anterior
   // (sin estas columnas), se agregan ahora sin borrar los datos existentes.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valor_iva TEXT DEFAULT '';`);
@@ -65,6 +74,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tipo_movimiento TEXT DEFAULT 'egreso';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nit TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nombre TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cliente_id UUID;`);
 }
 
 app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
@@ -75,12 +85,58 @@ const SAVED_FIELDS = [
   'letras_fe', 'numeros_fe', 'fecha_factura',
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto',
-  'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre',
+  'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
 ];
 
 function rowToInvoice(row) {
   return { ...row, savedAt: row.saved_at, saved_at: undefined };
 }
+
+// ---------- Clientes ----------
+
+// Listar todos los clientes guardados
+app.get('/api/clients', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM clients ORDER BY nombre ASC');
+    res.json(rows);
+  } catch (err) {
+    console.error('Error leyendo clientes:', err);
+    res.status(500).json({ error: 'No se pudieron leer los clientes.' });
+  }
+});
+
+// Crear un cliente nuevo
+app.post('/api/clients', async (req, res) => {
+  try {
+    const { nombre, nit, dv } = req.body;
+    if (!nombre || !nit) {
+      return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
+    }
+    const id = crypto.randomUUID();
+    const { rows } = await pool.query(
+      'INSERT INTO clients (id, nombre, nit, dv) VALUES ($1, $2, $3, $4) RETURNING *',
+      [id, nombre, nit, dv || '']
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error('Error creando cliente:', err);
+    res.status(500).json({ error: 'No se pudo crear el cliente.' });
+  }
+});
+
+// Eliminar un cliente
+app.delete('/api/clients/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM clients WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando cliente:', err);
+    res.status(500).json({ error: 'No se pudo eliminar el cliente.' });
+  }
+});
 
 // Listar facturas guardadas (todas, o filtradas por mes con ?month=YYYY-MM)
 app.get('/api/invoices', async (req, res) => {
@@ -106,7 +162,13 @@ app.get('/api/invoices', async (req, res) => {
 app.post('/api/invoices', async (req, res) => {
   try {
     const id = crypto.randomUUID();
-    const values = SAVED_FIELDS.map((key) => req.body[key] ?? '');
+    const values = SAVED_FIELDS.map((key) => {
+      const val = req.body[key] ?? '';
+      // cliente_id es de tipo UUID en la base de datos -- una cadena vacía
+      // rompería la inserción, así que se convierte a NULL cuando no hay cliente.
+      if (key === 'cliente_id') return val === '' ? null : val;
+      return val;
+    });
     const columns = SAVED_FIELDS.join(', ');
     const placeholders = SAVED_FIELDS.map((_, i) => `$${i + 2}`).join(', ');
 
@@ -164,8 +226,8 @@ app.post('/api/extract', async (req, res) => {
   "rete_iva": "valor de Retención de IVA (ReteIVA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "concepto": "breve descripción de qué es el gasto o servicio facturado, en pocas palabras",
-  "adquiriente_nit": "número de identificación del ADQUIRIENTE/COMPRADOR (quien recibe la factura, no quien la emite), solo dígitos. Casi todas las facturas colombianas tienen una sección separada 'Datos del Adquiriente/Comprador' además de 'Datos del Emisor/Vendedor' -- busca esa segunda sección. Si no la encuentras, deja una cadena vacía",
-  "adquiriente_nombre": "nombre o razón social del ADQUIRIENTE/COMPRADOR (la sección separada del emisor). Si no la encuentras, deja una cadena vacía"
+  "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
+  "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía"
 }
 
 REGLA DE FORMATO PARA LOS 3 CAMPOS DE VALOR (muy importante, es el error más común):

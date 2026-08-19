@@ -36,6 +36,14 @@
 
   footer{ border-top-color:var(--k-carbon-line); color:var(--k-white-faint); }
 
+  .kardex-toolbar{ margin-bottom:18px; }
+  .kardex-toolbar select{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12.5px; letter-spacing:.5px; text-transform:uppercase;
+    padding:9px 14px; border:1px solid #DEDACD; background:#FBF9F4;
+    color:#1B2420; border-radius:6px; cursor:pointer;
+  }
+
   .kardex-layout{
     display:grid; grid-template-columns:280px 1fr; gap:20px;
     align-items:start;
@@ -142,7 +150,12 @@
     <a href="/">Escanear</a>
     <a href="/facturas.html">Facturas</a>
     <a href="/kardex.html" class="active">Kárdex</a>
+    <a href="/clientes.html">Clientes</a>
   </nav>
+
+  <div class="kardex-toolbar reveal">
+    <select id="clientSelect"></select>
+  </div>
 
   <div id="loading">
     <span class="dot"></span> Cargando proveedores…
@@ -187,10 +200,41 @@ const provItemsEl = document.getElementById('provItems');
 const provEmptyEl = document.getElementById('provEmpty');
 const provSearchEl = document.getElementById('provSearch');
 const kardexCard = document.getElementById('kardexCard');
+const clientSelect = document.getElementById('clientSelect');
 
 let allInvoices = [];
+let myClients = [];
 let providers = [];
 let activeNit = null;
+
+function populateClients(){
+  clientSelect.innerHTML = '';
+  const optAll = document.createElement('option');
+  optAll.value = 'todos';
+  optAll.textContent = 'Todos los clientes';
+  clientSelect.appendChild(optAll);
+
+  myClients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.nombre;
+    clientSelect.appendChild(opt);
+  });
+
+  const optSinAsignar = document.createElement('option');
+  optSinAsignar.value = 'sin-asignar';
+  optSinAsignar.textContent = 'Sin cliente asignado';
+  clientSelect.appendChild(optSinAsignar);
+
+  clientSelect.value = 'todos';
+}
+
+function invoicesForSelectedClient(){
+  const clientId = clientSelect.value;
+  if (clientId === 'todos') return allInvoices;
+  if (clientId === 'sin-asignar') return allInvoices.filter(inv => !inv.cliente_id);
+  return allInvoices.filter(inv => inv.cliente_id === clientId);
+}
 
 function formatCOP(value){
   const num = Number(value);
@@ -215,7 +259,7 @@ function invoiceTotal(inv){
 
 function buildProviders(){
   const map = new Map();
-  allInvoices.forEach(inv => {
+  invoicesForSelectedClient().forEach(inv => {
     const movTipo = inv.tipo_movimiento || 'egreso';
     // En un Egreso, la contraparte relevante es quien EMITIÓ la factura
     // (el proveedor). En un Ingreso, la contraparte relevante es a quién
@@ -313,12 +357,17 @@ provSearchEl.addEventListener('input', () => renderProviderList(provSearchEl.val
 
 async function loadKardex(){
   try {
-    const res = await fetch('/api/invoices');
-    const contentType = res.headers.get('content-type') || '';
+    const [invRes, clientsRes] = await Promise.all([
+      fetch('/api/invoices'),
+      fetch('/api/clients')
+    ]);
+    const contentType = invRes.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       throw new Error('El servidor no respondió correctamente.');
     }
-    allInvoices = await res.json();
+    allInvoices = await invRes.json();
+    myClients = clientsRes.ok ? await clientsRes.json() : [];
+    populateClients();
     providers = buildProviders();
 
     loadingEl.style.display = 'none';
@@ -330,6 +379,21 @@ async function loadKardex(){
     loadingEl.innerHTML = 'No se pudo cargar el kárdex: ' + e.message;
   }
 }
+
+clientSelect.addEventListener('change', () => {
+  activeNit = null;
+  providers = buildProviders();
+  renderProviderList(provSearchEl.value);
+  if (providers.length > 0) {
+    selectProvider(providers[0].nit);
+  } else {
+    kardexCard.innerHTML = `
+      <div class="kardex-empty">
+        <p>Este cliente todavía no tiene facturas guardadas.</p>
+      </div>
+    `;
+  }
+});
 
 loadKardex();
 </script>

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Mis clientes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* La tarjeta de "agregar cliente" y la lista quedan claras, igual que
+     el resto de tarjetas de contenido de la app. */
+  #addForm, #clientList, #clientEmpty{
+    --paper-raised:#FBF9F4;
+    --ink:#1B2420;
+    --ink-soft:#4E5A52;
+    --ink-faint:#8A9289;
+    --line:#DEDACD;
+    color:var(--ink);
+  }
+
+  #addForm{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:22px; margin-bottom:22px;
+    box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
+  }
+  #addForm h2{ font-size:16px; font-weight:700; margin:0 0 16px; font-family:'Archivo',sans-serif; }
+  .form-row{ display:grid; grid-template-columns:2fr 1fr 90px auto; gap:10px; align-items:end; }
+  @media (max-width:700px){ .form-row{ grid-template-columns:1fr 1fr; } }
+  .field{ display:flex; flex-direction:column; gap:6px; }
+  .field label{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.05em; color:var(--ink-faint);
+  }
+  .field input{
+    border:1px solid var(--line); border-radius:6px; padding:10px 12px;
+    font-family:inherit; font-size:13.5px; background:#fff; color:var(--ink);
+  }
+  .field input:focus{ outline:none; border-color:var(--ember); }
+  #addForm .btn{ height:40px; }
+  #formError{
+    margin-top:12px; font-size:12.5px; color:#B0402D; display:none;
+  }
+  #formError.show{ display:block; }
+
+  #clientList{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    overflow:hidden;
+    box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
+  }
+  .client-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 20px; border-bottom:1px solid var(--line);
+    opacity:0; animation:fadeUp .4s var(--ease) forwards;
+  }
+  .client-row:last-child{ border-bottom:none; }
+  .client-row .info .name{ font-size:14px; font-weight:700; }
+  .client-row .info .nit{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); margin-top:2px;
+  }
+  .client-row .stats{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft);
+    margin-right:16px; text-align:right;
+  }
+  .del-btn{
+    background:none; border:none; color:var(--ink-faint);
+    font-family:'JetBrains Mono',monospace; font-size:11px;
+    cursor:pointer; padding:4px 8px; transition:color .15s ease;
+  }
+  .del-btn:hover{ color:#B0402D; }
+
+  #clientEmpty{
+    text-align:center; padding:50px 20px; color:var(--ink-faint);
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; letter-spacing:.5px;
+    border:1px dashed var(--line); border-radius:12px; background:var(--paper-raised); display:none;
+  }
+  #clientEmpty.show{ display:block; }
+
+  #loading{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
+    display:flex; align-items:center; gap:10px; padding:20px 0;
+  }
+  .dot{width:7px;height:7px;background:var(--ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="brand">
+      <h1 id="titleLetters"></h1>
+    </div>
+    <span class="tag"><span class="live-dot"></span>en línea</span>
+  </header>
+  <div class="sub reveal">Las empresas que atiendes — Kárdex IA usa esta lista para detectar solo si una factura es un ingreso o un egreso.</div>
+
+  <nav class="tabs reveal">
+    <a href="/">Escanear</a>
+    <a href="/facturas.html">Facturas</a>
+    <a href="/kardex.html">Kárdex</a>
+    <a href="/clientes.html" class="active">Clientes</a>
+  </nav>
+
+  <div id="addForm" class="reveal">
+    <h2>Agregar cliente</h2>
+    <div class="form-row">
+      <div class="field">
+        <label>Nombre o razón social</label>
+        <input type="text" id="inputNombre" placeholder="Industrias Codcol S.A.S.">
+      </div>
+      <div class="field">
+        <label>NIT</label>
+        <input type="text" id="inputNit" placeholder="901943255">
+      </div>
+      <div class="field">
+        <label>DV</label>
+        <input type="text" id="inputDv" placeholder="6" maxlength="1">
+      </div>
+      <button class="btn" id="btnAdd">+ Agregar</button>
+    </div>
+    <div id="formError"></div>
+  </div>
+
+  <div id="loading">
+    <span class="dot"></span> Cargando clientes…
+  </div>
+
+  <div id="clientList" style="display:none;"></div>
+  <div id="clientEmpty">Todavía no tienes clientes agregados. Agrega el primero arriba.</div>
+
+  <footer>Cuando el NIT de una factura coincida con uno de tus clientes, Kárdex IA marcará Ingreso o Egreso automáticamente.</footer>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? '\u00A0' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+const loadingEl = document.getElementById('loading');
+const clientListEl = document.getElementById('clientList');
+const clientEmptyEl = document.getElementById('clientEmpty');
+const inputNombre = document.getElementById('inputNombre');
+const inputNit = document.getElementById('inputNit');
+const inputDv = document.getElementById('inputDv');
+const btnAdd = document.getElementById('btnAdd');
+const formError = document.getElementById('formError');
+
+let clients = [];
+let allInvoices = [];
+
+function statsForClient(client){
+  // Cuenta cuántas facturas están asociadas a este cliente por cliente_id,
+  // y si no hay ninguna así, por coincidencia de NIT (compatibilidad con
+  // facturas guardadas antes de que existiera esta relación).
+  const byId = allInvoices.filter(inv => inv.cliente_id === client.id);
+  if (byId.length > 0) return byId.length;
+  return allInvoices.filter(inv => inv.nit_cc === client.nit || inv.adquiriente_nit === client.nit).length;
+}
+
+function renderClients(){
+  clientListEl.innerHTML = '';
+  clients.forEach((c, i) => {
+    const row = document.createElement('div');
+    row.className = 'client-row';
+    row.style.animationDelay = (i * 0.05) + 's';
+    const count = statsForClient(c);
+    row.innerHTML = `
+      <div class="info">
+        <div class="name">${c.nombre}</div>
+        <div class="nit">NIT ${c.nit}${c.dv ? '-' + c.dv : ''}</div>
+      </div>
+      <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
+      <button class="del-btn" data-id="${c.id}">eliminar</button>
+    `;
+    clientListEl.appendChild(row);
+  });
+
+  const hasClients = clients.length > 0;
+  clientListEl.style.display = hasClients ? 'block' : 'none';
+  clientEmptyEl.classList.toggle('show', !hasClients);
+}
+
+clientListEl.addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('del-btn')) return;
+  const id = e.target.dataset.id;
+  if (!confirm('¿Eliminar este cliente de la lista? Las facturas ya guardadas no se borran.')) return;
+
+  try {
+    const res = await fetch('/api/clients/' + id, { method: 'DELETE' });
+    if (!res.ok) throw new Error('No se pudo eliminar.');
+    clients = clients.filter(c => c.id !== id);
+    renderClients();
+  } catch (err) {
+    alert('No se pudo eliminar: ' + err.message);
+  }
+});
+
+btnAdd.addEventListener('click', async () => {
+  formError.classList.remove('show');
+  const nombre = inputNombre.value.trim();
+  const nit = inputNit.value.trim();
+  const dv = inputDv.value.trim();
+
+  if (!nombre || !nit) {
+    formError.textContent = 'Nombre y NIT son obligatorios.';
+    formError.classList.add('show');
+    return;
+  }
+
+  btnAdd.disabled = true;
+  try {
+    const res = await fetch('/api/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, nit, dv })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo agregar.');
+
+    clients.push(data);
+    clients.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    renderClients();
+
+    inputNombre.value = '';
+    inputNit.value = '';
+    inputDv.value = '';
+    inputNombre.focus();
+  } catch (err) {
+    formError.textContent = err.message;
+    formError.classList.add('show');
+  } finally {
+    btnAdd.disabled = false;
+  }
+});
+
+async function loadAll(){
+  try {
+    const [clientsRes, invoicesRes] = await Promise.all([
+      fetch('/api/clients'),
+      fetch('/api/invoices')
+    ]);
+    clients = await clientsRes.json();
+    allInvoices = await invoicesRes.json();
+
+    loadingEl.style.display = 'none';
+    renderClients();
+  } catch (e) {
+    loadingEl.innerHTML = 'No se pudieron cargar los clientes: ' + e.message;
+  }
+}
+
+loadAll();
+</script>
+</body>
+</html>

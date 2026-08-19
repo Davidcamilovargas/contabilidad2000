@@ -160,6 +160,15 @@
   }
   .result-head h2{font-size:17px;margin:0;font-weight:600;}
 
+  #clienteDetectado{
+    margin-top:14px; display:none; align-items:center; gap:8px;
+    font-family:'JetBrains Mono',monospace; font-size:12px;
+    border:1px solid var(--moss); background:#E3F3EE; color:#154F41;
+    padding:9px 13px; border-radius:8px;
+  }
+  #clienteDetectado.show{ display:flex; animation:fadeUp .4s var(--ease) forwards; }
+  #clienteDetectado b{ font-weight:700; }
+
   .tipo-mov{
     display:flex; gap:8px; margin:16px 0 14px;
   }
@@ -230,6 +239,7 @@
     <a href="/" class="active">Escanear</a>
     <a href="/facturas.html">Facturas</a>
     <a href="/kardex.html">Kárdex</a>
+    <a href="/clientes.html">Clientes</a>
   </nav>
 
   <div class="intake reveal" id="intake">
@@ -286,6 +296,8 @@
       <h2>Datos extraídos</h2>
       <span class="stamp">revisar antes de usar</span>
     </div>
+
+    <div id="clienteDetectado"></div>
 
     <div class="tipo-mov" id="tipoMov">
       <button type="button" class="tipo-btn active" data-tipo="egreso">
@@ -370,6 +382,50 @@ let currentBase64 = null;
 let currentMediaType = null;
 let currentIsPdf = false;
 let currentTipoMovimiento = 'egreso';
+let currentClienteId = '';
+let myClients = [];
+
+// Se carga una sola vez al abrir la página -- se usa para detectar
+// automáticamente si una factura es Ingreso o Egreso comparando NITs.
+async function loadMyClients(){
+  try {
+    const res = await fetch('/api/clients');
+    if (res.ok) myClients = await res.json();
+  } catch (e) {
+    console.warn('No se pudo cargar la lista de clientes:', e.message);
+  }
+}
+loadMyClients();
+
+function detectClient(data){
+  const detectedEl = document.getElementById('clienteDetectado');
+  currentClienteId = '';
+
+  // Egreso: el cliente aparece como ADQUIRIENTE (compró la factura)
+  const asComprador = myClients.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
+  // Ingreso: el cliente aparece como EMISOR (vendió la factura)
+  const asVendedor = myClients.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
+
+  if (asComprador) {
+    currentClienteId = asComprador.id;
+    currentTipoMovimiento = 'egreso';
+    detectedEl.innerHTML = `✓ Detectado: <b>${asComprador.nombre}</b> — marcado como Egreso automáticamente.`;
+    detectedEl.classList.add('show');
+  } else if (asVendedor) {
+    currentClienteId = asVendedor.id;
+    currentTipoMovimiento = 'ingreso';
+    detectedEl.innerHTML = `✓ Detectado: <b>${asVendedor.nombre}</b> — marcado como Ingreso automáticamente.`;
+    detectedEl.classList.add('show');
+  } else {
+    detectedEl.classList.remove('show');
+    currentTipoMovimiento = 'egreso'; // valor por defecto si no hay coincidencia
+  }
+
+  // Refleja el tipo detectado (o el default) en los botones visuales
+  tipoMovEl.querySelectorAll('.tipo-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tipo === currentTipoMovimiento)
+  );
+}
 
 const tipoMovEl = document.getElementById('tipoMov');
 tipoMovEl.querySelectorAll('.tipo-btn').forEach(btn => {
@@ -407,6 +463,7 @@ function handleFile(file){
   savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
+  document.getElementById('clienteDetectado').classList.remove('show');
 
   currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
 
@@ -442,10 +499,12 @@ function resetAll(){
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
+  document.getElementById('clienteDetectado').classList.remove('show');
   fileCamera.value = '';
   fileUpload.value = '';
   currentIsPdf = false;
   currentTipoMovimiento = 'egreso';
+  currentClienteId = '';
   tipoMovEl.querySelectorAll('.tipo-btn').forEach(b => b.classList.toggle('active', b.dataset.tipo === 'egreso'));
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
@@ -498,6 +557,7 @@ async function extractInvoice(){
 }
 
 function renderResult(data){
+  detectClient(data);
   ledger.innerHTML = '';
   FIELDS.forEach((f, i) => {
     const row = document.createElement('div');
@@ -579,6 +639,7 @@ function currentFieldValues(){
     out[f.key] = val;
   });
   out.tipo_movimiento = currentTipoMovimiento;
+  out.cliente_id = currentClienteId || '';
   return out;
 }
 

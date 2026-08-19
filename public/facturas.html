@@ -131,10 +131,12 @@
     <a href="/">Escanear</a>
     <a href="/facturas.html" class="active">Facturas</a>
     <a href="/kardex.html">Kárdex</a>
+    <a href="/clientes.html">Clientes</a>
   </nav>
 
   <div class="toolbar reveal">
     <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <select id="clientSelect"></select>
       <select id="monthSelect"></select>
       <select id="tipoFilter">
         <option value="todos">Todos los movimientos</option>
@@ -202,6 +204,7 @@
   });
 })();
 
+const clientSelect = document.getElementById('clientSelect');
 const monthSelect = document.getElementById('monthSelect');
 const tipoFilter = document.getElementById('tipoFilter');
 const tbody = document.getElementById('tbody');
@@ -221,6 +224,36 @@ const btnExport = document.getElementById('btnExport');
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
 let allInvoices = [];
+let myClients = [];
+
+function populateClients(){
+  clientSelect.innerHTML = '';
+  const optAll = document.createElement('option');
+  optAll.value = 'todos';
+  optAll.textContent = 'Todos los clientes';
+  clientSelect.appendChild(optAll);
+
+  myClients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.nombre;
+    clientSelect.appendChild(opt);
+  });
+
+  const optSinAsignar = document.createElement('option');
+  optSinAsignar.value = 'sin-asignar';
+  optSinAsignar.textContent = 'Sin cliente asignado';
+  clientSelect.appendChild(optSinAsignar);
+
+  clientSelect.value = 'todos';
+}
+
+function invoicesForSelectedClient(){
+  const clientId = clientSelect.value;
+  if (clientId === 'todos') return allInvoices;
+  if (clientId === 'sin-asignar') return allInvoices.filter(inv => !inv.cliente_id);
+  return allInvoices.filter(inv => inv.cliente_id === clientId);
+}
 
 function monthKeyFromFecha(fecha){
   const [d, m, y] = (fecha || '').split('/');
@@ -255,7 +288,8 @@ function populateMonths(invoices){
 function renderTable(){
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
-  const monthInvoices = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const clientInvoices = invoicesForSelectedClient();
+  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   tbody.innerHTML = '';
@@ -337,13 +371,19 @@ function renderTable(){
 async function loadInvoices(){
   loadingEl.style.display = 'flex';
   try {
-    const res = await fetch('/api/invoices');
-    const contentType = res.headers.get('content-type') || '';
+    const [invRes, clientsRes] = await Promise.all([
+      fetch('/api/invoices'),
+      fetch('/api/clients')
+    ]);
+    const contentType = invRes.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       throw new Error('El servidor no respondió correctamente.');
     }
-    allInvoices = await res.json();
-    populateMonths(allInvoices);
+    allInvoices = await invRes.json();
+    myClients = clientsRes.ok ? await clientsRes.json() : [];
+
+    populateClients();
+    populateMonths(invoicesForSelectedClient());
     renderTable();
   } catch (e) {
     emptyEl.textContent = 'No se pudieron cargar las facturas: ' + e.message;
@@ -353,13 +393,18 @@ async function loadInvoices(){
   }
 }
 
+clientSelect.addEventListener('change', () => {
+  populateMonths(invoicesForSelectedClient());
+  renderTable();
+});
 monthSelect.addEventListener('change', renderTable);
 tipoFilter.addEventListener('change', renderTable);
 
 btnExport.addEventListener('click', async () => {
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
-  const monthInvoices = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const clientInvoices = invoicesForSelectedClient();
+  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   if (filtered.length === 0) {
