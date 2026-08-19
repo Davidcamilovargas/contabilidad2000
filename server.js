@@ -47,6 +47,9 @@ async function ensureSchema() {
       rete_iva TEXT DEFAULT '',
       rete_ica TEXT DEFAULT '',
       concepto TEXT DEFAULT '',
+      tipo_movimiento TEXT DEFAULT 'egreso',
+      adquiriente_nit TEXT DEFAULT '',
+      adquiriente_nombre TEXT DEFAULT '',
       saved_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
@@ -57,6 +60,11 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_fuente TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_iva TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_ica TEXT DEFAULT '';`);
+  // Facturas guardadas ANTES de esta actualización se asumen "egreso"
+  // (así se comportaba la app hasta ahora: solo leía facturas recibidas).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tipo_movimiento TEXT DEFAULT 'egreso';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nit TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nombre TEXT DEFAULT '';`);
 }
 
 app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
@@ -67,6 +75,7 @@ const SAVED_FIELDS = [
   'letras_fe', 'numeros_fe', 'fecha_factura',
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto',
+  'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre',
 ];
 
 function rowToInvoice(row) {
@@ -154,7 +163,9 @@ app.post('/api/extract', async (req, res) => {
   "rete_fuente": "valor de Retención en la Fuente (Rete Fuente / ReteRenta) si el documento la muestra explícitamente, en pesos ENTEROS. Si el documento no muestra esta sección o el valor es 0, usa 0",
   "rete_iva": "valor de Retención de IVA (ReteIVA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
   "rete_ica": "valor de Retención de ICA (ReteICA) si el documento la muestra explícitamente, en pesos ENTEROS. Si no aplica o es 0, usa 0",
-  "concepto": "breve descripción de qué es el gasto o servicio facturado, en pocas palabras"
+  "concepto": "breve descripción de qué es el gasto o servicio facturado, en pocas palabras",
+  "adquiriente_nit": "número de identificación del ADQUIRIENTE/COMPRADOR (quien recibe la factura, no quien la emite), solo dígitos. Casi todas las facturas colombianas tienen una sección separada 'Datos del Adquiriente/Comprador' además de 'Datos del Emisor/Vendedor' -- busca esa segunda sección. Si no la encuentras, deja una cadena vacía",
+  "adquiriente_nombre": "nombre o razón social del ADQUIRIENTE/COMPRADOR (la sección separada del emisor). Si no la encuentras, deja una cadena vacía"
 }
 
 REGLA DE FORMATO PARA LOS 3 CAMPOS DE VALOR (muy importante, es el error más común):

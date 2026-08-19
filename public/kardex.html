@@ -105,6 +105,13 @@
   .kardex-table tbody tr{ opacity:0; animation:fadeUp .4s var(--ease) forwards; }
   .kardex-table .date{ font-family:'JetBrains Mono',monospace; color:#4E5A52; white-space:nowrap; }
   .kardex-table .concepto{ color:#4E5A52; font-size:12.5px; }
+  .mov-tag{
+    display:inline-block; font-family:'JetBrains Mono',monospace; font-size:9.5px;
+    text-transform:uppercase; letter-spacing:.04em; padding:2px 6px; border-radius:100px;
+    margin-right:5px; vertical-align:middle;
+  }
+  .mov-tag.egreso{ background:var(--k-ember-soft); color:#B5482E; }
+  .mov-tag.ingreso{ background:#DCEEE8; color:#154F41; }
   .kardex-table .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
   .kardex-table .saldo{ font-weight:700; color:var(--k-ember); }
 
@@ -209,9 +216,17 @@ function invoiceTotal(inv){
 function buildProviders(){
   const map = new Map();
   allInvoices.forEach(inv => {
-    const key = (inv.nit_cc || 'sin-nit').trim();
+    const movTipo = inv.tipo_movimiento || 'egreso';
+    // En un Egreso, la contraparte relevante es quien EMITIÓ la factura
+    // (el proveedor). En un Ingreso, la contraparte relevante es a quién
+    // se le vendió (el adquiriente) -- el emisor ahí es el cliente mismo,
+    // agruparlo por ahí no diría nada útil.
+    const contraparteNit = movTipo === 'ingreso' ? (inv.adquiriente_nit || inv.nit_cc) : inv.nit_cc;
+    const contraparteNombre = movTipo === 'ingreso' ? (inv.adquiriente_nombre || inv.nombre_razon_social) : inv.nombre_razon_social;
+
+    const key = (contraparteNit || 'sin-nit').trim();
     if (!map.has(key)) {
-      map.set(key, { nit: inv.nit_cc || '—', dv: inv.dv || '', name: inv.nombre_razon_social || 'Sin nombre', count: 0, total: 0, invoices: [] });
+      map.set(key, { nit: contraparteNit || '—', dv: movTipo === 'ingreso' ? '' : (inv.dv || ''), name: contraparteNombre || 'Sin nombre', count: 0, total: 0, invoices: [] });
     }
     const p = map.get(key);
     p.invoices.push(inv);
@@ -219,7 +234,7 @@ function buildProviders(){
     p.total += invoiceTotal(inv);
     // Usa el nombre más reciente registrado para este NIT
     if (fechaKey(inv.fecha_factura) >= fechaKey(p.lastDate || '')) {
-      p.name = inv.nombre_razon_social || p.name;
+      p.name = contraparteNombre || p.name;
       p.lastDate = inv.fecha_factura;
     }
   });
@@ -260,10 +275,14 @@ function selectProvider(nit){
   let acumulado = 0;
   const rows = sorted.map((inv, i) => {
     acumulado += invoiceTotal(inv);
+    const movTipo = inv.tipo_movimiento || 'egreso';
+    const badge = movTipo === 'ingreso'
+      ? '<span class="mov-tag ingreso">Ingreso</span>'
+      : '<span class="mov-tag egreso">Egreso</span>';
     return `
       <tr style="animation-delay:${i * 0.04}s">
         <td class="date">${inv.fecha_factura || '—'}</td>
-        <td class="concepto">${inv.concepto || '—'}</td>
+        <td class="concepto">${badge} ${inv.concepto || '—'}</td>
         <td class="money">${formatCOP(invoiceTotal(inv))}</td>
         <td class="money saldo">${formatCOP(acumulado)}</td>
       </tr>

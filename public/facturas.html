@@ -35,11 +35,26 @@
   }
   .total-chip{
     font-family:'JetBrains Mono',monospace;
-    font-size:12px; letter-spacing:.5px;
+    font-size:11.5px; letter-spacing:.4px;
     color:#7A2E12; background:var(--ember-soft);
-    padding:8px 14px; border-radius:6px;
+    padding:7px 13px; border-radius:6px;
   }
-  .total-chip b{ font-size:14px; color:var(--ember-deep); }
+  .total-chip b{ font-size:13.5px; color:var(--ember-deep); }
+  .total-chip.egreso{ color:#7A2E12; background:var(--ember-soft); }
+  .total-chip.egreso b{ color:var(--ember-deep); }
+  .total-chip.ingreso{ color:#154F41; background:#DCEEE8; }
+  .total-chip.ingreso b{ color:#1F6F5C; }
+  .total-chip.balance{ color:#1B2420; background:#EDEAE0; }
+  .total-chip.balance b{ color:#1B2420; }
+
+  .mov-badge{
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+    padding:3px 8px; border-radius:100px; white-space:nowrap;
+  }
+  .mov-badge.egreso{ background:var(--ember-soft); color:#B5482E; }
+  .mov-badge.ingreso{ background:#DCEEE8; color:#154F41; }
+  .mov-badge .mov-dot{ width:5px; height:5px; border-radius:50%; background:currentColor; }
 
   table{
     width:100%; border-collapse:collapse;
@@ -94,10 +109,10 @@
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
   @media (max-width:760px){
-    thead th:nth-child(1), tbody td:nth-child(1){ display:none; } /* Tipo */
-    thead th:nth-child(4), tbody td:nth-child(4){ display:none; } /* Concepto */
-    thead th:nth-child(7), tbody td:nth-child(7){ display:none; } /* IVA */
-    thead th:nth-child(9), tbody td:nth-child(9){ display:none; } /* Retenciones */
+    thead th:nth-child(2), tbody td:nth-child(2){ display:none; } /* Tipo */
+    thead th:nth-child(5), tbody td:nth-child(5){ display:none; } /* Concepto */
+    thead th:nth-child(8), tbody td:nth-child(8){ display:none; } /* IVA */
+    thead th:nth-child(10), tbody td:nth-child(10){ display:none; } /* Retenciones */
   }
 </style>
 </head>
@@ -119,9 +134,18 @@
   </nav>
 
   <div class="toolbar reveal">
-    <select id="monthSelect"></select>
-    <div style="display:flex; align-items:center; gap:10px;">
-      <span class="total-chip">Total del mes: <b id="totalValue">$0</b></span>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <select id="monthSelect"></select>
+      <select id="tipoFilter">
+        <option value="todos">Todos los movimientos</option>
+        <option value="egreso">Solo egresos</option>
+        <option value="ingreso">Solo ingresos</option>
+      </select>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <span class="total-chip egreso">Egresos: <b id="totalEgresos">$0</b></span>
+      <span class="total-chip ingreso">Ingresos: <b id="totalIngresos">$0</b></span>
+      <span class="total-chip balance">Balance: <b id="totalBalance">$0</b></span>
       <button class="btn ghost" id="btnExport">Exportar a Excel</button>
     </div>
   </div>
@@ -134,6 +158,7 @@
     <table>
       <thead>
         <tr>
+          <th>Mov.</th>
           <th>Tipo</th>
           <th>NIT / CC</th>
           <th>Proveedor</th>
@@ -149,7 +174,7 @@
       <tbody id="tbody"></tbody>
       <tfoot>
         <tr>
-          <td colspan="5">Total facturas: <span id="countValue">0</span></td>
+          <td colspan="6">Total facturas: <span id="countValue">0</span></td>
           <td class="money" id="footSubtotal">$0</td>
           <td class="money" id="footIva">$0</td>
           <td class="money" id="footTotal">$0</td>
@@ -178,11 +203,14 @@
 })();
 
 const monthSelect = document.getElementById('monthSelect');
+const tipoFilter = document.getElementById('tipoFilter');
 const tbody = document.getElementById('tbody');
 const tableWrap = document.getElementById('tableWrap');
 const emptyEl = document.getElementById('empty');
 const loadingEl = document.getElementById('loading');
-const totalValue = document.getElementById('totalValue');
+const totalEgresos = document.getElementById('totalEgresos');
+const totalIngresos = document.getElementById('totalIngresos');
+const totalBalance = document.getElementById('totalBalance');
 const footSubtotal = document.getElementById('footSubtotal');
 const footIva = document.getElementById('footIva');
 const footTotal = document.getElementById('footTotal');
@@ -226,7 +254,9 @@ function populateMonths(invoices){
 
 function renderTable(){
   const month = monthSelect.value;
-  const filtered = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const tipo = tipoFilter.value;
+  const monthInvoices = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   tbody.innerHTML = '';
   let sumSinIva = 0;
@@ -245,6 +275,7 @@ function renderTable(){
     const reteIva = Number(inv.rete_iva) || 0;
     const reteIca = Number(inv.rete_ica) || 0;
     const totalRetenciones = reteFuente + reteIva + reteIca;
+    const movTipo = inv.tipo_movimiento || 'egreso';
 
     sumSinIva += sinIva;
     sumIva += iva;
@@ -256,7 +287,11 @@ function renderTable(){
     const retencionTitle = totalRetenciones > 0
       ? `Fuente: ${formatCOP(reteFuente)} · IVA: ${formatCOP(reteIva)} · ICA: ${formatCOP(reteIca)}`
       : 'Sin retenciones registradas';
+    const adquirienteTitle = inv.adquiriente_nombre
+      ? `title="Adquiriente: ${inv.adquiriente_nombre}${inv.adquiriente_nit ? ' · NIT ' + inv.adquiriente_nit : ''}"`
+      : '';
     tr.innerHTML = `
+      <td ${adquirienteTitle}><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
       <td>${inv.tipo_doc || '—'}</td>
       <td>${inv.nit_cc || '—'}${inv.dv ? '-' + inv.dv : ''}</td>
       <td>${inv.nombre_razon_social || '—'}</td>
@@ -271,7 +306,23 @@ function renderTable(){
     tbody.appendChild(tr);
   });
 
-  totalValue.textContent = formatCOP(sumConIva);
+  // Los 3 chips de arriba siempre muestran el balance real del MES completo,
+  // sin importar el filtro de tipo que esté activo en la tabla de abajo.
+  const sumaTipo = (tipo) => monthInvoices
+    .filter(inv => (inv.tipo_movimiento || 'egreso') === tipo)
+    .reduce((s, inv) => {
+      const sinIva = Number(inv.valor_sin_iva) || 0;
+      const iva = Number(inv.valor_iva) || 0;
+      const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
+      return s + conIva;
+    }, 0);
+  const sumEgresos = sumaTipo('egreso');
+  const sumIngresos = sumaTipo('ingreso');
+
+  totalEgresos.textContent = formatCOP(sumEgresos);
+  totalIngresos.textContent = formatCOP(sumIngresos);
+  totalBalance.textContent = formatCOP(sumIngresos - sumEgresos);
+
   footSubtotal.textContent = formatCOP(sumSinIva);
   footIva.textContent = formatCOP(sumIva);
   footTotal.textContent = formatCOP(sumConIva);
@@ -303,10 +354,13 @@ async function loadInvoices(){
 }
 
 monthSelect.addEventListener('change', renderTable);
+tipoFilter.addEventListener('change', renderTable);
 
 btnExport.addEventListener('click', async () => {
   const month = monthSelect.value;
-  const filtered = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const tipo = tipoFilter.value;
+  const monthInvoices = allInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   if (filtered.length === 0) {
     alert('No hay facturas en este mes para exportar.');
@@ -338,11 +392,11 @@ btnExport.addEventListener('click', async () => {
     });
 
     const headers = [
-      'Tipo Doc', 'Nit o CC', 'DV', 'Nombre o Razón Social', 'Letras F-E',
+      'Movimiento', 'Tipo Doc', 'Nit o CC', 'DV', 'Nombre o Razón Social', 'Letras F-E',
       'Números F-E', 'Fecha Factura', 'Valor Sin IVA', 'Valor IVA', 'Valor Con IVA',
       'Rete Fuente', 'Rete IVA', 'Rete ICA', 'Concepto',
     ];
-    const colWidths = [10, 15, 6, 32, 10, 12, 13, 15, 15, 15, 13, 12, 12, 34];
+    const colWidths = [11, 10, 15, 6, 32, 10, 12, 13, 15, 15, 15, 13, 12, 12, 34];
 
     sheet.columns = headers.map((h, i) => ({ width: colWidths[i] }));
 
@@ -366,8 +420,8 @@ btnExport.addEventListener('click', async () => {
       cell.border = { bottom: { style: 'thin', color: { argb: COLOR_CARBON } } };
     });
 
-    const MONEY_COL_START = 8;  // Valor Sin IVA
-    const MONEY_COL_END = 13;   // Rete ICA
+    const MONEY_COL_START = 9;  // Valor Sin IVA
+    const MONEY_COL_END = 14;   // Rete ICA
 
     // Filas de datos
     filtered.forEach((inv) => {
@@ -379,9 +433,10 @@ btnExport.addEventListener('click', async () => {
       const reteFuente = Number(inv.rete_fuente) || 0;
       const reteIva = Number(inv.rete_iva) || 0;
       const reteIca = Number(inv.rete_ica) || 0;
+      const movLabel = (inv.tipo_movimiento || 'egreso') === 'ingreso' ? 'Ingreso' : 'Egreso';
 
       const row = sheet.addRow([
-        inv.tipo_doc || '', inv.nit_cc || '', inv.dv || '', inv.nombre_razon_social || '',
+        movLabel, inv.tipo_doc || '', inv.nit_cc || '', inv.dv || '', inv.nombre_razon_social || '',
         inv.letras_fe || '', inv.numeros_fe || '', inv.fecha_factura || '',
         sinIva, iva, conIva, reteFuente, reteIva, reteIca, inv.concepto || '',
       ]);
@@ -397,7 +452,7 @@ btnExport.addEventListener('click', async () => {
 
     // Fila de totales, fondo verde suave + borde superior grueso (como el pie de tabla en la app)
     const totalRow = sheet.addRow([
-      '', '', '', '', '', '', 'TOTAL',
+      '', '', '', '', '', '', '', 'TOTAL',
       filtered.reduce((s, inv) => s + (Number(inv.valor_sin_iva) || 0), 0),
       filtered.reduce((s, inv) => s + (Number(inv.valor_iva) || 0), 0),
       filtered.reduce((s, inv) => {

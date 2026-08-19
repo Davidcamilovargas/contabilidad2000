@@ -159,6 +159,23 @@
     border-bottom:1px solid var(--ink);padding-bottom:10px;margin-bottom:0;
   }
   .result-head h2{font-size:17px;margin:0;font-weight:600;}
+
+  .tipo-mov{
+    display:flex; gap:8px; margin:16px 0 14px;
+  }
+  .tipo-btn{
+    flex:1; display:flex; align-items:center; justify-content:center; gap:8px;
+    font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:.3px;
+    padding:11px 12px; border:1.5px solid var(--line); border-radius:8px;
+    background:transparent; color:var(--ink-soft); cursor:pointer;
+    transition:border-color .2s var(--ease), background .2s var(--ease), color .2s var(--ease);
+  }
+  .tipo-btn .tipo-sub{ font-size:10.5px; color:var(--ink-faint); }
+  .tipo-btn .tipo-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .tipo-dot.egreso{ background:var(--ember); }
+  .tipo-dot.ingreso{ background:#1F6F5C; }
+  .tipo-btn.active{ border-color:currentColor; background:rgba(0,0,0,0.03); color:var(--ink); font-weight:600; }
+  .tipo-btn:hover{ border-color:var(--ink-faint); }
   .stamp{
     font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1.5px;
     color:var(--ember);border:1.5px solid var(--ember);
@@ -269,6 +286,16 @@
       <h2>Datos extraídos</h2>
       <span class="stamp">revisar antes de usar</span>
     </div>
+
+    <div class="tipo-mov" id="tipoMov">
+      <button type="button" class="tipo-btn active" data-tipo="egreso">
+        <span class="tipo-dot egreso"></span> Egreso <span class="tipo-sub">(la compró mi cliente)</span>
+      </button>
+      <button type="button" class="tipo-btn" data-tipo="ingreso">
+        <span class="tipo-dot ingreso"></span> Ingreso <span class="tipo-sub">(la vendió mi cliente)</span>
+      </button>
+    </div>
+
     <div class="ledger" id="ledger"></div>
     <div id="retencionHint"></div>
     <div class="result-actions">
@@ -283,9 +310,11 @@
 <script>
 const FIELDS = [
   {key:"tipo_doc", label:"Tipo Doc (13/31)"},
-  {key:"nit_cc", label:"Nit o CC"},
+  {key:"nit_cc", label:"Nit Emisor (Vendedor)"},
   {key:"dv", label:"DV"},
-  {key:"nombre_razon_social", label:"Nombre o Razón Social"},
+  {key:"nombre_razon_social", label:"Nombre Emisor (Vendedor)"},
+  {key:"adquiriente_nit", label:"Nit Adquiriente (Comprador)"},
+  {key:"adquiriente_nombre", label:"Nombre Adquiriente (Comprador)"},
   {key:"letras_fe", label:"Letras F-E"},
   {key:"numeros_fe", label:"Números F-E"},
   {key:"fecha_factura", label:"Fecha Factura"},
@@ -340,6 +369,15 @@ const btnSave = document.getElementById('btnSave');
 let currentBase64 = null;
 let currentMediaType = null;
 let currentIsPdf = false;
+let currentTipoMovimiento = 'egreso';
+
+const tipoMovEl = document.getElementById('tipoMov');
+tipoMovEl.querySelectorAll('.tipo-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    currentTipoMovimiento = btn.dataset.tipo;
+    tipoMovEl.querySelectorAll('.tipo-btn').forEach(b => b.classList.toggle('active', b === btn));
+  });
+});
 
 btnCamera.addEventListener('click', () => fileCamera.click());
 btnUpload.addEventListener('click', () => fileUpload.click());
@@ -407,6 +445,8 @@ function resetAll(){
   fileCamera.value = '';
   fileUpload.value = '';
   currentIsPdf = false;
+  currentTipoMovimiento = 'egreso';
+  tipoMovEl.querySelectorAll('.tipo-btn').forEach(b => b.classList.toggle('active', b.dataset.tipo === 'egreso'));
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   window.scrollTo({top:0, behavior:'smooth'});
@@ -538,6 +578,7 @@ function currentFieldValues(){
     if (f.money) val = val.replace(/\./g, '').replace(/[^\d-]/g, '');
     out[f.key] = val;
   });
+  out.tipo_movimiento = currentTipoMovimiento;
   return out;
 }
 
