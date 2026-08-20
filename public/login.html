@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Iniciar sesión</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="/config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root{
+    --carbon:#0E1315; --carbon-raised:#171E20; --carbon-line:#2B3436;
+    --ember:#FF5A36; --white-soft:rgba(255,255,255,0.62); --white-faint:rgba(255,255,255,0.4);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--carbon); color:#fff;
+    font-family:'Inter',-apple-system,sans-serif;
+    display:flex; align-items:center; justify-content:center;
+    min-height:100vh; padding:20px;
+  }
+  .card{
+    width:100%; max-width:380px; text-align:center;
+    background:var(--carbon-raised); border:1px solid var(--carbon-line);
+    border-radius:16px; padding:44px 34px;
+  }
+  .logo-mark{
+    width:44px; height:44px; border-radius:10px; margin:0 auto 20px;
+    background:var(--ember); color:var(--carbon);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Archivo',sans-serif; font-weight:900; font-size:22px;
+  }
+  h1{
+    font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.02em;
+    font-size:1.7rem; margin:0 0 10px;
+  }
+  p{ color:var(--white-soft); font-size:14px; line-height:1.6; margin:0 0 30px; }
+  #googleBtn{ display:flex; justify-content:center; }
+  #errBox{
+    display:none; margin-top:18px; font-size:12.5px; color:#FFB199;
+    background:rgba(255,90,54,0.12); border:1px solid rgba(255,90,54,0.3);
+    padding:10px 14px; border-radius:8px;
+  }
+  #errBox.show{ display:block; }
+  .fine{
+    margin-top:26px; font-family:'JetBrains Mono',monospace; font-size:10.5px;
+    color:var(--white-faint); letter-spacing:.03em; line-height:1.6;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo-mark">K</div>
+    <h1>Kárdex IA</h1>
+    <p>Inicia sesión con tu cuenta de Google para entrar a tu kárdex.</p>
+    <div id="googleBtn"></div>
+    <div id="errBox"></div>
+    <div class="fine">Cada cuenta ve solo sus propios clientes y facturas.</div>
+  </div>
+
+<script>
+async function handleCredentialResponse(response) {
+  const errBox = document.getElementById('errBox');
+  errBox.classList.remove('show');
+  try {
+    const res = await fetch('/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: response.credential })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo iniciar sesión.');
+    window.location.href = '/';
+  } catch (e) {
+    errBox.textContent = 'No se pudo iniciar sesión: ' + e.message;
+    errBox.classList.add('show');
+  }
+}
+
+window.onload = function () {
+  if (!window.GOOGLE_CLIENT_ID) {
+    document.getElementById('errBox').textContent = 'Falta configurar GOOGLE_CLIENT_ID en el servidor.';
+    document.getElementById('errBox').classList.add('show');
+    return;
+  }
+  google.accounts.id.initialize({
+    client_id: window.GOOGLE_CLIENT_ID,
+    callback: handleCredentialResponse
+  });
+  google.accounts.id.renderButton(
+    document.getElementById('googleBtn'),
+    { theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'pill' }
+  );
+};
+</script>
+</body>
+</html>

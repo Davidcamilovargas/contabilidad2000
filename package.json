@@ -1,6 +1,6 @@
 {
   "name": "kardex-ia",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Kárdex IA — lector de facturas colombianas con IA para contadores",
   "main": "server.js",
   "scripts": {
@@ -10,8 +10,11 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "cookie-parser": "^1.4.6",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "google-auth-library": "^9.14.1",
+    "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1"
   }
 }
