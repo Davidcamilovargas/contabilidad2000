@@ -2,12 +2,17 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!API_KEY) {
   console.error('\n[ERROR] No se encontró GEMINI_API_KEY en el archivo .env');
@@ -21,6 +26,20 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+if (!GOOGLE_CLIENT_ID) {
+  console.error('\n[ERROR] No se encontró GOOGLE_CLIENT_ID en el archivo .env');
+  console.error('Crea credenciales OAuth en https://console.cloud.google.com/apis/credentials y pega el Client ID en tu .env.\n');
+  process.exit(1);
+}
+
+if (!JWT_SECRET) {
+  console.error('\n[ERROR] No se encontró JWT_SECRET en el archivo .env');
+  console.error('Inventa cualquier texto largo y secreto y ponlo como JWT_SECRET en tu .env (ej. una frase random de 40+ caracteres).\n');
+  process.exit(1);
+}
+
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
 // Conexión a PostgreSQL. Supabase requiere SSL; en local (Postgres propio)
 // normalmente no hace falta, por eso se desactiva la verificación estricta
 // del certificado en vez de exigirla siempre.
@@ -30,6 +49,16 @@ const pool = new Pool({
 });
 
 async function ensureSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY,
+      google_id TEXT UNIQUE NOT NULL,
+      email TEXT NOT NULL,
+      nombre TEXT DEFAULT '',
+      avatar_url TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS invoices (
       id UUID PRIMARY KEY,
@@ -69,16 +98,110 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_fuente TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_iva TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rete_ica TEXT DEFAULT '';`);
-  // Facturas guardadas ANTES de esta actualización se asumen "egreso"
-  // (así se comportaba la app hasta ahora: solo leía facturas recibidas).
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tipo_movimiento TEXT DEFAULT 'egreso';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nit TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nombre TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cliente_id UUID;`);
+  // Login: cada factura/cliente queda asociada al contador que la guardó.
+  // Nullable a propósito -- los datos guardados ANTES del login existían
+  // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS contador_id UUID;`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contador_id UUID;`);
 }
 
+// ---------- Middlewares globales (deben ir ANTES que cualquier ruta
+// que los necesite -- express procesa todo en orden de registro) ----------
 app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
+app.use(cookieParser());
+
+// El Client ID de Google NO es secreto (a diferencia del Client Secret,
+// que aquí ni siquiera se usa) -- el navegador lo necesita para mostrar
+// el botón de login, así que se lo servimos desde una sola variable de
+// entorno en vez de pegarlo a mano en cada página HTML.
+app.get('/config.js', (req, res) => {
+  res.type('application/javascript');
+  res.send(`window.GOOGLE_CLIENT_ID = ${JSON.stringify(GOOGLE_CLIENT_ID)};`);
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- Autenticación ----------
+
+function issueSessionCookie(res, userId) {
+  const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: '30d' });
+  res.cookie('kardex_session', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' || !DATABASE_URL.includes('localhost'),
+    sameSite: 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
+  });
+}
+
+// Verifica el JWT de la cookie. Si es válido, agrega req.userId.
+// Si no, responde 401 en JSON (nunca redirige -- esto protege rutas /api/*).
+function requireAuth(req, res, next) {
+  const token = req.cookies?.kardex_session;
+  if (!token) return res.status(401).json({ error: 'No has iniciado sesión.' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.userId = payload.userId;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Tu sesión expiró o no es válida. Inicia sesión de nuevo.' });
+  }
+}
+
+// Recibe el token que entrega el botón de Google (Google Identity
+// Services) en el navegador, lo verifica contra los servidores de
+// Google, y crea o reconoce al usuario en nuestra base de datos.
+app.post('/auth/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: 'Falta el token de Google.' });
+
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+    const payload = ticket.getPayload();
+    const googleId = payload.sub;
+    const email = payload.email;
+    const nombre = payload.name || '';
+    const avatarUrl = payload.picture || '';
+
+    const existing = await pool.query('SELECT * FROM users WHERE google_id = $1', [googleId]);
+    let user;
+    if (existing.rows.length > 0) {
+      user = existing.rows[0];
+    } else {
+      const id = crypto.randomUUID();
+      const { rows } = await pool.query(
+        'INSERT INTO users (id, google_id, email, nombre, avatar_url) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+        [id, googleId, email, nombre, avatarUrl]
+      );
+      user = rows[0];
+    }
+
+    issueSessionCookie(res, user.id);
+    res.json({ ok: true, user: { id: user.id, email: user.email, nombre: user.nombre, avatarUrl: user.avatar_url } });
+  } catch (err) {
+    console.error('Error verificando login de Google:', err);
+    res.status(401).json({ error: 'No se pudo verificar tu cuenta de Google.' });
+  }
+});
+
+// Le dice al frontend quién está logueado (o 401 si nadie)
+app.get('/api/me', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url FROM users WHERE id = $1', [req.userId]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Usuario no encontrado.' });
+    res.json({ id: rows[0].id, email: rows[0].email, nombre: rows[0].nombre, avatarUrl: rows[0].avatar_url });
+  } catch (err) {
+    res.status(500).json({ error: 'No se pudo verificar la sesión.' });
+  }
+});
+
+app.post('/auth/logout', (req, res) => {
+  res.clearCookie('kardex_session');
+  res.json({ ok: true });
+});
 
 const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
@@ -94,10 +217,10 @@ function rowToInvoice(row) {
 
 // ---------- Clientes ----------
 
-// Listar todos los clientes guardados
-app.get('/api/clients', async (req, res) => {
+// Listar todos los clientes guardados (solo los de este contador)
+app.get('/api/clients', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM clients ORDER BY nombre ASC');
+    const { rows } = await pool.query('SELECT * FROM clients WHERE contador_id = $1 ORDER BY nombre ASC', [req.userId]);
     res.json(rows);
   } catch (err) {
     console.error('Error leyendo clientes:', err);
@@ -105,8 +228,8 @@ app.get('/api/clients', async (req, res) => {
   }
 });
 
-// Crear un cliente nuevo
-app.post('/api/clients', async (req, res) => {
+// Crear un cliente nuevo, asociado a este contador
+app.post('/api/clients', requireAuth, async (req, res) => {
   try {
     const { nombre, nit, dv } = req.body;
     if (!nombre || !nit) {
@@ -114,8 +237,8 @@ app.post('/api/clients', async (req, res) => {
     }
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      'INSERT INTO clients (id, nombre, nit, dv) VALUES ($1, $2, $3, $4) RETURNING *',
-      [id, nombre, nit, dv || '']
+      'INSERT INTO clients (id, nombre, nit, dv, contador_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [id, nombre, nit, dv || '', req.userId]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -124,10 +247,10 @@ app.post('/api/clients', async (req, res) => {
   }
 });
 
-// Eliminar un cliente
-app.delete('/api/clients/:id', async (req, res) => {
+// Eliminar un cliente (solo si es de este contador)
+app.delete('/api/clients/:id', requireAuth, async (req, res) => {
   try {
-    const { rowCount } = await pool.query('DELETE FROM clients WHERE id = $1', [req.params.id]);
+    const { rowCount } = await pool.query('DELETE FROM clients WHERE id = $1 AND contador_id = $2', [req.params.id, req.userId]);
     if (rowCount === 0) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
@@ -138,10 +261,10 @@ app.delete('/api/clients/:id', async (req, res) => {
   }
 });
 
-// Listar facturas guardadas (todas, o filtradas por mes con ?month=YYYY-MM)
-app.get('/api/invoices', async (req, res) => {
+// Listar facturas guardadas (todas, o filtradas por mes con ?month=YYYY-MM) -- solo las de este contador
+app.get('/api/invoices', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM invoices ORDER BY saved_at DESC');
+    const { rows } = await pool.query('SELECT * FROM invoices WHERE contador_id = $1 ORDER BY saved_at DESC', [req.userId]);
     const invoices = rows.map(rowToInvoice);
     const { month } = req.query;
     if (!month) return res.json(invoices);
@@ -159,7 +282,7 @@ app.get('/api/invoices', async (req, res) => {
 });
 
 // Guardar una factura ya revisada por el contador
-app.post('/api/invoices', async (req, res) => {
+app.post('/api/invoices', requireAuth, async (req, res) => {
   try {
     const id = crypto.randomUUID();
     const values = SAVED_FIELDS.map((key) => {
@@ -169,12 +292,12 @@ app.post('/api/invoices', async (req, res) => {
       if (key === 'cliente_id') return val === '' ? null : val;
       return val;
     });
-    const columns = SAVED_FIELDS.join(', ');
-    const placeholders = SAVED_FIELDS.map((_, i) => `$${i + 2}`).join(', ');
+    const columns = [...SAVED_FIELDS, 'contador_id'].join(', ');
+    const placeholders = [...SAVED_FIELDS, 'contador_id'].map((_, i) => `$${i + 2}`).join(', ');
 
     const { rows } = await pool.query(
       `INSERT INTO invoices (id, ${columns}) VALUES ($1, ${placeholders}) RETURNING *`,
-      [id, ...values]
+      [id, ...values, req.userId]
     );
     res.status(201).json(rowToInvoice(rows[0]));
   } catch (err) {
@@ -183,10 +306,10 @@ app.post('/api/invoices', async (req, res) => {
   }
 });
 
-// Eliminar una factura guardada
-app.delete('/api/invoices/:id', async (req, res) => {
+// Eliminar una factura guardada (solo si es de este contador)
+app.delete('/api/invoices/:id', requireAuth, async (req, res) => {
   try {
-    const { rowCount } = await pool.query('DELETE FROM invoices WHERE id = $1', [req.params.id]);
+    const { rowCount } = await pool.query('DELETE FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.userId]);
     if (rowCount === 0) {
       return res.status(404).json({ error: 'Factura no encontrada.' });
     }
@@ -202,7 +325,7 @@ app.delete('/api/invoices/:id', async (req, res) => {
 const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
 // Endpoint que recibe el archivo (imagen o PDF) y llama a la API gratuita de Gemini
-app.post('/api/extract', async (req, res) => {
+app.post('/api/extract', requireAuth, async (req, res) => {
   const { base64, mediaType, isPdf } = req.body;
 
   if (!base64 || !mediaType) {
