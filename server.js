@@ -13,13 +13,6 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const JWT_SECRET = process.env.JWT_SECRET;
-// Opcional: si defines ALLOWED_EMAILS en .env (separados por coma), solo esos
-// correos podrán iniciar sesión. Si la dejas vacía/sin definir, cualquier
-// cuenta de Google puede entrar (el comportamiento de hoy).
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || '')
-  .split(',')
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
 
 if (!API_KEY) {
   console.error('\n[ERROR] No se encontró GEMINI_API_KEY en el archivo .env');
@@ -98,6 +91,14 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS authorized_emails (
+      id UUID PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      nota TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   // Migración automática: si la tabla ya existía de una versión anterior
   // (sin estas columnas), se agregan ahora sin borrar los datos existentes.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valor_iva TEXT DEFAULT '';`);
@@ -173,8 +174,15 @@ app.post('/auth/google', async (req, res) => {
     const nombre = payload.name || '';
     const avatarUrl = payload.picture || '';
 
-    if (ALLOWED_EMAILS.length > 0 && !ALLOWED_EMAILS.includes(email.toLowerCase())) {
-      return res.status(403).json({ error: 'Tu correo todavía no está autorizado para usar Kárdex IA. Escríbele a David para que te dé acceso.' });
+    // Si la tabla de correos autorizados tiene al menos uno registrado,
+    // solo esos correos pueden entrar. Si está vacía, cualquiera puede
+    // entrar (útil para no bloquearte a ti mismo antes de agregar el primero).
+    const authCount = await pool.query('SELECT COUNT(*) FROM authorized_emails');
+    if (Number(authCount.rows[0].count) > 0) {
+      const allowed = await pool.query('SELECT 1 FROM authorized_emails WHERE LOWER(email) = LOWER($1)', [email]);
+      if (allowed.rows.length === 0) {
+        return res.status(403).json({ error: 'Tu correo todavía no está autorizado para usar Kárdex IA. Escríbele a David para que te dé acceso.' });
+      }
     }
 
     const existing = await pool.query('SELECT * FROM users WHERE google_id = $1', [googleId]);
