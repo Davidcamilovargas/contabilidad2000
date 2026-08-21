@@ -120,6 +120,10 @@ async function ensureSchema() {
   // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS contador_id UUID;`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contador_id UUID;`);
+  // Plan del contador -- define cuántos clientes puede registrar.
+  // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
+  // real; "solo" es el valor por defecto para cualquier cuenta nueva.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'solo';`);
 }
 
 // ---------- Middlewares globales (deben ir ANTES que cualquier ruta
@@ -214,9 +218,18 @@ app.post('/auth/google', async (req, res) => {
 // Le dice al frontend quién está logueado (o 401 si nadie)
 app.get('/api/me', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url FROM users WHERE id = $1', [req.userId]);
+    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url, plan FROM users WHERE id = $1', [req.userId]);
     if (rows.length === 0) return res.status(401).json({ error: 'Usuario no encontrado.' });
-    res.json({ id: rows[0].id, email: rows[0].email, nombre: rows[0].nombre, avatarUrl: rows[0].avatar_url });
+
+    const plan = rows[0].plan || 'solo';
+    const limite = clientLimitFor(plan);
+    const countRes = await pool.query('SELECT COUNT(*) FROM clients WHERE contador_id = $1', [req.userId]);
+    const actuales = Number(countRes.rows[0].count);
+
+    res.json({
+      id: rows[0].id, email: rows[0].email, nombre: rows[0].nombre, avatarUrl: rows[0].avatar_url,
+      plan, limiteClientes: limite, clientesActuales: actuales,
+    });
   } catch (err) {
     res.status(500).json({ error: 'No se pudo verificar la sesión.' });
   }
@@ -226,6 +239,19 @@ app.post('/auth/logout', (req, res) => {
   res.clearCookie('kardex_session');
   res.json({ ok: true });
 });
+
+// Cuántos clientes puede registrar cada contador, según su plan.
+// Un plan que no aparezca aquí (ej. uno nuevo a futuro) se trata como
+// ilimitado -- así no hay que tocar código para lanzar un plan "todo
+// incluido" más adelante.
+const PLAN_LIMITS = {
+  solo: 5,
+  profesional: 10,
+};
+
+function clientLimitFor(plan) {
+  return Object.prototype.hasOwnProperty.call(PLAN_LIMITS, plan) ? PLAN_LIMITS[plan] : null; // null = sin límite
+}
 
 const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
@@ -252,13 +278,30 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   }
 });
 
-// Crear un cliente nuevo, asociado a este contador
+// Crear un cliente nuevo, asociado a este contador -- respetando el
+// tope de clientes de su plan.
 app.post('/api/clients', requireAuth, async (req, res) => {
   try {
     const { nombre, nit, dv } = req.body;
     if (!nombre || !nit) {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
     }
+
+    const userRes = await pool.query('SELECT plan FROM users WHERE id = $1', [req.userId]);
+    const plan = userRes.rows[0]?.plan || 'solo';
+    const limite = clientLimitFor(plan);
+
+    if (limite !== null) {
+      const countRes = await pool.query('SELECT COUNT(*) FROM clients WHERE contador_id = $1', [req.userId]);
+      const actuales = Number(countRes.rows[0].count);
+      if (actuales >= limite) {
+        return res.status(403).json({
+          error: `Tu plan (${plan}) permite hasta ${limite} clientes, y ya tienes ${actuales}. Habla con nosotros para subir de plan.`,
+          limitReached: true, plan, limite, actuales,
+        });
+      }
+    }
+
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
       'INSERT INTO clients (id, nombre, nit, dv, contador_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',

@@ -10,6 +10,11 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
+  /* Esta página muestra una tabla de datos densa -- necesita mucho más
+     espacio horizontal que el ancho angosto (900px) pensado para
+     páginas de un solo formulario como Escanear o Login. */
+  .wrap{ max-width:1240px; }
+
   /* La tabla y el estado vacío quedan como una tarjeta clara -- igual
      que en index.html -- sobre el fondo oscuro. El toolbar NO se
      escala: vive directo sobre el fondo oscuro (el botón "Exportar"
@@ -63,11 +68,11 @@
   thead th{
     font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:1px;
     text-transform:uppercase; color:var(--ink-soft); text-align:left;
-    padding:11px 14px; background:#F2EFE7; border-bottom:1px solid var(--line);
+    padding:14px 20px; background:#F2EFE7; border-bottom:1px solid var(--line);
   }
   tbody td{
-    padding:12px 14px; font-size:13.5px; border-bottom:1px solid var(--line);
-    vertical-align:top;
+    padding:18px 20px; font-size:14px; border-bottom:1px solid var(--line);
+    vertical-align:top; line-height:1.5;
   }
   tbody tr:last-child td{ border-bottom:none; }
   tbody tr{
@@ -75,9 +80,14 @@
     transition:background .15s ease;
   }
   tbody tr:hover{ background:rgba(61,90,69,0.04); }
-  td.money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
-  td.date{ font-family:'JetBrains Mono',monospace; white-space:nowrap; color:var(--ink-soft); }
-  .concepto{ color:var(--ink-soft); font-size:12.5px; }
+  td.money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; font-size:13.5px; }
+  td.date{ font-family:'JetBrains Mono',monospace; white-space:nowrap; color:var(--ink-soft); font-size:13px; }
+  .proveedor-nombre{ font-weight:600; color:var(--ink); }
+  .proveedor-nit{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint);
+    margin-top:3px; letter-spacing:.02em;
+  }
+  .concepto{ color:var(--ink-soft); font-size:13px; }
   .del-btn{
     background:none; border:none; color:var(--ink-faint);
     font-family:'JetBrains Mono',monospace; font-size:11px;
@@ -86,10 +96,10 @@
   .del-btn:hover{ color:var(--stamp); }
 
   tfoot td{
-    padding:13px 14px; font-family:'JetBrains Mono',monospace; font-size:13px;
+    padding:16px 20px; font-family:'JetBrains Mono',monospace; font-size:13px;
     border-top:2px solid var(--ink); background:#F2EFE7;
   }
-  tfoot td.money{ text-align:right; font-weight:600; }
+  tfoot td.money{ text-align:right; font-weight:600; font-size:13.5px; }
 
   #empty{
     text-align:center; padding:60px 20px; color:var(--ink-faint);
@@ -109,10 +119,10 @@
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
   @media (max-width:760px){
-    thead th:nth-child(2), tbody td:nth-child(2){ display:none; } /* Tipo */
-    thead th:nth-child(5), tbody td:nth-child(5){ display:none; } /* Concepto */
-    thead th:nth-child(8), tbody td:nth-child(8){ display:none; } /* IVA */
-    thead th:nth-child(10), tbody td:nth-child(10){ display:none; } /* Retenciones */
+    thead th:nth-child(3), tbody td:nth-child(3){ display:none; } /* Concepto */
+    thead th:nth-child(5), tbody td:nth-child(5){ display:none; } /* Sin IVA */
+    thead th:nth-child(6), tbody td:nth-child(6){ display:none; } /* IVA */
+    thead th:nth-child(8), tbody td:nth-child(8){ display:none; } /* Retenciones */
   }
 </style>
 </head>
@@ -168,8 +178,6 @@
       <thead>
         <tr>
           <th>Mov.</th>
-          <th>Tipo</th>
-          <th>NIT / CC</th>
           <th>Proveedor</th>
           <th>Concepto</th>
           <th>Fecha</th>
@@ -200,6 +208,20 @@
 </div>
 
 <script>
+// Convierte texto a su versión "segura" para meter en HTML -- evita que
+// un valor guardado (leído por la IA o escrito por un usuario) pueda
+// insertar código en la página. Se usa en todo dato variable que se
+// mete con innerHTML en esta página.
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 (function animateTitle(){
   const text = "Kárdex IA";
   const container = document.getElementById('titleLetters');
@@ -329,20 +351,21 @@ function renderTable(){
       ? `Fuente: ${formatCOP(reteFuente)} · IVA: ${formatCOP(reteIva)} · ICA: ${formatCOP(reteIca)}`
       : 'Sin retenciones registradas';
     const adquirienteTitle = inv.adquiriente_nombre
-      ? `title="Adquiriente: ${inv.adquiriente_nombre}${inv.adquiriente_nit ? ' · NIT ' + inv.adquiriente_nit : ''}"`
+      ? `title="${escapeHtml('Adquiriente: ' + inv.adquiriente_nombre + (inv.adquiriente_nit ? ' · NIT ' + inv.adquiriente_nit : ''))}"`
       : '';
     tr.innerHTML = `
       <td ${adquirienteTitle}><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
-      <td>${inv.tipo_doc || '—'}</td>
-      <td>${inv.nit_cc || '—'}${inv.dv ? '-' + inv.dv : ''}</td>
-      <td>${inv.nombre_razon_social || '—'}</td>
-      <td class="concepto">${inv.concepto || '—'}</td>
-      <td class="date">${inv.fecha_factura || '—'}</td>
+      <td>
+        <div class="proveedor-nombre">${escapeHtml(inv.nombre_razon_social) || '—'}</div>
+        <div class="proveedor-nit">${inv.tipo_doc ? 'Tipo ' + escapeHtml(inv.tipo_doc) + ' · ' : ''}NIT ${escapeHtml(inv.nit_cc) || '—'}${inv.dv ? '-' + escapeHtml(inv.dv) : ''}</div>
+      </td>
+      <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
+      <td class="date">${escapeHtml(inv.fecha_factura) || '—'}</td>
       <td class="money">${formatCOP(sinIva)}</td>
       <td class="money">${formatCOP(iva)}</td>
       <td class="money">${formatCOP(conIva)}</td>
-      <td class="money" title="${retencionTitle}">${totalRetenciones > 0 ? formatCOP(totalRetenciones) : '—'}</td>
-      <td><button class="del-btn" data-id="${inv.id}">eliminar</button></td>
+      <td class="money" title="${escapeHtml(retencionTitle)}">${totalRetenciones > 0 ? formatCOP(totalRetenciones) : '—'}</td>
+      <td><button class="del-btn" data-id="${escapeHtml(inv.id)}">eliminar</button></td>
     `;
     tbody.appendChild(tr);
   });

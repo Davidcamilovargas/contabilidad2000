@@ -28,6 +28,11 @@
   .live-dot{ background:var(--k-ember); }
   .sub{ color:var(--k-white-soft); }
 
+  /* Esta página muestra una lista + una tabla lado a lado -- necesita
+     más espacio horizontal que el ancho angosto pensado para páginas
+     de un solo formulario. */
+  .wrap{ max-width:1240px; }
+
   nav.tabs a{
     background:transparent; border-color:var(--k-carbon-line); color:var(--k-white-soft);
   }
@@ -45,7 +50,7 @@
   }
 
   .kardex-layout{
-    display:grid; grid-template-columns:280px 1fr; gap:20px;
+    display:grid; grid-template-columns:320px 1fr; gap:24px;
     align-items:start;
   }
   @media (max-width:760px){ .kardex-layout{ grid-template-columns:1fr; } }
@@ -55,27 +60,27 @@
   .prov-list{
     background:#FBF9F4; border-radius:12px; overflow:hidden;
     box-shadow:0 30px 60px -20px rgba(0,0,0,0.5);
-    max-height:640px; overflow-y:auto;
+    max-height:680px; overflow-y:auto;
   }
   .prov-search{
     width:100%; border:none; border-bottom:1px solid #DEDACD;
-    padding:13px 14px; font-family:'JetBrains Mono',monospace; font-size:12.5px;
+    padding:16px 18px; font-family:'JetBrains Mono',monospace; font-size:13px;
     background:transparent; color:#1B2420;
   }
   .prov-search::placeholder{ color:#8A9289; }
   .prov-item{
-    display:block; width:100%; text-align:left; padding:13px 14px;
+    display:block; width:100%; text-align:left; padding:16px 18px;
     border-bottom:1px solid #DEDACD; background:none; cursor:pointer;
     transition:background .15s var(--ease);
   }
   .prov-item:last-child{ border-bottom:none; }
   .prov-item:hover{ background:#F2EFE7; }
   .prov-item.active{ background:var(--k-ember-soft); }
-  .prov-item .name{ font-size:13.5px; font-weight:700; color:#1B2420; }
-  .prov-item .nit{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#8A9289; margin-top:2px; }
+  .prov-item .name{ font-size:14.5px; font-weight:700; color:#1B2420; line-height:1.4; }
+  .prov-item .nit{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#8A9289; margin-top:4px; }
   .prov-item .meta{
-    display:flex; justify-content:space-between; margin-top:6px;
-    font-family:'JetBrains Mono',monospace; font-size:11px; color:#4E5A52;
+    display:flex; justify-content:space-between; margin-top:10px;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#4E5A52;
   }
   .prov-item .meta .total{ font-weight:700; color:var(--k-ember); }
   #provEmpty{ padding:30px 16px; text-align:center; font-size:12.5px; color:#8A9289; }
@@ -94,33 +99,33 @@
   .kardex-empty p{ font-size:13.5px; max-width:280px; line-height:1.5; }
 
   .kardex-head{
-    padding:22px; border-bottom:2px solid #1B2420;
+    padding:26px 28px; border-bottom:2px solid #1B2420;
     display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;
   }
-  .kardex-head h2{ font-size:19px; margin:0; font-weight:800; font-family:'Archivo',sans-serif; letter-spacing:-0.01em; }
-  .kardex-head .nit{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#4E5A52; margin-top:4px; }
+  .kardex-head h2{ font-size:21px; margin:0; font-weight:800; font-family:'Archivo',sans-serif; letter-spacing:-0.01em; }
+  .kardex-head .nit{ font-family:'JetBrains Mono',monospace; font-size:12px; color:#4E5A52; margin-top:6px; }
   .kardex-summary{ text-align:right; }
-  .kardex-summary .label{ font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#8A9289; }
-  .kardex-summary .value{ font-family:'JetBrains Mono',monospace; font-size:21px; font-weight:700; color:var(--k-ember); margin-top:2px; }
+  .kardex-summary .label{ font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:#8A9289; }
+  .kardex-summary .value{ font-family:'JetBrains Mono',monospace; font-size:23px; font-weight:700; color:var(--k-ember); margin-top:4px; }
 
   .kardex-table{ width:100%; border-collapse:collapse; }
   .kardex-table thead th{
     font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-    color:#8A9289; text-align:left; padding:10px 22px; background:#F2EFE7; border-bottom:1px solid #DEDACD;
+    color:#8A9289; text-align:left; padding:14px 28px; background:#F2EFE7; border-bottom:1px solid #DEDACD;
   }
-  .kardex-table tbody td{ padding:12px 22px; font-size:13.5px; border-bottom:1px solid #DEDACD; }
+  .kardex-table tbody td{ padding:18px 28px; font-size:14px; border-bottom:1px solid #DEDACD; line-height:1.5; }
   .kardex-table tbody tr:last-child td{ border-bottom:none; }
   .kardex-table tbody tr{ opacity:0; animation:fadeUp .4s var(--ease) forwards; }
-  .kardex-table .date{ font-family:'JetBrains Mono',monospace; color:#4E5A52; white-space:nowrap; }
-  .kardex-table .concepto{ color:#4E5A52; font-size:12.5px; }
+  .kardex-table .date{ font-family:'JetBrains Mono',monospace; color:#4E5A52; white-space:nowrap; font-size:13px; }
+  .kardex-table .concepto{ color:#4E5A52; font-size:13px; }
   .mov-tag{
     display:inline-block; font-family:'JetBrains Mono',monospace; font-size:9.5px;
-    text-transform:uppercase; letter-spacing:.04em; padding:2px 6px; border-radius:100px;
-    margin-right:5px; vertical-align:middle;
+    text-transform:uppercase; letter-spacing:.04em; padding:3px 7px; border-radius:100px;
+    margin-right:6px; vertical-align:middle;
   }
   .mov-tag.egreso{ background:var(--k-ember-soft); color:#B5482E; }
   .mov-tag.ingreso{ background:#DCEEE8; color:#154F41; }
-  .kardex-table .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
+  .kardex-table .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; font-size:13.5px; }
   .kardex-table .saldo{ font-weight:700; color:var(--k-ember); }
 
   #loading{
@@ -142,7 +147,7 @@
     <div class="brand">
       <h1 id="titleLetters"></h1>
     </div>
-    <<div class="header-right">
+    <div class="header-right">
   <span class="tag"><span class="live-dot"></span>en línea</span>
   <div class="user-badge" id="userBadge" style="display:none;">
     <img id="userAvatar" src="" alt="">

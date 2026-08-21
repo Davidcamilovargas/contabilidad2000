@@ -9,6 +9,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <style>
+  /* Mismo ancho que Facturas y Kárdex, para que la navegación entre
+     pestañas se sienta consistente en vez de saltar de tamaño. */
+  .wrap{ max-width:1240px; }
+
   /* La tarjeta de "agregar cliente" y la lista quedan claras, igual que
      el resto de tarjetas de contenido de la app. */
   #addForm, #clientList, #clientEmpty{
@@ -22,25 +26,25 @@
 
   #addForm{
     background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    padding:22px; margin-bottom:22px;
+    padding:28px; margin-bottom:24px;
     box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
   }
-  #addForm h2{ font-size:16px; font-weight:700; margin:0 0 16px; font-family:'Archivo',sans-serif; }
-  .form-row{ display:grid; grid-template-columns:2fr 1fr 90px auto; gap:10px; align-items:end; }
+  #addForm h2{ font-size:17px; font-weight:700; margin:0 0 20px; font-family:'Archivo',sans-serif; }
+  .form-row{ display:grid; grid-template-columns:2fr 1fr 110px auto; gap:16px; align-items:end; }
   @media (max-width:700px){ .form-row{ grid-template-columns:1fr 1fr; } }
-  .field{ display:flex; flex-direction:column; gap:6px; }
+  .field{ display:flex; flex-direction:column; gap:8px; }
   .field label{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
     letter-spacing:.05em; color:var(--ink-faint);
   }
   .field input{
-    border:1px solid var(--line); border-radius:6px; padding:10px 12px;
-    font-family:inherit; font-size:13.5px; background:#fff; color:var(--ink);
+    border:1px solid var(--line); border-radius:7px; padding:13px 14px;
+    font-family:inherit; font-size:14px; background:#fff; color:var(--ink);
   }
   .field input:focus{ outline:none; border-color:var(--ember); }
-  #addForm .btn{ height:40px; }
+  #addForm .btn{ height:46px; }
   #formError{
-    margin-top:12px; font-size:12.5px; color:#B0402D; display:none;
+    margin-top:14px; font-size:13px; color:#B0402D; display:none;
   }
   #formError.show{ display:block; }
 
@@ -51,22 +55,22 @@
   }
   .client-row{
     display:flex; align-items:center; justify-content:space-between;
-    padding:14px 20px; border-bottom:1px solid var(--line);
+    padding:20px 26px; border-bottom:1px solid var(--line);
     opacity:0; animation:fadeUp .4s var(--ease) forwards;
   }
   .client-row:last-child{ border-bottom:none; }
-  .client-row .info .name{ font-size:14px; font-weight:700; }
+  .client-row .info .name{ font-size:15px; font-weight:700; }
   .client-row .info .nit{
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); margin-top:2px;
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-faint); margin-top:4px;
   }
   .client-row .stats{
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft);
-    margin-right:16px; text-align:right;
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft);
+    margin-right:20px; text-align:right;
   }
   .del-btn{
     background:none; border:none; color:var(--ink-faint);
-    font-family:'JetBrains Mono',monospace; font-size:11px;
-    cursor:pointer; padding:4px 8px; transition:color .15s ease;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px;
+    cursor:pointer; padding:6px 10px; transition:color .15s ease;
   }
   .del-btn:hover{ color:#B0402D; }
 
@@ -111,7 +115,10 @@
   </nav>
 
   <div id="addForm" class="reveal">
-    <h2>Agregar cliente</h2>
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
+      <h2 style="margin:0;">Agregar cliente</h2>
+      <span id="planBadge" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); background:#F2EFE7; padding:6px 12px; border-radius:100px;"></span>
+    </div>
     <div class="form-row">
       <div class="field">
         <label>Nombre o razón social</label>
@@ -206,6 +213,8 @@ clientListEl.addEventListener('click', async (e) => {
     if (!res.ok) throw new Error('No se pudo eliminar.');
     clients = clients.filter(c => c.id !== id);
     renderClients();
+    planInfo.clientesActuales = Math.max(0, planInfo.clientesActuales - 1);
+    renderPlanBadge();
   } catch (err) {
     alert('No se pudo eliminar: ' + err.message);
   }
@@ -237,6 +246,9 @@ btnAdd.addEventListener('click', async () => {
     clients.sort((a, b) => a.nombre.localeCompare(b.nombre));
     renderClients();
 
+    planInfo.clientesActuales += 1;
+    renderPlanBadge();
+
     inputNombre.value = '';
     inputNit.value = '';
     inputDv.value = '';
@@ -265,6 +277,24 @@ async function loadAll(){
   }
 }
 
+let planInfo = { plan: 'solo', limiteClientes: null, clientesActuales: 0 };
+
+function renderPlanBadge(){
+  const badge = document.getElementById('planBadge');
+  const { plan, limiteClientes, clientesActuales } = planInfo;
+  const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
+  if (limiteClientes === null) {
+    badge.textContent = `Plan ${planLabel} · ${clientesActuales} clientes`;
+  } else {
+    badge.textContent = `Plan ${planLabel} · ${clientesActuales}/${limiteClientes} clientes`;
+  }
+  const alLimite = limiteClientes !== null && clientesActuales >= limiteClientes;
+  badge.style.color = alLimite ? '#B0402D' : 'var(--ink-soft)';
+  badge.style.background = alLimite ? '#FBE4DE' : '#F2EFE7';
+  btnAdd.disabled = alLimite;
+  btnAdd.title = alLimite ? `Llegaste al máximo de tu plan (${limiteClientes} clientes). Habla con nosotros para subir de plan.` : '';
+}
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
@@ -277,6 +307,8 @@ async function requireAuthAndInit(){
       await fetch('/auth/logout', { method: 'POST' });
       window.location.href = '/login.html';
     });
+    planInfo = { plan: user.plan || 'solo', limiteClientes: user.limiteClientes ?? null, clientesActuales: user.clientesActuales || 0 };
+    renderPlanBadge();
     loadAll();
   } catch (e) {
     window.location.href = '/login.html';
