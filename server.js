@@ -93,12 +93,17 @@ async function ensureSchema() {
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS authorized_emails (
-      id UUID PRIMARY KEY,
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       email TEXT UNIQUE NOT NULL,
       nota TEXT DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Si la tabla ya existía de antes de este arreglo, esto hace que el id
+  // se genere solo de ahora en adelante -- útil sobre todo para cuando
+  // agregas filas a mano desde el Table Editor de Supabase, donde nadie
+  // le pone un id manualmente.
+  await pool.query(`ALTER TABLE authorized_emails ALTER COLUMN id SET DEFAULT gen_random_uuid();`);
   // Migración automática: si la tabla ya existía de una versión anterior
   // (sin estas columnas), se agregan ahora sin borrar los datos existentes.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valor_iva TEXT DEFAULT '';`);
