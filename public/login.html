@@ -49,6 +49,8 @@
     margin-top:26px; font-family:'JetBrains Mono',monospace; font-size:10.5px;
     color:var(--white-faint); letter-spacing:.03em; line-height:1.6;
   }
+  .fine a{ color:var(--white-faint); text-decoration:underline; }
+  .fine a:hover{ color:var(--ember); }
 </style>
 </head>
 <body>
@@ -58,7 +60,10 @@
     <p>Inicia sesión con tu cuenta de Google para entrar a tu kárdex.</p>
     <div id="googleBtn"></div>
     <div id="errBox"></div>
-    <div class="fine">Cada cuenta ve solo sus propios clientes y facturas.</div>
+    <div class="fine">Cada cuenta ve solo sus propios clientes y facturas.<br>
+      Al iniciar sesión, aceptas los <a href="/terminos.html">Términos de Uso</a> y la
+      <a href="/privacidad.html">Política de Privacidad</a>.
+    </div>
   </div>
 
 <script>

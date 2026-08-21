@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Política de Privacidad</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --carbon:#0E1315; --carbon-raised:#171E20; --carbon-line:#2B3436;
+    --ember:#FF5A36; --white-soft:rgba(255,255,255,0.7); --white-faint:rgba(255,255,255,0.4);
+  }
+  *{box-sizing:border-box;}
+  body{
+    background:var(--carbon); color:#fff;
+    font-family:'Inter',-apple-system,sans-serif;
+    margin:0; padding:50px 20px 90px;
+    line-height:1.7;
+  }
+  .wrap{ max-width:680px; margin:0 auto; }
+  a{ color:var(--ember); }
+  .back{
+    display:inline-block; margin-bottom:28px;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; letter-spacing:.05em;
+    text-transform:uppercase; text-decoration:none; color:var(--white-faint);
+  }
+  .back:hover{ color:var(--ember); }
+  h1{
+    font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.02em;
+    font-size:2rem; margin:0 0 6px;
+  }
+  .updated{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--white-faint);
+    margin-bottom:36px; letter-spacing:.03em;
+  }
+  h2{
+    font-family:'Archivo',sans-serif; font-weight:800; font-size:1.15rem;
+    margin:38px 0 12px; letter-spacing:-0.01em;
+  }
+  h3{ font-size:1rem; margin:22px 0 8px; color:var(--white-soft); }
+  p, li{ color:var(--white-soft); font-size:14.5px; }
+  strong{ color:#fff; }
+  table{ width:100%; border-collapse:collapse; margin:16px 0; font-size:13.5px; }
+  th, td{ text-align:left; padding:9px 12px; border-bottom:1px solid var(--carbon-line); color:var(--white-soft); }
+  th{ color:#fff; font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .fill{ color:var(--ember); font-style:italic; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="/login.html" class="back">← Volver</a>
+  <h1>Política de Privacidad</h1>
+  <div class="updated">BORRADOR DE TRABAJO · PENDIENTE DE REVISIÓN LEGAL</div>
+
+  <h2>1. Quiénes somos</h2>
+  <p>Kárdex IA es una herramienta que ayuda a contadores en Colombia a leer y organizar facturas usando inteligencia artificial. Esta política explica qué información recopilamos, para qué la usamos, y qué derechos tienes sobre ella.</p>
+  <p><strong>Responsable del tratamiento de datos:</strong> <span class="fill">[Tu nombre completo o el de tu empresa]</span>, <span class="fill">[tu correo de contacto]</span>.</p>
+
+  <h2>2. Qué información recopilamos</h2>
+  <h3>2.1 Al iniciar sesión</h3>
+  <p>Cuando inicias sesión con tu cuenta de Google, recibimos: tu correo electrónico, tu nombre, y tu foto de perfil. No accedemos a tu contraseña de Google ni a ningún otro dato de tu cuenta.</p>
+  <h3>2.2 Los datos que tú ingresas</h3>
+  <p><strong>Clientes que registras:</strong> nombre, NIT, dígito de verificación.<br>
+  <strong>Facturas que escaneas:</strong> los datos que la IA extrae del documento — NIT del proveedor y del comprador, nombres, fechas, valores, IVA, retenciones, y el concepto de cada factura.</p>
+  <h3>2.3 Los documentos que subes</h3>
+  <p>Cuando subes una factura, la imagen o PDF se envía a <strong>Google Gemini</strong> para extraer los datos. Hoy usamos el nivel gratuito de esa API — bajo los términos de Google, los documentos procesados ahí <strong>pueden ser usados por Google para mejorar sus modelos de IA</strong>. No compartimos tus documentos con nadie más; esta condición viene de Google, no de nosotros.</p>
+
+  <h2>3. Para qué usamos tu información</h2>
+  <p>Para prestarte el servicio, para que cada contador vea únicamente sus propios datos, y para comunicarnos contigo sobre el servicio. <strong>No vendemos tu información a nadie, ni la usamos para publicidad.</strong></p>
+
+  <h2>4. Con quién compartimos tu información</h2>
+  <table>
+    <tr><th>Proveedor</th><th>Para qué</th><th>Qué reciben</th></tr>
+    <tr><td>Google (autenticación)</td><td>Verificar quién eres</td><td>Correo, nombre, foto</td></tr>
+    <tr><td>Google Gemini</td><td>Leer tus facturas con IA</td><td>La imagen/PDF de cada factura</td></tr>
+    <tr><td>Supabase</td><td>Guardar tus datos</td><td>Todos los datos que registras</td></tr>
+    <tr><td>Render</td><td>Alojar la aplicación</td><td>El tráfico de tu uso</td></tr>
+  </table>
+
+  <h2>5. Cuánto tiempo guardamos tu información</h2>
+  <p>Mientras tengas una cuenta activa. Si quieres que eliminemos tu cuenta y tus datos, escríbenos.</p>
+
+  <h2>6. Tus derechos (Ley 1581 de 2012 — Habeas Data)</h2>
+  <p>Tienes derecho a <strong>conocer</strong> qué datos tenemos, <strong>actualizar y corregir</strong> información, <strong>solicitar la eliminación</strong>, <strong>revocar tu autorización</strong>, y <strong>presentar quejas</strong> ante la Superintendencia de Industria y Comercio (SIC).</p>
+
+  <h2>7. Seguridad</h2>
+  <p>Protegemos tu información con medidas técnicas razonables: conexiones cifradas, sesiones seguras, y separación estricta de datos entre cada cuenta. Ningún sistema es 100% invulnerable.</p>
+
+  <h2>8. Menores de edad</h2>
+  <p>Kárdex IA está dirigido a contadores profesionales, no a menores de edad.</p>
+
+  <h2>9. Cambios a esta política</h2>
+  <p>Si hay cambios importantes, te lo notificaremos por correo o dentro de la aplicación.</p>
+
+  <h2>10. Contacto</h2>
+  <p>Para preguntas: <span class="fill">[tu correo de contacto]</span></p>
+</div>
+</body>
+</html>
