@@ -115,11 +115,19 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nit TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS adquiriente_nombre TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cliente_id UUID;`);
+  // Categoría oficial de retención (compras/servicios/honorarios/etc.) --
+  // la asigna la IA al leer la factura, reemplaza la detección por
+  // palabras clave que se usaba antes para elegir el umbral correcto.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS categoria_concepto TEXT DEFAULT '';`);
   // Login: cada factura/cliente queda asociada al contador que la guardó.
   // Nullable a propósito -- los datos guardados ANTES del login existían
   // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS contador_id UUID;`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contador_id UUID;`);
+  // Si el cliente es agente retenedor -- sin esto no tiene sentido
+  // calcular ninguna retención sugerida (si no es agente retenedor,
+  // nunca le corresponde retener, sin importar el monto).
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS agente_retenedor BOOLEAN DEFAULT false;`);
   // Plan del contador -- define cuántos clientes puede registrar.
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
@@ -257,7 +265,7 @@ const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
   'letras_fe', 'numeros_fe', 'fecha_factura',
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
-  'rete_fuente', 'rete_iva', 'rete_ica', 'concepto',
+  'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
 ];
 
@@ -282,7 +290,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
 // tope de clientes de su plan.
 app.post('/api/clients', requireAuth, async (req, res) => {
   try {
-    const { nombre, nit, dv } = req.body;
+    const { nombre, nit, dv, agente_retenedor } = req.body;
     if (!nombre || !nit) {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
     }
@@ -304,8 +312,8 @@ app.post('/api/clients', requireAuth, async (req, res) => {
 
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      'INSERT INTO clients (id, nombre, nit, dv, contador_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [id, nombre, nit, dv || '', req.userId]
+      'INSERT INTO clients (id, nombre, nit, dv, contador_id, agente_retenedor) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [id, nombre, nit, dv || '', req.userId, agente_retenedor === true]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -325,6 +333,25 @@ app.delete('/api/clients/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error eliminando cliente:', err);
     res.status(500).json({ error: 'No se pudo eliminar el cliente.' });
+  }
+});
+
+// Actualizar si un cliente es agente retenedor (sin esto, no tiene
+// sentido calcular ninguna retención sugerida para ese cliente).
+app.patch('/api/clients/:id', requireAuth, async (req, res) => {
+  try {
+    const { agente_retenedor } = req.body;
+    const { rows } = await pool.query(
+      'UPDATE clients SET agente_retenedor = $1 WHERE id = $2 AND contador_id = $3 RETURNING *',
+      [agente_retenedor === true, req.params.id, req.userId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error actualizando cliente:', err);
+    res.status(500).json({ error: 'No se pudo actualizar el cliente.' });
   }
 });
 
@@ -418,7 +445,8 @@ app.post('/api/extract', requireAuth, async (req, res) => {
   "concepto": "breve descripción de qué es el gasto o servicio facturado, en pocas palabras",
   "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
-  "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro"
+  "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
+  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos, ej. útiles, insumos, mercancía), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza, mantenimiento, transporte), 'honorarios' (requiere conocimiento especializado o título profesional, ej. asesoría contable/legal/médica/ingeniería), 'arrendamientos' (alquiler de inmueble o equipo), 'comisiones' (pago por intermediación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto."
 }
 
 REGLA DE FORMATO PARA LOS 3 CAMPOS DE VALOR (muy importante, es el error más común):

@@ -160,31 +160,41 @@
   }
   .result-head h2{font-size:17px;margin:0;font-weight:600;}
 
-  #clienteDetectado{
-    margin-top:14px; display:none; align-items:center; gap:8px;
-    font-family:'JetBrains Mono',monospace; font-size:12px;
+  /* Estado confirmado -- se muestra cuando el sistema identificó solo
+     el cliente y el tipo de movimiento. Ya NO es un botón que se pueda
+     pulsar por error -- es un dato confirmado, como cualquier otro
+     campo ya leído. */
+  #movStatus{ margin:14px 0; display:none; }
+  #movStatus.show{ display:block; animation:fadeUp .4s var(--ease) forwards; }
+  .mov-confirmed{
+    display:flex; align-items:center; gap:10px;
+    font-family:'JetBrains Mono',monospace; font-size:12.5px;
     border:1px solid var(--moss); background:#E3F3EE; color:#154F41;
-    padding:9px 13px; border-radius:8px;
+    padding:11px 14px; border-radius:8px;
   }
-  #clienteDetectado.show{ display:flex; animation:fadeUp .4s var(--ease) forwards; }
-  #clienteDetectado b{ font-weight:700; }
+  .mov-confirmed.egreso{ border-color:var(--ember); background:var(--ember-soft); color:#B5482E; }
+  .mov-confirmed b{ font-weight:700; }
+  .mov-confirmed .mov-dot{ width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
 
-  .tipo-mov{
-    display:flex; gap:8px; margin:16px 0 14px;
+  /* Selector de respaldo -- SOLO aparece cuando el sistema no pudo
+     identificar el cliente en la factura (ningún NIT coincidió). Aun
+     así no se pregunta "ingreso o egreso" directamente -- se pregunta
+     "cuál cliente es", y el sistema calcula el tipo solo a partir de eso. */
+  .mov-fallback{
+    border:1px solid #E8B84B; background:#FBF3D9; border-radius:8px;
+    padding:12px 14px;
   }
-  .tipo-btn{
-    flex:1; display:flex; align-items:center; justify-content:center; gap:8px;
-    font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:.3px;
-    padding:11px 12px; border:1.5px solid var(--line); border-radius:8px;
-    background:transparent; color:var(--ink-soft); cursor:pointer;
-    transition:border-color .2s var(--ease), background .2s var(--ease), color .2s var(--ease);
+  .mov-fallback .msg{
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:#7A5C0A; margin-bottom:8px;
   }
-  .tipo-btn .tipo-sub{ font-size:10.5px; color:var(--ink-faint); }
-  .tipo-btn .tipo-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-  .tipo-dot.egreso{ background:var(--ember); }
-  .tipo-dot.ingreso{ background:#1F6F5C; }
-  .tipo-btn.active{ border-color:currentColor; background:rgba(0,0,0,0.03); color:var(--ink); font-weight:600; }
-  .tipo-btn:hover{ border-color:var(--ink-faint); }
+  .mov-fallback select{
+    width:100%; font-family:inherit; font-size:13.5px; padding:9px 10px;
+    border:1px solid #E8B84B; border-radius:6px; background:#fff; color:var(--ink); cursor:pointer;
+  }
+  .mov-fallback .warn-nomatch{
+    margin-top:8px; font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#B5482E; display:none;
+  }
+  .mov-fallback .warn-nomatch.show{ display:block; }
   .stamp{
     font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1.5px;
     color:var(--ember);border:1.5px solid var(--ember);
@@ -209,12 +219,13 @@
     border-right:1px solid var(--line);display:flex;align-items:center;
   }
   .field-value{padding:6px 14px;display:flex;align-items:center;}
-  .field-value input{
+  .field-value input, .field-value select{
     width:100%;border:1px solid transparent;background:transparent;
     font-family:inherit;font-size:14.5px;color:var(--ink);padding:7px 8px;border-radius:2px;
     transition:background .2s var(--ease), border-color .2s var(--ease);
   }
-  .field-value input:focus{outline:none;border-color:var(--ember);background:var(--ember-soft);}
+  .field-value select{ cursor:pointer; }
+  .field-value input:focus, .field-value select:focus{outline:none;border-color:var(--ember);background:var(--ember-soft);}
 
   .digit-warn{
     display:none; grid-column:1 / -1; padding:0 16px 10px;
@@ -310,16 +321,7 @@
       <span class="stamp">revisar antes de usar</span>
     </div>
 
-    <div id="clienteDetectado"></div>
-
-    <div class="tipo-mov" id="tipoMov">
-      <button type="button" class="tipo-btn active" data-tipo="egreso">
-        <span class="tipo-dot egreso"></span> Egreso <span class="tipo-sub">(la compró mi cliente)</span>
-      </button>
-      <button type="button" class="tipo-btn" data-tipo="ingreso">
-        <span class="tipo-dot ingreso"></span> Ingreso <span class="tipo-sub">(la vendió mi cliente)</span>
-      </button>
-    </div>
+    <div id="movStatus"></div>
 
     <div class="ledger" id="ledger"></div>
     <div id="retencionHint"></div>
@@ -349,15 +351,23 @@ const FIELDS = [
   {key:"rete_fuente", label:"Rete Fuente", money:true},
   {key:"rete_iva", label:"Rete IVA", money:true},
   {key:"rete_ica", label:"Rete ICA", money:true},
-  {key:"concepto", label:"Concepto"}
+  {key:"concepto", label:"Concepto"},
+  {key:"categoria_concepto", label:"Categoría (retención)", select:[
+    ["compras","Compras (bienes)"],
+    ["servicios","Servicios"],
+    ["honorarios","Honorarios"],
+    ["arrendamientos","Arrendamientos"],
+    ["comisiones","Comisiones"],
+    ["otro","Otro"],
+  ]}
 ];
 
 // Umbrales orientativos de retención en la fuente para 2026 (UVT = $52.374).
 // IMPORTANTE: estas bases han cambiado varias veces este año por decisiones
 // judiciales — esto es solo una alerta informativa, NO una determinación
 // tributaria. El contador siempre debe verificar la norma vigente.
-const UMBRAL_RETENCION_SERVICIOS = 104748; // 2 UVT
-const UMBRAL_RETENCION_COMPRAS = 523740;   // 10 UVT
+const UMBRAL_RETENCION_SERVICIOS = 209496;  // 4 UVT ($52.374 x 4) -- corregido, antes usábamos 2 UVT
+const UMBRAL_RETENCION_COMPRAS = 1414098;   // 27 UVT ($52.374 x 27) -- corregido, antes usábamos 10 UVT
 
 (function animateTitle(){
   const text = "Kárdex IA";
@@ -429,8 +439,85 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 
 
+const movStatusEl = document.getElementById('movStatus');
+
+// Dibuja el estado "confirmado" -- ya no hay botones para pulsar mal,
+// es un dato fijo como cualquier otro campo ya leído.
+function renderMovConfirmed(tipo, clienteNombre, data){
+  const label = tipo === 'ingreso' ? 'Ingreso' : 'Egreso';
+  const detalle = tipo === 'ingreso' ? 'le vendió a' : 'le compró a';
+  const otraParte = tipo === 'ingreso'
+    ? (data?.adquiriente_nombre || 'su cliente')
+    : (data?.nombre_razon_social || 'su proveedor');
+  movStatusEl.innerHTML = `
+    <div class="mov-confirmed ${tipo}">
+      <span class="mov-dot"></span>
+      <span>✓ <b>${label}</b> — ${clienteNombre} ${detalle} ${otraParte}.</span>
+    </div>
+  `;
+  movStatusEl.classList.add('show');
+}
+
+// Cuando el sistema no identificó el cliente en la factura: se pregunta
+// CUÁL cliente es (no "ingreso o egreso" directamente) -- el tipo se
+// calcula solo, comparando el cliente elegido contra ambos NITs leídos.
+function renderMovFallback(data){
+  if (myClients.length === 0) {
+    movStatusEl.innerHTML = `
+      <div class="mov-fallback">
+        <div class="msg">No pudimos identificar a cuál de tus clientes pertenece esta factura, y todavía no tienes clientes registrados. Ve a la pestaña "Clientes" y agrega el primero.</div>
+      </div>
+    `;
+    movStatusEl.classList.add('show');
+    currentTipoMovimiento = 'egreso';
+    currentClienteId = '';
+    return;
+  }
+
+  movStatusEl.innerHTML = `
+    <div class="mov-fallback">
+      <div class="msg">No identificamos automáticamente a cuál de tus clientes pertenece esta factura. Elige cuál es:</div>
+      <select id="movClienteSelect">
+        <option value="">-- Selecciona el cliente --</option>
+        ${myClients.map(c => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+      </select>
+      <div class="warn-nomatch" id="movWarnNomatch">⚠ Ese cliente tampoco coincide con ningún NIT de esta factura. Revisa que el cliente esté bien registrado, o que la IA haya leído bien los NITs.</div>
+    </div>
+  `;
+  movStatusEl.classList.add('show');
+  currentTipoMovimiento = 'egreso';
+  currentClienteId = '';
+
+  document.getElementById('movClienteSelect').addEventListener('change', (e) => {
+    const clienteId = e.target.value;
+    const warnEl = document.getElementById('movWarnNomatch');
+    if (!clienteId) { warnEl.classList.remove('show'); return; }
+
+    const cliente = myClients.find(c => c.id === clienteId);
+    const esComprador = cliente.nit && data.adquiriente_nit && cliente.nit === data.adquiriente_nit;
+    const esVendedor = cliente.nit && data.nit_cc && cliente.nit === data.nit_cc;
+
+    if (esComprador) {
+      currentClienteId = cliente.id;
+      currentTipoMovimiento = 'egreso';
+      warnEl.classList.remove('show');
+      renderMovConfirmed('egreso', cliente.nombre, data);
+    } else if (esVendedor) {
+      currentClienteId = cliente.id;
+      currentTipoMovimiento = 'ingreso';
+      warnEl.classList.remove('show');
+      renderMovConfirmed('ingreso', cliente.nombre, data);
+    } else {
+      // El cliente elegido no coincide con ningún NIT de la factura --
+      // no adivinamos, se lo decimos claro para que revise.
+      currentClienteId = cliente.id;
+      currentTipoMovimiento = 'egreso';
+      warnEl.classList.add('show');
+    }
+  });
+}
+
 function detectClient(data){
-  const detectedEl = document.getElementById('clienteDetectado');
   currentClienteId = '';
 
   // Egreso: el cliente aparece como ADQUIRIENTE (compró la factura)
@@ -441,31 +528,15 @@ function detectClient(data){
   if (asComprador) {
     currentClienteId = asComprador.id;
     currentTipoMovimiento = 'egreso';
-    detectedEl.innerHTML = `✓ Detectado: <b>${asComprador.nombre}</b> — marcado como Egreso automáticamente.`;
-    detectedEl.classList.add('show');
+    renderMovConfirmed('egreso', asComprador.nombre, data);
   } else if (asVendedor) {
     currentClienteId = asVendedor.id;
     currentTipoMovimiento = 'ingreso';
-    detectedEl.innerHTML = `✓ Detectado: <b>${asVendedor.nombre}</b> — marcado como Ingreso automáticamente.`;
-    detectedEl.classList.add('show');
+    renderMovConfirmed('ingreso', asVendedor.nombre, data);
   } else {
-    detectedEl.classList.remove('show');
-    currentTipoMovimiento = 'egreso'; // valor por defecto si no hay coincidencia
+    renderMovFallback(data);
   }
-
-  // Refleja el tipo detectado (o el default) en los botones visuales
-  tipoMovEl.querySelectorAll('.tipo-btn').forEach(b =>
-    b.classList.toggle('active', b.dataset.tipo === currentTipoMovimiento)
-  );
 }
-
-const tipoMovEl = document.getElementById('tipoMov');
-tipoMovEl.querySelectorAll('.tipo-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    currentTipoMovimiento = btn.dataset.tipo;
-    tipoMovEl.querySelectorAll('.tipo-btn').forEach(b => b.classList.toggle('active', b === btn));
-  });
-});
 
 btnCamera.addEventListener('click', () => fileCamera.click());
 btnUpload.addEventListener('click', () => fileUpload.click());
@@ -495,7 +566,7 @@ function handleFile(file){
   savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
-  document.getElementById('clienteDetectado').classList.remove('show');
+  movStatusEl.classList.remove('show');
 
   currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
 
@@ -531,13 +602,12 @@ function resetAll(){
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
-  document.getElementById('clienteDetectado').classList.remove('show');
+  movStatusEl.classList.remove('show');
   fileCamera.value = '';
   fileUpload.value = '';
   currentIsPdf = false;
   currentTipoMovimiento = 'egreso';
   currentClienteId = '';
-  tipoMovEl.querySelectorAll('.tipo-btn').forEach(b => b.classList.toggle('active', b.dataset.tipo === 'egreso'));
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   window.scrollTo({top:0, behavior:'smooth'});
@@ -603,16 +673,41 @@ function renderResult(data){
     const valueWrap = document.createElement('div');
     valueWrap.className = 'field-value' + (f.money ? ' money' : '');
 
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = data[f.key] !== undefined && data[f.key] !== null ? data[f.key] : '';
-    input.dataset.key = f.key;
-    if(f.money && input.value !== ''){
-      const num = Number(input.value);
-      if(!isNaN(num)){
-        input.value = num.toLocaleString('es-CO');
+    let input;
+    if (f.select) {
+      input = document.createElement('select');
+      f.select.forEach(([val, label]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        input.appendChild(opt);
+      });
+      const current = (data[f.key] || 'otro').toLowerCase();
+      input.value = f.select.some(([val]) => val === current) ? current : 'otro';
+      if (f.key === 'categoria_concepto') {
+        input.addEventListener('change', () => {
+          const sinIvaInput = ledger.querySelector('input[data-key="valor_sin_iva"]');
+          const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
+          showRetencionHint({
+            ...data,
+            categoria_concepto: input.value,
+            valor_sin_iva: sinIvaInput ? parseMoneyValue(sinIvaInput.value) : data.valor_sin_iva,
+            valor_iva: ivaInput ? parseMoneyValue(ivaInput.value) : data.valor_iva,
+          });
+        });
+      }
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.value = data[f.key] !== undefined && data[f.key] !== null ? data[f.key] : '';
+      if(f.money && input.value !== ''){
+        const num = Number(input.value);
+        if(!isNaN(num)){
+          input.value = num.toLocaleString('es-CO');
+        }
       }
     }
+    input.dataset.key = f.key;
 
     valueWrap.appendChild(input);
     row.appendChild(label);
@@ -721,12 +816,16 @@ function showRetencionHint(data){
   }
 
   const esRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
-  const concepto = (data.concepto || '').toLowerCase();
+  const categoria = (data.categoria_concepto || 'otro').toLowerCase();
   const subtotal = Number(data.valor_sin_iva) || 0;
   const iva = Number(data.valor_iva) || 0;
-  const pareceServicio = /servicio|asesor|honorario|consultor|arriendo|alquiler|mantenimiento|reparaci|transporte/.test(concepto);
-  const umbral = pareceServicio ? UMBRAL_RETENCION_SERVICIOS : UMBRAL_RETENCION_COMPRAS;
-  const tipoTexto = pareceServicio ? 'servicios (2 UVT)' : 'compras (10 UVT)';
+  // "Servicios" y "Honorarios" usan el umbral de servicios; el resto
+  // (compras, arrendamientos, comisiones, otro) usa el de compras --
+  // ya no se adivina por palabras clave, viene de la categoría real
+  // que asignó la IA (o que el contador corrigió).
+  const esCategoriaServicios = categoria === 'servicios' || categoria === 'honorarios';
+  const umbral = esCategoriaServicios ? UMBRAL_RETENCION_SERVICIOS : UMBRAL_RETENCION_COMPRAS;
+  const tipoTexto = esCategoriaServicios ? 'servicios/honorarios (4 UVT)' : 'compras (27 UVT)';
 
   // Régimen Simple está exento de Rete Fuente y Rete ICA, pero NO de
   // Rete IVA -- son reglas independientes, no se apagan juntas.

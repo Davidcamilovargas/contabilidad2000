@@ -43,6 +43,13 @@
   }
   .field input:focus{ outline:none; border-color:var(--ember); }
   #addForm .btn{ height:46px; }
+  .agente-check{
+    display:flex; align-items:center; gap:8px; margin-top:16px;
+    font-size:13.5px; color:var(--ink); cursor:pointer; flex-wrap:wrap;
+  }
+  .agente-check input{ width:16px; height:16px; accent-color:var(--ember); cursor:pointer; }
+  .agente-check-hint{ font-size:11.5px; color:var(--ink-faint); }
+
   #formError{
     margin-top:14px; font-size:13px; color:#B0402D; display:none;
   }
@@ -63,6 +70,11 @@
   .client-row .info .nit{
     font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-faint); margin-top:4px;
   }
+  .row-agente-check{
+    display:flex; align-items:center; gap:6px; margin-top:8px;
+    font-size:11.5px; color:var(--ink-soft); cursor:pointer;
+  }
+  .row-agente-check input{ width:14px; height:14px; accent-color:var(--ember); cursor:pointer; }
   .client-row .stats{
     font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft);
     margin-right:20px; text-align:right;
@@ -134,6 +146,11 @@
       </div>
       <button class="btn" id="btnAdd">+ Agregar</button>
     </div>
+    <label class="agente-check">
+      <input type="checkbox" id="inputAgenteRetenedor">
+      <span>Este cliente es agente retenedor</span>
+      <span class="agente-check-hint">(si no lo es, nunca le corresponde practicar retenciones, sin importar el monto)</span>
+    </label>
     <div id="formError"></div>
   </div>
 
@@ -165,6 +182,7 @@ const clientEmptyEl = document.getElementById('clientEmpty');
 const inputNombre = document.getElementById('inputNombre');
 const inputNit = document.getElementById('inputNit');
 const inputDv = document.getElementById('inputDv');
+const inputAgenteRetenedor = document.getElementById('inputAgenteRetenedor');
 const btnAdd = document.getElementById('btnAdd');
 const formError = document.getElementById('formError');
 
@@ -191,6 +209,10 @@ function renderClients(){
       <div class="info">
         <div class="name">${c.nombre}</div>
         <div class="nit">NIT ${c.nit}${c.dv ? '-' + c.dv : ''}</div>
+        <label class="row-agente-check">
+          <input type="checkbox" class="agente-toggle" data-id="${c.id}" ${c.agente_retenedor ? 'checked' : ''}>
+          <span>Agente retenedor</span>
+        </label>
       </div>
       <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
       <button class="del-btn" data-id="${c.id}">eliminar</button>
@@ -202,6 +224,29 @@ function renderClients(){
   clientListEl.style.display = hasClients ? 'block' : 'none';
   clientEmptyEl.classList.toggle('show', !hasClients);
 }
+
+clientListEl.addEventListener('change', async (e) => {
+  if (!e.target.classList.contains('agente-toggle')) return;
+  const id = e.target.dataset.id;
+  const nuevoValor = e.target.checked;
+  e.target.disabled = true;
+  try {
+    const res = await fetch('/api/clients/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agente_retenedor: nuevoValor })
+    });
+    if (!res.ok) throw new Error('No se pudo actualizar.');
+    const updated = await res.json();
+    const idx = clients.findIndex(c => c.id === id);
+    if (idx !== -1) clients[idx] = updated;
+  } catch (err) {
+    alert('No se pudo actualizar: ' + err.message);
+    e.target.checked = !nuevoValor; // revertir el check si falló
+  } finally {
+    e.target.disabled = false;
+  }
+});
 
 clientListEl.addEventListener('click', async (e) => {
   if (!e.target.classList.contains('del-btn')) return;
@@ -237,7 +282,7 @@ btnAdd.addEventListener('click', async () => {
     const res = await fetch('/api/clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, nit, dv })
+      body: JSON.stringify({ nombre, nit, dv, agente_retenedor: inputAgenteRetenedor.checked })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'No se pudo agregar.');
@@ -252,6 +297,7 @@ btnAdd.addEventListener('click', async () => {
     inputNombre.value = '';
     inputNit.value = '';
     inputDv.value = '';
+    inputAgenteRetenedor.checked = false;
     inputNombre.focus();
   } catch (err) {
     formError.textContent = err.message;
