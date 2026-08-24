@@ -9,12 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <style>
-  /* Mismo ancho que Facturas y Kárdex, para que la navegación entre
-     pestañas se sienta consistente en vez de saltar de tamaño. */
   .wrap{ max-width:1240px; }
 
-  /* La tarjeta de "agregar cliente" y la lista quedan claras, igual que
-     el resto de tarjetas de contenido de la app. */
   #addForm, #clientList, #clientEmpty{
     --paper-raised:#FBF9F4;
     --ink:#1B2420;
@@ -29,30 +25,48 @@
     padding:28px; margin-bottom:24px;
     box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
   }
-  #addForm h2{ font-size:17px; font-weight:700; margin:0 0 20px; font-family:'Archivo',sans-serif; }
-  .form-row{ display:grid; grid-template-columns:2fr 1fr 110px auto; gap:16px; align-items:end; }
-  @media (max-width:700px){ .form-row{ grid-template-columns:1fr 1fr; } }
+  #addForm h2{ font-size:17px; font-weight:700; margin:0; font-family:'Archivo',sans-serif; }
+
+  .form-section{ margin-top:26px; padding-top:22px; border-top:1px solid var(--line); }
+  .form-section:first-of-type{ margin-top:22px; padding-top:0; border-top:none; }
+  .form-section-title{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
+    letter-spacing:.08em; color:var(--ember-deep); margin-bottom:14px; font-weight:600;
+  }
+
+  .form-row{ display:grid; grid-template-columns:2fr 1fr 90px; gap:16px; }
+  .form-row.cols-4{ grid-template-columns:1fr 1fr 1fr 1fr; }
+  .form-row.cols-2{ grid-template-columns:1fr 1fr; }
+  @media (max-width:760px){ .form-row, .form-row.cols-4{ grid-template-columns:1fr 1fr; } }
+
   .field{ display:flex; flex-direction:column; gap:8px; }
   .field label{
     font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
     letter-spacing:.05em; color:var(--ink-faint);
   }
-  .field input{
-    border:1px solid var(--line); border-radius:7px; padding:13px 14px;
-    font-family:inherit; font-size:14px; background:#fff; color:var(--ink);
+  .field input, .field select{
+    border:1px solid var(--line); border-radius:7px; padding:12px 13px;
+    font-family:inherit; font-size:13.5px; background:#fff; color:var(--ink);
   }
-  .field input:focus{ outline:none; border-color:var(--ember); }
-  #addForm .btn{ height:46px; }
-  .agente-check{
-    display:flex; align-items:center; gap:8px; margin-top:16px;
-    font-size:13.5px; color:var(--ink); cursor:pointer; flex-wrap:wrap;
-  }
-  .agente-check input{ width:16px; height:16px; accent-color:var(--ember); cursor:pointer; }
-  .agente-check-hint{ font-size:11.5px; color:var(--ink-faint); }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--ember); }
 
-  #formError{
-    margin-top:14px; font-size:13px; color:#B0402D; display:none;
+  .resp-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; }
+  @media (max-width:600px){ .resp-grid{ grid-template-columns:1fr; } }
+  .resp-check{
+    display:flex; align-items:flex-start; gap:8px; font-size:13px; color:var(--ink); cursor:pointer;
   }
+  .resp-check input{ width:16px; height:16px; accent-color:var(--ember); cursor:pointer; margin-top:1px; flex-shrink:0; }
+  .resp-check .resp-desc{ font-size:11px; color:var(--ink-faint); display:block; }
+
+  .rut-upload{
+    border:1.5px dashed var(--line); border-radius:8px; padding:16px;
+    display:flex; align-items:center; gap:12px; font-size:13px; color:var(--ink-soft);
+  }
+  .rut-upload input[type="file"]{ font-family:inherit; font-size:12.5px; }
+  .rut-filename{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--moss-deep); }
+
+  #addForm .btn{ height:46px; margin-top:22px; width:100%; }
+  #formError{ margin-top:14px; font-size:13px; color:#B0402D; display:none; }
   #formError.show{ display:block; }
 
   #clientList{
@@ -61,28 +75,29 @@
     box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
   }
   .client-row{
-    display:flex; align-items:center; justify-content:space-between;
     padding:20px 26px; border-bottom:1px solid var(--line);
     opacity:0; animation:fadeUp .4s var(--ease) forwards;
   }
   .client-row:last-child{ border-bottom:none; }
+  .client-row-top{ display:flex; align-items:center; justify-content:space-between; gap:16px; }
   .client-row .info .name{ font-size:15px; font-weight:700; }
   .client-row .info .nit{
     font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-faint); margin-top:4px;
   }
-  .row-agente-check{
-    display:flex; align-items:center; gap:6px; margin-top:8px;
-    font-size:11.5px; color:var(--ink-soft); cursor:pointer;
-  }
-  .row-agente-check input{ width:14px; height:14px; accent-color:var(--ember); cursor:pointer; }
   .client-row .stats{
     font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft);
-    margin-right:20px; text-align:right;
+    margin-right:20px; text-align:right; white-space:nowrap;
   }
+  .client-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .client-chip{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em;
+    padding:4px 9px; border-radius:100px; background:#F2EFE7; color:var(--ink-soft);
+  }
+  .client-chip.retenedor{ background:var(--ember-soft); color:#B5482E; }
   .del-btn{
     background:none; border:none; color:var(--ink-faint);
     font-family:'JetBrains Mono',monospace; font-size:11.5px;
-    cursor:pointer; padding:6px 10px; transition:color .15s ease;
+    cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
   }
   .del-btn:hover{ color:#B0402D; }
 
@@ -127,30 +142,180 @@
   </nav>
 
   <div id="addForm" class="reveal">
-    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
-      <h2 style="margin:0;">Agregar cliente</h2>
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <h2>Agregar cliente</h2>
       <span id="planBadge" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); background:#F2EFE7; padding:6px 12px; border-radius:100px;"></span>
     </div>
-    <div class="form-row">
-      <div class="field">
-        <label>Nombre o razón social</label>
-        <input type="text" id="inputNombre" placeholder="Industrias Codcol S.A.S.">
+
+    <div class="form-section">
+      <div class="form-section-title">Datos básicos</div>
+      <div class="form-row">
+        <div class="field">
+          <label>Nombre o razón social</label>
+          <input type="text" id="inputNombre" placeholder="Industrias Codcol S.A.S.">
+        </div>
+        <div class="field">
+          <label>NIT</label>
+          <input type="text" id="inputNit" placeholder="901943255">
+        </div>
+        <div class="field">
+          <label>DV</label>
+          <input type="text" id="inputDv" placeholder="6" maxlength="1">
+        </div>
       </div>
-      <div class="field">
-        <label>NIT</label>
-        <input type="text" id="inputNit" placeholder="901943255">
+      <div class="form-row cols-2" style="margin-top:16px;">
+        <div class="field">
+          <label>Tipo de persona</label>
+          <select id="inputTipoPersona">
+            <option value="">-- Selecciona --</option>
+            <option value="natural">Natural</option>
+            <option value="juridica">Jurídica</option>
+          </select>
+        </div>
       </div>
-      <div class="field">
-        <label>DV</label>
-        <input type="text" id="inputDv" placeholder="6" maxlength="1">
-      </div>
-      <button class="btn" id="btnAdd">+ Agregar</button>
     </div>
-    <label class="agente-check">
-      <input type="checkbox" id="inputAgenteRetenedor">
-      <span>Este cliente es agente retenedor</span>
-      <span class="agente-check-hint">(si no lo es, nunca le corresponde practicar retenciones, sin importar el monto)</span>
-    </label>
+
+    <div class="form-section">
+      <div class="form-section-title">Ubicación y contacto de la empresa</div>
+      <div class="form-row cols-4">
+        <div class="field">
+          <label>Dirección</label>
+          <input type="text" id="inputDireccion" placeholder="Cr 50 98A Sur">
+        </div>
+        <div class="field">
+          <label>Ciudad</label>
+          <input type="text" id="inputCiudad" placeholder="La Estrella">
+        </div>
+        <div class="field">
+          <label>Teléfono</label>
+          <input type="text" id="inputTelefono" placeholder="3142471758">
+        </div>
+        <div class="field">
+          <label>Correo</label>
+          <input type="text" id="inputCorreo" placeholder="contacto@empresa.com">
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Tributario</div>
+      <div class="form-row cols-2">
+        <div class="field">
+          <label>Actividad económica (CIIU)</label>
+          <select id="inputCiiu">
+            <option value="">-- Selecciona la actividad --</option>
+            <option value="4711">4711 · Comercio al por menor no especializado (víveres)</option>
+            <option value="4719">4719 · Comercio al por menor no especializado (otros)</option>
+            <option value="4771">4771 · Comercio al por menor de prendas de vestir</option>
+            <option value="4791">4791 · Comercio al por menor por internet</option>
+            <option value="4520">4520 · Mantenimiento y reparación de vehículos</option>
+            <option value="5611">5611 · Restaurantes (expendio a la mesa)</option>
+            <option value="5612">5612 · Autoservicio de comidas</option>
+            <option value="4921">4921 · Transporte urbano de pasajeros</option>
+            <option value="4923">4923 · Transporte de carga por carretera</option>
+            <option value="6201">6201 · Desarrollo de software</option>
+            <option value="6910">6910 · Actividades jurídicas</option>
+            <option value="6920">6920 · Contabilidad y asesoría tributaria</option>
+            <option value="6810">6810 · Actividades inmobiliarias (arriendo)</option>
+            <option value="7020">7020 · Consultoría de gestión</option>
+            <option value="7410">7410 · Diseño especializado</option>
+            <option value="8621">8621 · Práctica médica sin internación</option>
+            <option value="9602">9602 · Peluquería y tratamientos de belleza</option>
+            <option value="otro">Otro (escribir el código)</option>
+          </select>
+        </div>
+        <div class="field" id="ciiuOtroWrap" style="display:none;">
+          <label>Código CIIU (manual)</label>
+          <input type="text" id="inputCiiuOtro" placeholder="Ej: 8130" maxlength="4">
+        </div>
+      </div>
+
+      <div style="margin-top:18px;">
+        <label style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); display:block; margin-bottom:10px;">
+          Responsabilidades tributarias (según el RUT, casilla 53)
+        </label>
+        <div class="resp-grid">
+          <label class="resp-check">
+            <input type="checkbox" value="05" class="resp-code">
+            <span>05 — Renta, régimen ordinario<span class="resp-desc">Impuesto de renta y complementarios</span></span>
+          </label>
+          <label class="resp-check">
+            <input type="checkbox" value="07" class="resp-code">
+            <span>07 — Agente retenedor<span class="resp-desc">Retención en la fuente a título de renta</span></span>
+          </label>
+          <label class="resp-check">
+            <input type="checkbox" value="48" class="resp-code">
+            <span>48 — Responsable de IVA<span class="resp-desc">Impuesto sobre las ventas</span></span>
+          </label>
+          <label class="resp-check">
+            <input type="checkbox" value="14" class="resp-code">
+            <span>14 — Informante de exógena<span class="resp-desc">Reporte anual de información</span></span>
+          </label>
+          <label class="resp-check">
+            <input type="checkbox" value="47" class="resp-code">
+            <span>47 — Régimen Simple de Tributación<span class="resp-desc">RST</span></span>
+          </label>
+          <label class="resp-check">
+            <input type="checkbox" value="55" class="resp-code">
+            <span>55 — Beneficiarios finales<span class="resp-desc">Obligado a reportar</span></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">RUT (documento)</div>
+      <div class="rut-upload">
+        <input type="file" id="inputRutArchivo" accept="application/pdf,image/*">
+        <span class="rut-filename" id="rutFilename"></span>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Contacto principal</div>
+      <div class="form-row cols-4">
+        <div class="field">
+          <label>Nombre</label>
+          <input type="text" id="inputContactoNombre" placeholder="María Pérez">
+        </div>
+        <div class="field">
+          <label>Cargo</label>
+          <input type="text" id="inputContactoCargo" placeholder="Gerente">
+        </div>
+        <div class="field">
+          <label>Teléfono</label>
+          <input type="text" id="inputContactoTelefono" placeholder="3001234567">
+        </div>
+        <div class="field">
+          <label>Correo</label>
+          <input type="text" id="inputContactoCorreo" placeholder="maria@empresa.com">
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Información bancaria (opcional)</div>
+      <div class="form-row cols-2" style="grid-template-columns:1.5fr 1fr 1.5fr;">
+        <div class="field">
+          <label>Banco</label>
+          <input type="text" id="inputBanco" placeholder="Bancolombia">
+        </div>
+        <div class="field">
+          <label>Tipo de cuenta</label>
+          <select id="inputTipoCuenta">
+            <option value="">--</option>
+            <option value="ahorros">Ahorros</option>
+            <option value="corriente">Corriente</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Número de cuenta</label>
+          <input type="text" id="inputNumeroCuenta" placeholder="00000000000">
+        </div>
+      </div>
+    </div>
+
+    <button class="btn" id="btnAdd">+ Agregar cliente</button>
     <div id="formError"></div>
   </div>
 
@@ -182,21 +347,60 @@ const clientEmptyEl = document.getElementById('clientEmpty');
 const inputNombre = document.getElementById('inputNombre');
 const inputNit = document.getElementById('inputNit');
 const inputDv = document.getElementById('inputDv');
-const inputAgenteRetenedor = document.getElementById('inputAgenteRetenedor');
+const inputTipoPersona = document.getElementById('inputTipoPersona');
+const inputDireccion = document.getElementById('inputDireccion');
+const inputCiudad = document.getElementById('inputCiudad');
+const inputTelefono = document.getElementById('inputTelefono');
+const inputCorreo = document.getElementById('inputCorreo');
+const inputCiiu = document.getElementById('inputCiiu');
+const inputCiiuOtro = document.getElementById('inputCiiuOtro');
+const ciiuOtroWrap = document.getElementById('ciiuOtroWrap');
+const inputRutArchivo = document.getElementById('inputRutArchivo');
+const rutFilename = document.getElementById('rutFilename');
+const inputContactoNombre = document.getElementById('inputContactoNombre');
+const inputContactoCargo = document.getElementById('inputContactoCargo');
+const inputContactoTelefono = document.getElementById('inputContactoTelefono');
+const inputContactoCorreo = document.getElementById('inputContactoCorreo');
+const inputBanco = document.getElementById('inputBanco');
+const inputTipoCuenta = document.getElementById('inputTipoCuenta');
+const inputNumeroCuenta = document.getElementById('inputNumeroCuenta');
 const btnAdd = document.getElementById('btnAdd');
 const formError = document.getElementById('formError');
 
 let clients = [];
 let allInvoices = [];
+let currentRutBase64 = '';
+let currentRutNombre = '';
+
+inputCiiu.addEventListener('change', () => {
+  ciiuOtroWrap.style.display = inputCiiu.value === 'otro' ? 'flex' : 'none';
+});
+
+inputRutArchivo.addEventListener('change', () => {
+  const file = inputRutArchivo.files[0];
+  if (!file) { currentRutBase64 = ''; currentRutNombre = ''; rutFilename.textContent = ''; return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    currentRutBase64 = reader.result.split(',')[1];
+    currentRutNombre = file.name;
+    rutFilename.textContent = '✓ ' + file.name;
+  };
+  reader.readAsDataURL(file);
+});
 
 function statsForClient(client){
-  // Cuenta cuántas facturas están asociadas a este cliente por cliente_id,
-  // y si no hay ninguna así, por coincidencia de NIT (compatibilidad con
-  // facturas guardadas antes de que existiera esta relación).
   const byId = allInvoices.filter(inv => inv.cliente_id === client.id);
   if (byId.length > 0) return byId.length;
   return allInvoices.filter(inv => inv.nit_cc === client.nit || inv.adquiriente_nit === client.nit).length;
 }
+
+const CIIU_LABELS = {
+  '4711':'Comercio no especializado (víveres)', '4719':'Comercio no especializado', '4771':'Prendas de vestir',
+  '4791':'Comercio por internet', '4520':'Mantenimiento vehículos', '5611':'Restaurante', '5612':'Autoservicio comidas',
+  '4921':'Transporte pasajeros', '4923':'Transporte de carga', '6201':'Desarrollo de software', '6910':'Actividades jurídicas',
+  '6920':'Contabilidad y asesoría', '6810':'Actividades inmobiliarias', '7020':'Consultoría de gestión',
+  '7410':'Diseño especializado', '8621':'Práctica médica', '9602':'Peluquería y belleza',
+};
 
 function renderClients(){
   clientListEl.innerHTML = '';
@@ -205,17 +409,24 @@ function renderClients(){
     row.className = 'client-row';
     row.style.animationDelay = (i * 0.05) + 's';
     const count = statsForClient(c);
+
+    const chips = [];
+    if (c.tipo_persona) chips.push(`<span class="client-chip">${c.tipo_persona === 'natural' ? 'Persona natural' : 'Persona jurídica'}</span>`);
+    if (c.ciudad) chips.push(`<span class="client-chip">${c.ciudad}</span>`);
+    if (c.ciiu) chips.push(`<span class="client-chip">CIIU ${c.ciiu}${CIIU_LABELS[c.ciiu] ? ' · ' + CIIU_LABELS[c.ciiu] : ''}</span>`);
+    if (c.agente_retenedor) chips.push(`<span class="client-chip retenedor">Agente retenedor</span>`);
+    if (c.rut_archivo) chips.push(`<span class="client-chip">RUT cargado</span>`);
+
     row.innerHTML = `
-      <div class="info">
-        <div class="name">${c.nombre}</div>
-        <div class="nit">NIT ${c.nit}${c.dv ? '-' + c.dv : ''}</div>
-        <label class="row-agente-check">
-          <input type="checkbox" class="agente-toggle" data-id="${c.id}" ${c.agente_retenedor ? 'checked' : ''}>
-          <span>Agente retenedor</span>
-        </label>
+      <div class="client-row-top">
+        <div class="info">
+          <div class="name">${c.nombre}</div>
+          <div class="nit">NIT ${c.nit}${c.dv ? '-' + c.dv : ''}</div>
+        </div>
+        <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
+        <button class="del-btn" data-id="${c.id}">eliminar</button>
       </div>
-      <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
-      <button class="del-btn" data-id="${c.id}">eliminar</button>
+      ${chips.length ? `<div class="client-chips">${chips.join('')}</div>` : ''}
     `;
     clientListEl.appendChild(row);
   });
@@ -224,29 +435,6 @@ function renderClients(){
   clientListEl.style.display = hasClients ? 'block' : 'none';
   clientEmptyEl.classList.toggle('show', !hasClients);
 }
-
-clientListEl.addEventListener('change', async (e) => {
-  if (!e.target.classList.contains('agente-toggle')) return;
-  const id = e.target.dataset.id;
-  const nuevoValor = e.target.checked;
-  e.target.disabled = true;
-  try {
-    const res = await fetch('/api/clients/' + id, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agente_retenedor: nuevoValor })
-    });
-    if (!res.ok) throw new Error('No se pudo actualizar.');
-    const updated = await res.json();
-    const idx = clients.findIndex(c => c.id === id);
-    if (idx !== -1) clients[idx] = updated;
-  } catch (err) {
-    alert('No se pudo actualizar: ' + err.message);
-    e.target.checked = !nuevoValor; // revertir el check si falló
-  } finally {
-    e.target.disabled = false;
-  }
-});
 
 clientListEl.addEventListener('click', async (e) => {
   if (!e.target.classList.contains('del-btn')) return;
@@ -265,6 +453,32 @@ clientListEl.addEventListener('click', async (e) => {
   }
 });
 
+function resetForm(){
+  inputNombre.value = '';
+  inputNit.value = '';
+  inputDv.value = '';
+  inputTipoPersona.value = '';
+  inputDireccion.value = '';
+  inputCiudad.value = '';
+  inputTelefono.value = '';
+  inputCorreo.value = '';
+  inputCiiu.value = '';
+  inputCiiuOtro.value = '';
+  ciiuOtroWrap.style.display = 'none';
+  document.querySelectorAll('.resp-code').forEach(cb => cb.checked = false);
+  inputRutArchivo.value = '';
+  rutFilename.textContent = '';
+  currentRutBase64 = '';
+  currentRutNombre = '';
+  inputContactoNombre.value = '';
+  inputContactoCargo.value = '';
+  inputContactoTelefono.value = '';
+  inputContactoCorreo.value = '';
+  inputBanco.value = '';
+  inputTipoCuenta.value = '';
+  inputNumeroCuenta.value = '';
+}
+
 btnAdd.addEventListener('click', async () => {
   formError.classList.remove('show');
   const nombre = inputNombre.value.trim();
@@ -277,12 +491,33 @@ btnAdd.addEventListener('click', async () => {
     return;
   }
 
+  const ciiuFinal = inputCiiu.value === 'otro' ? inputCiiuOtro.value.trim() : inputCiiu.value;
+  const responsabilidades = [...document.querySelectorAll('.resp-code:checked')].map(cb => cb.value).join(',');
+
   btnAdd.disabled = true;
   try {
     const res = await fetch('/api/clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, nit, dv, agente_retenedor: inputAgenteRetenedor.checked })
+      body: JSON.stringify({
+        nombre, nit, dv,
+        tipo_persona: inputTipoPersona.value,
+        direccion: inputDireccion.value.trim(),
+        ciudad: inputCiudad.value.trim(),
+        telefono: inputTelefono.value.trim(),
+        correo: inputCorreo.value.trim(),
+        ciiu: ciiuFinal,
+        responsabilidades,
+        rut_archivo: currentRutBase64,
+        rut_archivo_nombre: currentRutNombre,
+        contacto_nombre: inputContactoNombre.value.trim(),
+        contacto_cargo: inputContactoCargo.value.trim(),
+        contacto_telefono: inputContactoTelefono.value.trim(),
+        contacto_correo: inputContactoCorreo.value.trim(),
+        banco: inputBanco.value.trim(),
+        tipo_cuenta: inputTipoCuenta.value,
+        numero_cuenta: inputNumeroCuenta.value.trim(),
+      })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'No se pudo agregar.');
@@ -294,10 +529,7 @@ btnAdd.addEventListener('click', async () => {
     planInfo.clientesActuales += 1;
     renderPlanBadge();
 
-    inputNombre.value = '';
-    inputNit.value = '';
-    inputDv.value = '';
-    inputAgenteRetenedor.checked = false;
+    resetForm();
     inputNombre.focus();
   } catch (err) {
     formError.textContent = err.message;

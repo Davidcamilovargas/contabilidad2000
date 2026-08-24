@@ -335,6 +335,20 @@
 </div>
 
 <script>
+// Convierte texto a su versión "segura" para meter en HTML -- evita que
+// un valor guardado (leído por la IA o escrito por un usuario) pueda
+// insertar código en la página. Se usa en todo dato variable que se
+// mete con innerHTML en esta página.
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const FIELDS = [
   {key:"tipo_doc", label:"Tipo Doc (13/31)"},
   {key:"nit_cc", label:"Nit Emisor (Vendedor)"},
@@ -406,6 +420,7 @@ let currentMediaType = null;
 let currentIsPdf = false;
 let currentTipoMovimiento = 'egreso';
 let currentClienteId = '';
+let currentRegimenSimple = false;
 let myClients = [];
 
 // Se carga una sola vez al abrir la página -- se usa para detectar
@@ -452,7 +467,7 @@ function renderMovConfirmed(tipo, clienteNombre, data){
   movStatusEl.innerHTML = `
     <div class="mov-confirmed ${tipo}">
       <span class="mov-dot"></span>
-      <span>✓ <b>${label}</b> — ${clienteNombre} ${detalle} ${otraParte}.</span>
+      <span>✓ <b>${label}</b> — ${escapeHtml(clienteNombre)} ${detalle} ${escapeHtml(otraParte)}.</span>
     </div>
   `;
   movStatusEl.classList.add('show');
@@ -479,7 +494,7 @@ function renderMovFallback(data){
       <div class="msg">No identificamos automáticamente a cuál de tus clientes pertenece esta factura. Elige cuál es:</div>
       <select id="movClienteSelect">
         <option value="">-- Selecciona el cliente --</option>
-        ${myClients.map(c => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        ${myClients.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nombre)}</option>`).join('')}
       </select>
       <div class="warn-nomatch" id="movWarnNomatch">⚠ Ese cliente tampoco coincide con ningún NIT de esta factura. Revisa que el cliente esté bien registrado, o que la IA haya leído bien los NITs.</div>
     </div>
@@ -608,6 +623,7 @@ function resetAll(){
   currentIsPdf = false;
   currentTipoMovimiento = 'egreso';
   currentClienteId = '';
+  currentRegimenSimple = false;
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   window.scrollTo({top:0, behavior:'smooth'});
@@ -660,6 +676,7 @@ async function extractInvoice(){
 
 function renderResult(data){
   detectClient(data);
+  currentRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
   ledger.innerHTML = '';
   FIELDS.forEach((f, i) => {
     const row = document.createElement('div');
@@ -875,6 +892,7 @@ function currentFieldValues(){
   });
   out.tipo_movimiento = currentTipoMovimiento;
   out.cliente_id = currentClienteId || '';
+  out.regimen_simple = currentRegimenSimple;
   return out;
 }
 

@@ -252,6 +252,41 @@ const btnExport = document.getElementById('btnExport');
 
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
+// Tabla de retención en la fuente vigente (2026), solo para las
+// categorías donde confirmamos la tarifa con fuentes actuales. Para
+// "comisiones" y "otro" no calculamos -- no encontramos una tarifa
+// única confiable para presentarla como sugerencia.
+// La tarifa exacta depende de si el proveedor es declarante de renta
+// o no (dato que casi nunca se sabe desde la factura) -- por eso se
+// muestra como RANGO (tarifa declarante -- tarifa no declarante),
+// excepto arrendamientos, donde la tarifa es la misma en ambos casos.
+const TARIFAS_RETENCION = {
+  compras:        { umbral: 1414098, tarifaBaja: 0.025, tarifaAlta: 0.035 },
+  servicios:      { umbral: 209496,  tarifaBaja: 0.04,  tarifaAlta: 0.06  },
+  honorarios:     { umbral: 0,       tarifaBaja: 0.10,  tarifaAlta: 0.11  },
+  arrendamientos: { umbral: 523740,  tarifaBaja: 0.035, tarifaAlta: 0.035 },
+};
+
+// Calcula la retención SUGERIDA (no oficial, no leída del documento)
+// para una factura, cruzando la categoría del concepto, si el cliente
+// es agente retenedor, y si el proveedor es Régimen Simple.
+// Devuelve null cuando no se puede/debe calcular nada.
+function calcularRetencionSugerida(inv, cliente){
+  if (!cliente || !cliente.agente_retenedor) return null; // nunca le corresponde retener
+  if (inv.regimen_simple) return null; // Régimen Simple -- Rete Fuente no aplica
+
+  const categoria = (inv.categoria_concepto || '').toLowerCase();
+  const config = TARIFAS_RETENCION[categoria];
+  if (!config) return null; // comisiones/otro -- tarifa no confirmada, no adivinamos
+
+  const subtotal = Number(inv.valor_sin_iva) || 0;
+  if (subtotal < config.umbral) return null; // bajo el umbral, no aplica
+
+  const bajo = Math.round(subtotal * config.tarifaBaja);
+  const alto = Math.round(subtotal * config.tarifaAlta);
+  return { bajo, alto, mismaTarifa: config.tarifaBaja === config.tarifaAlta };
+}
+
 let allInvoices = [];
 let myClients = [];
 
@@ -550,6 +585,64 @@ btnExport.addEventListener('click', async () => {
         cell.alignment = { horizontal: 'right' };
       }
     });
+
+    // ---------- Recuadro: Retenciones sugeridas (estimado) ----------
+    // Se calcula solo -- no depende de lo que la factura traiga escrito.
+    // Solo cuenta facturas donde: el cliente es agente retenedor, el
+    // proveedor no es Régimen Simple, y la categoría del concepto tiene
+    // una tarifa confirmada (compras/servicios/honorarios/arrendamientos).
+    let sugeridoBajoTotal = 0, sugeridoAltoTotal = 0, facturasConSugerencia = 0;
+    filtered.forEach((inv) => {
+      const cliente = myClients.find(c => c.id === inv.cliente_id);
+      const sugerido = calcularRetencionSugerida(inv, cliente);
+      if (sugerido) {
+        sugeridoBajoTotal += sugerido.bajo;
+        sugeridoAltoTotal += sugerido.alto;
+        facturasConSugerencia++;
+      }
+    });
+
+    sheet.addRow([]); // fila en blanco de separación
+    const boxStartRow = sheet.rowCount + 1;
+
+    const boxTitleCell = sheet.getCell(boxStartRow, 1);
+    sheet.mergeCells(boxStartRow, 1, boxStartRow, 4);
+    boxTitleCell.value = 'RETENCIÓN EN LA FUENTE SUGERIDA (ESTIMADO)';
+    boxTitleCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: COLOR_WHITE } };
+    boxTitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_CARBON } };
+    boxTitleCell.alignment = { vertical: 'middle', indent: 1 };
+    sheet.getRow(boxStartRow).height = 22;
+
+    const addBoxRow = (label, value) => {
+      const r = sheet.rowCount + 1;
+      sheet.getCell(r, 1).value = label;
+      sheet.getCell(r, 1).font = { name: 'Calibri', size: 10, color: { argb: COLOR_INK } };
+      sheet.mergeCells(r, 1, r, 3);
+      const valCell = sheet.getCell(r, 4);
+      valCell.value = value;
+      valCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLOR_INK } };
+      valCell.numFmt = '#,##0';
+      valCell.alignment = { horizontal: 'right' };
+      [1,2,3,4].forEach(c => sheet.getCell(r, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2EFE7' } });
+    };
+
+    if (facturasConSugerencia === 0) {
+      const r = sheet.rowCount + 1;
+      sheet.getCell(r, 1).value = 'No hay facturas este mes con datos suficientes para sugerir retención (cliente agente retenedor + categoría con tarifa conocida).';
+      sheet.mergeCells(r, 1, r, 4);
+      sheet.getCell(r, 1).font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: 'FF4E5A52' } };
+    } else {
+      addBoxRow('Rango bajo (tarifa declarante)', sugeridoBajoTotal);
+      addBoxRow('Rango alto (tarifa no declarante)', sugeridoAltoTotal);
+      const noteRow = sheet.rowCount + 1;
+      sheet.getCell(noteRow, 1).value =
+        `Calculado sobre ${facturasConSugerencia} de ${filtered.length} factura(s) -- solo compras, servicios, honorarios y arrendamientos, con cliente marcado como agente retenedor. ` +
+        `No incluye comisiones ni categoría "otro" (tarifa no confirmada). Es una estimación, no un valor oficial -- verifica antes de declarar.`;
+      sheet.mergeCells(noteRow, 1, noteRow, 4);
+      sheet.getCell(noteRow, 1).font = { name: 'Calibri', size: 8.5, italic: true, color: { argb: 'FF8A9289' } };
+      sheet.getCell(noteRow, 1).alignment = { wrapText: true };
+      sheet.getRow(noteRow).height = 28;
+    }
 
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

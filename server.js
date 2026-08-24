@@ -119,6 +119,10 @@ async function ensureSchema() {
   // la asigna la IA al leer la factura, reemplaza la detección por
   // palabras clave que se usaba antes para elegir el umbral correcto.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS categoria_concepto TEXT DEFAULT '';`);
+  // Si el emisor es Régimen Simple -- la IA lo detecta al leer, pero
+  // hasta ahora nunca se guardaba. Sin esto, el cálculo de retención
+  // sugerida no puede saber esto para facturas ya guardadas.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS regimen_simple BOOLEAN DEFAULT false;`);
   // Login: cada factura/cliente queda asociada al contador que la guardó.
   // Nullable a propósito -- los datos guardados ANTES del login existían
   // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
@@ -128,6 +132,30 @@ async function ensureSchema() {
   // calcular ninguna retención sugerida (si no es agente retenedor,
   // nunca le corresponde retener, sin importar el monto).
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS agente_retenedor BOOLEAN DEFAULT false;`);
+  // Expansión del modelo de clientes: datos básicos, tributarios, RUT,
+  // contacto principal, e información bancaria (para conectar pagos
+  // más adelante y hacer relación con la cartera del cliente).
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS tipo_persona TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS direccion TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS ciudad TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS telefono TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS correo TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS ciiu TEXT DEFAULT '';`);
+  // Códigos de responsabilidad tributaria del RUT (casilla 53), separados
+  // por coma, ej: "05,07,47". "agente_retenedor" se calcula solo a
+  // partir de si el código 07 está en esta lista -- ya no se marca a mano.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS responsabilidades TEXT DEFAULT '';`);
+  // El RUT se guarda como archivo (base64) -- por ahora solo se
+  // almacena, sin lectura automática con IA (fase futura).
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS rut_archivo TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS rut_archivo_nombre TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contacto_nombre TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contacto_cargo TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contacto_telefono TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contacto_correo TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS banco TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS tipo_cuenta TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS numero_cuenta TEXT DEFAULT '';`);
   // Plan del contador -- define cuántos clientes puede registrar.
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
@@ -267,6 +295,7 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
+  'regimen_simple',
 ];
 
 function rowToInvoice(row) {
@@ -290,7 +319,12 @@ app.get('/api/clients', requireAuth, async (req, res) => {
 // tope de clientes de su plan.
 app.post('/api/clients', requireAuth, async (req, res) => {
   try {
-    const { nombre, nit, dv, agente_retenedor } = req.body;
+    const {
+      nombre, nit, dv, tipo_persona, direccion, ciudad, telefono, correo,
+      ciiu, responsabilidades, rut_archivo, rut_archivo_nombre,
+      contacto_nombre, contacto_cargo, contacto_telefono, contacto_correo,
+      banco, tipo_cuenta, numero_cuenta,
+    } = req.body;
     if (!nombre || !nit) {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
     }
@@ -310,10 +344,29 @@ app.post('/api/clients', requireAuth, async (req, res) => {
       }
     }
 
+    // "Agente retenedor" ya no se marca a mano -- se calcula solo a
+    // partir de si el código 07 (retención en la fuente) está entre
+    // las responsabilidades tributarias marcadas.
+    const responsabilidadesStr = responsabilidades || '';
+    const agenteRetenedorCalculado = responsabilidadesStr.split(',').includes('07');
+
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      'INSERT INTO clients (id, nombre, nit, dv, contador_id, agente_retenedor) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [id, nombre, nit, dv || '', req.userId, agente_retenedor === true]
+      `INSERT INTO clients (
+        id, nombre, nit, dv, contador_id, agente_retenedor,
+        tipo_persona, direccion, ciudad, telefono, correo, ciiu, responsabilidades,
+        rut_archivo, rut_archivo_nombre,
+        contacto_nombre, contacto_cargo, contacto_telefono, contacto_correo,
+        banco, tipo_cuenta, numero_cuenta
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+      RETURNING *`,
+      [
+        id, nombre, nit, dv || '', req.userId, agenteRetenedorCalculado,
+        tipo_persona || '', direccion || '', ciudad || '', telefono || '', correo || '', ciiu || '', responsabilidadesStr,
+        rut_archivo || '', rut_archivo_nombre || '',
+        contacto_nombre || '', contacto_cargo || '', contacto_telefono || '', contacto_correo || '',
+        banco || '', tipo_cuenta || '', numero_cuenta || '',
+      ]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -338,12 +391,38 @@ app.delete('/api/clients/:id', requireAuth, async (req, res) => {
 
 // Actualizar si un cliente es agente retenedor (sin esto, no tiene
 // sentido calcular ninguna retención sugerida para ese cliente).
+// Actualizar cualquiera de los datos de un cliente ya creado.
+// "agente_retenedor" nunca se recibe directo del cliente -- siempre se
+// recalcula a partir de las responsabilidades tributarias enviadas.
+const CLIENT_EDITABLE_FIELDS = [
+  'nombre', 'nit', 'dv', 'tipo_persona', 'direccion', 'ciudad', 'telefono', 'correo',
+  'ciiu', 'responsabilidades', 'rut_archivo', 'rut_archivo_nombre',
+  'contacto_nombre', 'contacto_cargo', 'contacto_telefono', 'contacto_correo',
+  'banco', 'tipo_cuenta', 'numero_cuenta',
+];
+
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
   try {
-    const { agente_retenedor } = req.body;
+    const updates = {};
+    for (const field of CLIENT_EDITABLE_FIELDS) {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    }
+    // Si vienen responsabilidades en esta actualización, recalcular
+    // agente_retenedor a partir de ellas (código 07 = agente retenedor).
+    if (updates.responsabilidades !== undefined) {
+      updates.agente_retenedor = updates.responsabilidades.split(',').includes('07');
+    }
+
+    const keys = Object.keys(updates);
+    if (keys.length === 0) {
+      return res.status(400).json({ error: 'No se envió ningún campo para actualizar.' });
+    }
+
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+    const values = keys.map((k) => updates[k]);
     const { rows } = await pool.query(
-      'UPDATE clients SET agente_retenedor = $1 WHERE id = $2 AND contador_id = $3 RETURNING *',
-      [agente_retenedor === true, req.params.id, req.userId]
+      `UPDATE clients SET ${setClause} WHERE id = $${keys.length + 1} AND contador_id = $${keys.length + 2} RETURNING *`,
+      [...values, req.params.id, req.userId]
     );
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
@@ -384,6 +463,8 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       // cliente_id es de tipo UUID en la base de datos -- una cadena vacía
       // rompería la inserción, así que se convierte a NULL cuando no hay cliente.
       if (key === 'cliente_id') return val === '' ? null : val;
+      // regimen_simple es de tipo BOOLEAN -- convertir explícitamente.
+      if (key === 'regimen_simple') return val === true || val === 'true';
       return val;
     });
     const columns = [...SAVED_FIELDS, 'contador_id'].join(', ');
