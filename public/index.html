@@ -365,7 +365,7 @@ const FIELDS = [
   {key:"rete_fuente", label:"Rete Fuente", money:true},
   {key:"rete_iva", label:"Rete IVA", money:true},
   {key:"rete_ica", label:"Rete ICA", money:true},
-  {key:"concepto", label:"Concepto"},
+
   {key:"categoria_concepto", label:"Categoría (retención)", select:[
     ["compras","Compras (bienes)"],
     ["servicios","Servicios"],
@@ -373,7 +373,8 @@ const FIELDS = [
     ["arrendamientos","Arrendamientos"],
     ["comisiones","Comisiones"],
     ["otro","Otro"],
-  ]}
+  ]},
+    {key:"concepto", label:"Concepto"}
 ];
 
 // Umbrales orientativos de retención en la fuente para 2026 (UVT = $52.374).
