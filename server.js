@@ -123,6 +123,11 @@ async function ensureSchema() {
   // hasta ahora nunca se guardaba. Sin esto, el cálculo de retención
   // sugerida no puede saber esto para facturas ya guardadas.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS regimen_simple BOOLEAN DEFAULT false;`);
+  // Desglose del subtotal por categoría, para facturas que mezclan
+  // ítems de distinta naturaleza (ej. productos + mano de obra en la
+  // misma factura) -- se guarda como texto JSON, ej: '{"compras":442000,"servicios":140000}'.
+  // Vacío ('' o '{}') significa que toda la factura es una sola categoría.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS desglose_categorias TEXT DEFAULT '';`);
   // Login: cada factura/cliente queda asociada al contador que la guardó.
   // Nullable a propósito -- los datos guardados ANTES del login existían
   // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
@@ -156,6 +161,39 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS banco TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS tipo_cuenta TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS numero_cuenta TEXT DEFAULT '';`);
+
+  // "Memoria" de correcciones -- guarda qué categoría corrigió cada
+  // contador para qué palabra del concepto. No es que la IA aprenda,
+  // es que Kárdex IA recuerda y aplica la corrección la próxima vez,
+  // antes de mostrarle el resultado al contador.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS concepto_correcciones (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      palabra TEXT NOT NULL,
+      categoria TEXT NOT NULL,
+      veces_usado INTEGER NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (contador_id, palabra)
+    );
+  `);
+  // "Memoria" de la tarifa real de cada proveedor -- cuando el contador
+  // escribe un valor de Rete Fuente que coincide con la tarifa alta (no
+  // declarante) o baja (declarante), lo recordamos por NIT + categoría.
+  // Así, la próxima factura de ese mismo proveedor en esa categoría usa
+  // el valor exacto en vez de mostrar un rango.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarifa_proveedor_aprendida (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      nit_proveedor TEXT NOT NULL,
+      categoria TEXT NOT NULL,
+      tarifa NUMERIC NOT NULL,
+      veces_confirmado INTEGER NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (contador_id, nit_proveedor, categoria)
+    );
+  `);
   // Plan del contador -- define cuántos clientes puede registrar.
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
@@ -289,13 +327,98 @@ function clientLimitFor(plan) {
   return Object.prototype.hasOwnProperty.call(PLAN_LIMITS, plan) ? PLAN_LIMITS[plan] : null; // null = sin límite
 }
 
+// ---------- Memoria de correcciones de categoría ----------
+
+const STOPWORDS = new Set([
+  'de','la','el','los','las','un','una','unos','unas','para','por','con',
+  'en','del','al','y','o','a','su','sus','the','and',
+]);
+
+// Saca las palabras "significativas" de un concepto -- las que sirven
+// para reconocer el mismo tipo de gasto la próxima vez (ignora
+// conectores cortos como "de", "la", "para").
+function extraerPalabrasClave(concepto) {
+  return (concepto || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
+}
+
+// Revisa si alguna palabra del concepto tiene una corrección guardada
+// por este contador, y si la hay, la devuelve (la más usada primero).
+// No cambia nada si no encuentra ninguna coincidencia.
+async function buscarCorreccionAprendida(contadorId, concepto) {
+  const palabras = extraerPalabrasClave(concepto);
+  if (palabras.length === 0) return null;
+
+  const { rows } = await pool.query(
+    'SELECT categoria, palabra, veces_usado FROM concepto_correcciones WHERE contador_id = $1 AND palabra = ANY($2) ORDER BY veces_usado DESC, updated_at DESC LIMIT 1',
+    [contadorId, palabras]
+  );
+  return rows.length > 0 ? rows[0].categoria : null;
+}
+
+// Guarda (o refuerza) una corrección: el contador cambió la categoría
+// que sugirió la IA por otra distinta, para este concepto.
+async function guardarCorreccion(contadorId, concepto, categoriaFinal) {
+  const palabras = extraerPalabrasClave(concepto);
+  for (const palabra of palabras) {
+    await pool.query(
+      `INSERT INTO concepto_correcciones (id, contador_id, palabra, categoria, veces_usado)
+       VALUES ($1, $2, $3, $4, 1)
+       ON CONFLICT (contador_id, palabra)
+       DO UPDATE SET categoria = $4, veces_usado = concepto_correcciones.veces_usado + 1, updated_at = now()`,
+      [crypto.randomUUID(), contadorId, palabra, categoriaFinal]
+    );
+  }
+}
+
+// ---------- Memoria de la tarifa real por proveedor ----------
+
+// Solo estas categorías tienen una diferencia real entre tarifa
+// declarante/no declarante -- las demás son tarifa fija, no hay nada
+// que aprender ahí (ver TARIFAS_RETENCION en facturas.html).
+const TARIFAS_CON_RANGO = {
+  compras: { tarifaBaja: 0.025, tarifaAlta: 0.035 },
+  servicios: { tarifaBaja: 0.04, tarifaAlta: 0.06 },
+  honorarios_natural: { tarifaBaja: 0.10, tarifaAlta: 0.11 },
+};
+
+// Revisa si el valor de Rete Fuente que el contador escribió coincide
+// con alguna de las 2 tarifas conocidas para esa categoría -- si
+// coincide, devuelve cuál (para poder recordarla). Si no coincide con
+// ninguna (ej. el contador escribió cualquier otra cosa), no se
+// aprende nada -- mejor no adivinar que aprender algo incorrecto.
+function detectarTarifaUsada(categoria, subtotal, reteFuenteEscrito) {
+  const config = TARIFAS_CON_RANGO[categoria];
+  if (!config || !subtotal || !reteFuenteEscrito) return null;
+  const tolerancia = Math.max(50, Math.round(subtotal * 0.001));
+  const valorBaja = Math.round(subtotal * config.tarifaBaja);
+  const valorAlta = Math.round(subtotal * config.tarifaAlta);
+  if (Math.abs(reteFuenteEscrito - valorBaja) <= tolerancia) return config.tarifaBaja;
+  if (Math.abs(reteFuenteEscrito - valorAlta) <= tolerancia) return config.tarifaAlta;
+  return null;
+}
+
+async function guardarTarifaProveedor(contadorId, nitProveedor, categoria, tarifa) {
+  await pool.query(
+    `INSERT INTO tarifa_proveedor_aprendida (id, contador_id, nit_proveedor, categoria, tarifa, veces_confirmado)
+     VALUES ($1, $2, $3, $4, $5, 1)
+     ON CONFLICT (contador_id, nit_proveedor, categoria)
+     DO UPDATE SET tarifa = $5, veces_confirmado = tarifa_proveedor_aprendida.veces_confirmado + 1, updated_at = now()`,
+    [crypto.randomUUID(), contadorId, nitProveedor, categoria, tarifa]
+  );
+}
+
 const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
   'letras_fe', 'numeros_fe', 'fecha_factura',
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple',
+  'regimen_simple', 'desglose_categorias',
 ];
 
 function rowToInvoice(row) {
@@ -454,6 +577,22 @@ app.get('/api/invoices', requireAuth, async (req, res) => {
   }
 });
 
+// Tarifas de retención que ya se aprendieron por proveedor -- usado
+// por el Excel para mostrar el valor exacto en vez de un rango,
+// cuando ya sabemos qué tarifa le corresponde a ese proveedor.
+app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT nit_proveedor, categoria, tarifa FROM tarifa_proveedor_aprendida WHERE contador_id = $1',
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error leyendo tarifas aprendidas:', err);
+    res.status(500).json({ error: 'No se pudieron leer las tarifas aprendidas.' });
+  }
+});
+
 // Guardar una factura ya revisada por el contador
 app.post('/api/invoices', requireAuth, async (req, res) => {
   try {
@@ -474,6 +613,41 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       `INSERT INTO invoices (id, ${columns}) VALUES ($1, ${placeholders}) RETURNING *`,
       [id, ...values, req.userId]
     );
+
+    // Si el contador cambió la categoría que la IA sugirió, lo
+    // guardamos como una corrección -- la próxima vez que aparezca un
+    // concepto parecido, se la aplicamos sola, sin que tenga que
+    // corregirla de nuevo. No bloquea el guardado si esto falla.
+    const categoriaOriginal = req.body.categoria_concepto_ia || '';
+    const categoriaFinal = req.body.categoria_concepto || '';
+    if (categoriaOriginal && categoriaFinal && categoriaOriginal !== categoriaFinal) {
+      try {
+        await guardarCorreccion(req.userId, req.body.concepto || '', categoriaFinal);
+      } catch (err) {
+        console.error('No se pudo guardar la corrección aprendida:', err.message);
+      }
+    }
+
+    // Si el contador escribió un valor real de Rete Fuente, y ese
+    // valor coincide con una de las 2 tarifas conocidas para esta
+    // categoría, lo recordamos para este proveedor específico -- la
+    // próxima factura suya en esta categoría usará el valor exacto,
+    // no un rango.
+    try {
+      const categoriaGuardada = req.body.categoria_concepto || '';
+      const subtotalGuardado = Number(req.body.valor_sin_iva) || 0;
+      const reteFuenteGuardado = Number(req.body.rete_fuente) || 0;
+      const nitProveedorGuardado = req.body.nit_cc || '';
+      if (nitProveedorGuardado && reteFuenteGuardado > 0) {
+        const tarifaDetectada = detectarTarifaUsada(categoriaGuardada, subtotalGuardado, reteFuenteGuardado);
+        if (tarifaDetectada !== null) {
+          await guardarTarifaProveedor(req.userId, nitProveedorGuardado, categoriaGuardada, tarifaDetectada);
+        }
+      }
+    } catch (err) {
+      console.error('No se pudo guardar la tarifa aprendida del proveedor:', err.message);
+    }
+
     res.status(201).json(rowToInvoice(rows[0]));
   } catch (err) {
     console.error('Error guardando factura:', err);
@@ -527,7 +701,8 @@ app.post('/api/extract', requireAuth, async (req, res) => {
   "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
-  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos, ej. útiles, insumos, mercancía), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza, mantenimiento, transporte), 'honorarios' (requiere conocimiento especializado o título profesional, ej. asesoría contable/legal/médica/ingeniería), 'arrendamientos' (alquiler de inmueble o equipo), 'comisiones' (pago por intermediación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto."
+  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'hoteles_restaurantes' (alojamiento o alimentación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
+  "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás."
 }
 
 REGLA DE FORMATO PARA LOS 3 CAMPOS DE VALOR (muy importante, es el error más común):
@@ -599,6 +774,23 @@ Si algún campo no se puede determinar con certeza, usa una cadena vacía "" par
       if (parsed[key] !== undefined && parsed[key] !== '' && !isNaN(Number(parsed[key]))) {
         parsed[key] = Math.round(Number(parsed[key]));
       }
+    }
+
+    // Antes de mostrarle el resultado al contador, revisamos si él
+    // mismo ya corrigió antes una categoría para un concepto parecido
+    // -- si es así, la aplicamos solos, sin que tenga que corregirla
+    // otra vez. Guardamos la sugerencia original de la IA para poder
+    // comparar después si el contador la cambia de nuevo.
+    parsed.categoria_concepto_ia = parsed.categoria_concepto || '';
+    try {
+      const corregida = await buscarCorreccionAprendida(req.userId, parsed.concepto);
+      if (corregida && corregida !== parsed.categoria_concepto) {
+        parsed.categoria_concepto = corregida;
+        parsed.categoria_ajustada_por_ti = true;
+      }
+    } catch (err) {
+      console.error('No se pudo revisar correcciones aprendidas:', err.message);
+      // Si falla, seguimos con la categoría que dio la IA -- no bloquea el flujo.
     }
 
     res.json(parsed);

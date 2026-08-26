@@ -264,6 +264,7 @@
     <a href="/facturas.html">Facturas</a>
     <a href="/kardex.html">Kárdex</a>
     <a href="/clientes.html">Clientes</a>
+    <a href="/masivo.html">Carga masiva</a>
   </nav>
 
   <div class="intake reveal" id="intake">
@@ -365,24 +366,30 @@ const FIELDS = [
   {key:"rete_fuente", label:"Rete Fuente", money:true},
   {key:"rete_iva", label:"Rete IVA", money:true},
   {key:"rete_ica", label:"Rete ICA", money:true},
-
+  {key:"concepto", label:"Concepto"},
   {key:"categoria_concepto", label:"Categoría (retención)", select:[
     ["compras","Compras (bienes)"],
-    ["servicios","Servicios"],
-    ["honorarios","Honorarios"],
-    ["arrendamientos","Arrendamientos"],
-    ["comisiones","Comisiones"],
+    ["compras_tarjeta","Compras con tarjeta débito/crédito"],
+    ["servicios","Servicios generales"],
+    ["honorarios_juridica","Honorarios (persona jurídica)"],
+    ["honorarios_natural","Honorarios (persona natural)"],
+    ["arrendamiento_muebles","Arrendamiento de muebles/equipos"],
+    ["arrendamiento_inmuebles","Arrendamiento de inmuebles"],
+    ["transporte_carga","Transporte de carga"],
+    ["transporte_pasajeros","Transporte de pasajeros"],
+    ["licenciamiento_software","Licenciamiento de software"],
+    ["vigilancia_aseo","Vigilancia y aseo"],
+    ["hoteles_restaurantes","Hoteles y restaurantes"],
     ["otro","Otro"],
-  ]},
-    {key:"concepto", label:"Concepto"}
+  ]}
 ];
 
 // Umbrales orientativos de retención en la fuente para 2026 (UVT = $52.374).
 // IMPORTANTE: estas bases han cambiado varias veces este año por decisiones
 // judiciales — esto es solo una alerta informativa, NO una determinación
 // tributaria. El contador siempre debe verificar la norma vigente.
-const UMBRAL_RETENCION_SERVICIOS = 209496;  // 4 UVT ($52.374 x 4) -- corregido, antes usábamos 2 UVT
-const UMBRAL_RETENCION_COMPRAS = 1414098;   // 27 UVT ($52.374 x 27) -- corregido, antes usábamos 10 UVT
+const UMBRAL_RETENCION_SERVICIOS = 105000;  // 2 UVT ($52.374 x 2) -- Decreto 572 volvió a aplicar desde el 1 jul 2026 (Consejo de Estado, exp. 30229)
+const UMBRAL_RETENCION_COMPRAS = 524000;    // 10 UVT ($52.374 x 10) -- mismo caso, revirtió a la base original
 
 (function animateTitle(){
   const text = "Kárdex IA";
@@ -422,6 +429,8 @@ let currentIsPdf = false;
 let currentTipoMovimiento = 'egreso';
 let currentClienteId = '';
 let currentRegimenSimple = false;
+let currentCategoriaConceptoIA = '';
+let currentDesgloseCategorias = {};
 let myClients = [];
 
 // Se carga una sola vez al abrir la página -- se usa para detectar
@@ -625,6 +634,7 @@ function resetAll(){
   currentTipoMovimiento = 'egreso';
   currentClienteId = '';
   currentRegimenSimple = false;
+  currentDesgloseCategorias = {};
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   window.scrollTo({top:0, behavior:'smooth'});
@@ -678,6 +688,21 @@ async function extractInvoice(){
 function renderResult(data){
   detectClient(data);
   currentRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
+  currentCategoriaConceptoIA = data.categoria_concepto_ia || data.categoria_concepto || '';
+
+  // El desglose puede venir como objeto (normal) o como texto JSON
+  // (si la IA lo mandó ya serializado) -- se maneja de forma
+  // defensiva, si algo sale mal simplemente se trata como vacío.
+  currentDesgloseCategorias = {};
+  try {
+    const raw = data.desglose_categorias;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      currentDesgloseCategorias = parsed;
+    }
+  } catch (e) {
+    currentDesgloseCategorias = {};
+  }
   ledger.innerHTML = '';
   FIELDS.forEach((f, i) => {
     const row = document.createElement('div');
@@ -730,6 +755,32 @@ function renderResult(data){
     valueWrap.appendChild(input);
     row.appendChild(label);
     row.appendChild(valueWrap);
+
+    // Si el sistema ajustó la categoría solo, basado en una corrección
+    // que ya hiciste antes para un concepto parecido, se lo avisamos.
+    if (f.key === 'categoria_concepto' && (data.categoria_ajustada_por_ti === true || data.categoria_ajustada_por_ti === 'true')) {
+      const ajusteEl = document.createElement('div');
+      ajusteEl.className = 'digit-warn show';
+      ajusteEl.style.color = 'var(--moss, #154F41)';
+      ajusteEl.textContent = '✓ Ajustado solo, según una corrección que ya hiciste antes para un concepto parecido.';
+      row.appendChild(ajusteEl);
+    }
+
+    // Si la factura mezcla ítems de distinta categoría (ej. productos
+    // Y mano de obra en la misma factura), se lo mostramos desglosado
+    // -- de solo lectura, informativo, para que el contador vea de
+    // dónde sale el cálculo de retención sugerida en el Excel.
+    if (f.key === 'categoria_concepto' && Object.keys(currentDesgloseCategorias).length > 1) {
+      const categoriaLabels = Object.fromEntries(f.select.map(([val, label]) => [val, label]));
+      const desgloseEl = document.createElement('div');
+      desgloseEl.className = 'digit-warn show';
+      desgloseEl.style.color = 'var(--ink-soft, #4E5A52)';
+      const filas = Object.entries(currentDesgloseCategorias)
+        .map(([cat, val]) => `${categoriaLabels[cat] || cat}: $${(Number(val) || 0).toLocaleString('es-CO')}`)
+        .join(' · ');
+      desgloseEl.innerHTML = `ℹ Esta factura mezcla categorías — se detectó: <b>${filas}</b>. El cálculo de retención sugerida usará este desglose, no el total completo.`;
+      row.appendChild(desgloseEl);
+    }
 
     // Campos de retención: aviso si el valor digitado parece un error
     // (ej. se te fue un cero de más) comparado contra lo usual.
@@ -837,13 +888,27 @@ function showRetencionHint(data){
   const categoria = (data.categoria_concepto || 'otro').toLowerCase();
   const subtotal = Number(data.valor_sin_iva) || 0;
   const iva = Number(data.valor_iva) || 0;
-  // "Servicios" y "Honorarios" usan el umbral de servicios; el resto
-  // (compras, arrendamientos, comisiones, otro) usa el de compras --
-  // ya no se adivina por palabras clave, viene de la categoría real
-  // que asignó la IA (o que el contador corrigió).
-  const esCategoriaServicios = categoria === 'servicios' || categoria === 'honorarios';
-  const umbral = esCategoriaServicios ? UMBRAL_RETENCION_SERVICIOS : UMBRAL_RETENCION_COMPRAS;
-  const tipoTexto = esCategoriaServicios ? 'servicios/honorarios (4 UVT)' : 'compras (27 UVT)';
+
+  // Umbral y texto orientativo por cada una de las 12 categorías --
+  // ya no se agrupa todo en "servicios vs. compras", cada categoría
+  // tiene su propia base mínima real (vigente desde el 1 jul 2026).
+  const UMBRALES_POR_CATEGORIA = {
+    compras:                  { umbral: UMBRAL_RETENCION_COMPRAS,   texto: 'compras (10 UVT)' },
+    compras_tarjeta:          { umbral: 0,                          texto: 'compras con tarjeta (desde $0)' },
+    servicios:                { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'servicios (2 UVT)' },
+    honorarios_juridica:      { umbral: 0,                          texto: 'honorarios (desde $0)' },
+    honorarios_natural:       { umbral: 0,                          texto: 'honorarios (desde $0)' },
+    arrendamiento_muebles:    { umbral: 0,                          texto: 'arrendamiento de muebles (desde $0)' },
+    arrendamiento_inmuebles:  { umbral: UMBRAL_RETENCION_COMPRAS,   texto: 'arrendamiento de inmuebles (10 UVT)' },
+    transporte_carga:         { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'transporte de carga (2 UVT)' },
+    transporte_pasajeros:     { umbral: UMBRAL_RETENCION_COMPRAS,   texto: 'transporte de pasajeros (10 UVT)' },
+    licenciamiento_software:  { umbral: 0,                          texto: 'licenciamiento de software (desde $0)' },
+    vigilancia_aseo:          { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'vigilancia/aseo (2 UVT)' },
+    hoteles_restaurantes:     { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'hoteles/restaurantes (2 UVT)' },
+  };
+  const config = UMBRALES_POR_CATEGORIA[categoria] || { umbral: UMBRAL_RETENCION_COMPRAS, texto: 'general (10 UVT)' };
+  const umbral = config.umbral;
+  const tipoTexto = config.texto;
 
   // Régimen Simple está exento de Rete Fuente y Rete ICA, pero NO de
   // Rete IVA -- son reglas independientes, no se apagan juntas.
@@ -894,6 +959,8 @@ function currentFieldValues(){
   out.tipo_movimiento = currentTipoMovimiento;
   out.cliente_id = currentClienteId || '';
   out.regimen_simple = currentRegimenSimple;
+  out.categoria_concepto_ia = currentCategoriaConceptoIA;
+  out.desglose_categorias = JSON.stringify(currentDesgloseCategorias || {});
   return out;
 }
 

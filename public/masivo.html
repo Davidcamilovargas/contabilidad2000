@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Carga masiva</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .wrap{ max-width:1240px; }
+
+  #uploadZone{
+    border:2px dashed rgba(255,255,255,0.2); border-radius:12px;
+    padding:40px 20px; text-align:center; margin-bottom:24px;
+    transition:border-color .2s var(--ease), background .2s var(--ease);
+    cursor:pointer;
+  }
+  #uploadZone:hover, #uploadZone.dragover{ border-color:var(--ember); background:rgba(255,90,54,0.05); }
+  #uploadZone svg{ margin-bottom:12px; opacity:.6; }
+  #uploadZone h2{ font-size:17px; margin:0 0 6px; font-family:'Archivo',sans-serif; color:var(--white); }
+  #uploadZone p{ font-size:12.5px; color:var(--white-soft); margin:0; }
+  #fileInputMasivo{ display:none; }
+
+  #progressArea{
+    display:none; margin-bottom:24px; background:#171E20; border:1px solid #2B3436;
+    border-radius:10px; padding:18px 20px;
+  }
+  #progressArea.show{ display:block; }
+  #progressText{ font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--white-soft); margin-bottom:10px; }
+  #progressBarOuter{ height:6px; background:#2B3436; border-radius:100px; overflow:hidden; }
+  #progressBarInner{ height:100%; background:var(--ember); width:0%; transition:width .3s var(--ease); }
+
+  #summaryWrap{ display:none; }
+  #summaryWrap.show{ display:block; }
+
+  #summaryTable{
+    --paper-raised:#FBF9F4; --ink:#1B2420; --ink-soft:#4E5A52; --ink-faint:#8A9289; --line:#DEDACD;
+    width:100%; border-collapse:collapse; background:var(--paper-raised);
+    border:1px solid var(--line); border-radius:12px; overflow:hidden;
+    box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
+  }
+  #summaryTable thead th{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-soft); text-align:left; padding:12px 16px; background:#F2EFE7; border-bottom:1px solid var(--line);
+  }
+  #summaryTable tbody td{ padding:14px 16px; font-size:13px; color:var(--ink); border-bottom:1px solid var(--line); vertical-align:middle; }
+  #summaryTable tbody tr:last-child td{ border-bottom:none; }
+  #summaryTable .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
+  #summaryTable select{
+    font-family:inherit; font-size:12.5px; padding:6px 8px; border:1px solid var(--line); border-radius:5px; background:#fff;
+  }
+
+  .status-badge{
+    display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:11px;
+    padding:4px 9px; border-radius:100px; white-space:nowrap;
+  }
+  .status-badge.listo{ background:#DCEEE8; color:#154F41; }
+  .status-badge.revisar{ background:#FBF3D9; color:#7A5C0A; }
+  .status-badge.error{ background:#FBE4DE; color:#B0402D; }
+  .status-badge.procesando{ background:#F2EFE7; color:var(--ink-soft); }
+
+  #saveAllBar{
+    display:flex; align-items:center; justify-content:space-between; margin-top:18px;
+    padding:16px 20px; background:#171E20; border:1px solid #2B3436; border-radius:10px;
+  }
+  #saveAllBar .info{ font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--white-soft); }
+  #saveAllBar .info b{ color:#fff; }
+
+  .fila-cliente-select{ min-width:160px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="brand">
+      <h1 id="titleLetters"></h1>
+    </div>
+    <div class="header-right">
+      <span class="tag"><span class="live-dot"></span>en línea</span>
+      <div class="user-badge" id="userBadge" style="display:none;">
+        <img id="userAvatar" src="" alt="">
+        <span class="user-name" id="userName"></span>
+        <button id="btnLogout">Salir</button>
+      </div>
+    </div>
+  </header>
+  <div class="sub reveal">Sube varias facturas de una vez — el sistema las procesa en fila y te muestra un resumen para revisar rápido.</div>
+
+  <nav class="tabs reveal">
+    <a href="/">Escanear</a>
+    <a href="/facturas.html">Facturas</a>
+    <a href="/kardex.html">Kárdex</a>
+    <a href="/clientes.html">Clientes</a>
+    <a href="/masivo.html" class="active">Carga masiva</a>
+  </nav>
+
+  <div id="uploadZone">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF5A36" stroke-width="1.5"><path d="M12 3v13m0-13l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    <h2>Sube varias facturas a la vez</h2>
+    <p>Selecciona o arrastra varios archivos (fotos o PDF) — se procesan uno por uno.</p>
+    <input type="file" id="fileInputMasivo" multiple accept="image/*,application/pdf">
+  </div>
+
+  <div id="progressArea">
+    <div id="progressText">Procesando 0 de 0...</div>
+    <div id="progressBarOuter"><div id="progressBarInner"></div></div>
+  </div>
+
+  <div id="summaryWrap">
+    <table id="summaryTable">
+      <thead>
+        <tr>
+          <th>Archivo</th>
+          <th>Proveedor</th>
+          <th style="text-align:right">Valor</th>
+          <th>Categoría</th>
+          <th>Movimiento / Cliente</th>
+          <th>Estado</th>
+        </tr>
+      </thead>
+      <tbody id="summaryBody"></tbody>
+    </table>
+
+    <div id="saveAllBar">
+      <span class="info"><b id="countListas">0</b> listas para guardar · <b id="countRevisar">0</b> necesitan revisión</span>
+      <button class="btn" id="btnGuardarTodas">Guardar facturas listas</button>
+    </div>
+  </div>
+
+  <footer>Cada factura se procesa igual que en Escanear — la carga masiva solo encadena varias a la vez.</footer>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? '\u00A0' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+const CATEGORIAS = [
+  ["compras","Compras (bienes)"],
+  ["compras_tarjeta","Compras con tarjeta débito/crédito"],
+  ["servicios","Servicios generales"],
+  ["honorarios_juridica","Honorarios (persona jurídica)"],
+  ["honorarios_natural","Honorarios (persona natural)"],
+  ["arrendamiento_muebles","Arrendamiento de muebles/equipos"],
+  ["arrendamiento_inmuebles","Arrendamiento de inmuebles"],
+  ["transporte_carga","Transporte de carga"],
+  ["transporte_pasajeros","Transporte de pasajeros"],
+  ["licenciamiento_software","Licenciamiento de software"],
+  ["vigilancia_aseo","Vigilancia y aseo"],
+  ["hoteles_restaurantes","Hoteles y restaurantes"],
+  ["otro","Otro"],
+];
+
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInputMasivo');
+const progressArea = document.getElementById('progressArea');
+const progressText = document.getElementById('progressText');
+const progressBarInner = document.getElementById('progressBarInner');
+const summaryWrap = document.getElementById('summaryWrap');
+const summaryBody = document.getElementById('summaryBody');
+const btnGuardarTodas = document.getElementById('btnGuardarTodas');
+const countListasEl = document.getElementById('countListas');
+const countRevisarEl = document.getElementById('countRevisar');
+
+let myClients = [];
+let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, estado: 'procesando'|'listo'|'revisar'|'error'|'guardada' }
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) procesarLote(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) procesarLote(fileInput.files);
+});
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Misma lógica de detección que en Escanear -- comparar el NIT contra
+// los clientes registrados para decidir solo si es ingreso o egreso,
+// y de cuál cliente. Si no hay coincidencia, queda para revisar.
+function detectarClienteYMovimiento(data){
+  const asComprador = myClients.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
+  const asVendedor = myClients.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
+  if (asComprador) return { clienteId: asComprador.id, tipoMovimiento: 'egreso', confiado: true };
+  if (asVendedor) return { clienteId: asVendedor.id, tipoMovimiento: 'ingreso', confiado: true };
+  return { clienteId: '', tipoMovimiento: 'egreso', confiado: false };
+}
+
+async function procesarLote(files){
+  lote = Array.from(files).map(file => ({ file, nombre: file.name, data: null, clienteId: '', tipoMovimiento: 'egreso', estado: 'procesando' }));
+  progressArea.classList.add('show');
+  summaryWrap.classList.remove('show');
+  summaryBody.innerHTML = '';
+  fileInput.value = '';
+
+  for (let i = 0; i < lote.length; i++) {
+    progressText.textContent = `Procesando ${i + 1} de ${lote.length}...`;
+    progressBarInner.style.width = Math.round(((i) / lote.length) * 100) + '%';
+
+    const item = lote[i];
+    try {
+      const base64 = await fileToBase64(item.file);
+      const isPdf = item.file.type === 'application/pdf' || /\.pdf$/i.test(item.file.name || '');
+      const res = await fetch('/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, mediaType: item.file.type || (isPdf ? 'application/pdf' : 'image/jpeg'), isPdf })
+      });
+      if (!res.ok) throw new Error('La IA no pudo leer este archivo.');
+      const data = await res.json();
+      item.data = data;
+
+      const deteccion = detectarClienteYMovimiento(data);
+      item.clienteId = deteccion.clienteId;
+      item.tipoMovimiento = deteccion.tipoMovimiento;
+      item.estado = deteccion.confiado ? 'listo' : 'revisar';
+    } catch (err) {
+      item.estado = 'error';
+      item.errorMsg = err.message;
+    }
+  }
+
+  progressBarInner.style.width = '100%';
+  progressText.textContent = `Listo — ${lote.length} de ${lote.length} procesadas.`;
+  renderSummary();
+  summaryWrap.classList.add('show');
+}
+
+function renderSummary(){
+  summaryBody.innerHTML = '';
+  lote.forEach((item, idx) => {
+    const tr = document.createElement('tr');
+    tr.dataset.idx = idx;
+
+    if (item.estado === 'error') {
+      tr.innerHTML = `
+        <td>${escapeHtml(item.nombre)}</td>
+        <td colspan="4" style="color:#B0402D;">${escapeHtml(item.errorMsg || 'No se pudo procesar')}</td>
+        <td><span class="status-badge error">✕ Error</span></td>
+      `;
+      summaryBody.appendChild(tr);
+      return;
+    }
+
+    const d = item.data;
+    const categoriaOpts = CATEGORIAS.map(([val, label]) =>
+      `<option value="${val}" ${val === (d.categoria_concepto || 'otro') ? 'selected' : ''}>${label}</option>`
+    ).join('');
+
+    let movimientoHtml;
+    if (item.estado === 'listo') {
+      const cliente = myClients.find(c => c.id === item.clienteId);
+      const label = item.tipoMovimiento === 'ingreso' ? 'Ingreso' : 'Egreso';
+      movimientoHtml = `<span>${label} — ${escapeHtml(cliente ? cliente.nombre : '')}</span>`;
+    } else {
+      const opciones = myClients.map(c => `<option value="${c.id}">${escapeHtml(c.nombre)}</option>`).join('');
+      movimientoHtml = `
+        <select class="fila-cliente-select" data-idx="${idx}" data-role="cliente-manual">
+          <option value="">-- Selecciona el cliente --</option>
+          ${opciones}
+        </select>
+      `;
+    }
+
+    tr.innerHTML = `
+      <td>${escapeHtml(item.nombre)}</td>
+      <td>${escapeHtml(d.nombre_razon_social || '—')}</td>
+      <td class="money">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</td>
+      <td><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></td>
+      <td>${movimientoHtml}</td>
+      <td><span class="status-badge ${item.estado}">${item.estado === 'listo' ? '✓ Listo' : '⚠ Revisar'}</span></td>
+    `;
+    summaryBody.appendChild(tr);
+  });
+
+  actualizarContadores();
+}
+
+summaryBody.addEventListener('change', (e) => {
+  const idx = Number(e.target.dataset.idx);
+  if (isNaN(idx)) return;
+  const item = lote[idx];
+
+  if (e.target.dataset.role === 'categoria') {
+    item.data.categoria_concepto = e.target.value;
+  }
+
+  if (e.target.dataset.role === 'cliente-manual') {
+    const clienteId = e.target.value;
+    if (!clienteId) return;
+    const cliente = myClients.find(c => c.id === clienteId);
+    const esComprador = cliente.nit && item.data.adquiriente_nit && cliente.nit === item.data.adquiriente_nit;
+    const esVendedor = cliente.nit && item.data.nit_cc && cliente.nit === item.data.nit_cc;
+    item.clienteId = clienteId;
+    item.tipoMovimiento = esComprador ? 'egreso' : (esVendedor ? 'ingreso' : 'egreso');
+    item.estado = 'listo'; // el contador ya lo confirmó a mano
+    renderSummary();
+  }
+});
+
+function actualizarContadores(){
+  const listas = lote.filter(i => i.estado === 'listo').length;
+  const revisar = lote.filter(i => i.estado === 'revisar').length;
+  countListasEl.textContent = listas;
+  countRevisarEl.textContent = revisar;
+  btnGuardarTodas.disabled = listas === 0;
+}
+
+btnGuardarTodas.addEventListener('click', async () => {
+  btnGuardarTodas.disabled = true;
+  btnGuardarTodas.textContent = 'Guardando...';
+
+  const listas = lote.filter(i => i.estado === 'listo');
+  let guardadas = 0;
+  for (const item of listas) {
+    try {
+      const d = item.data;
+      const payload = {
+        tipo_doc: d.tipo_doc || '', nit_cc: d.nit_cc || '', dv: d.dv || '',
+        nombre_razon_social: d.nombre_razon_social || '',
+        letras_fe: d.letras_fe || '', numeros_fe: d.numeros_fe || '',
+        fecha_factura: d.fecha_factura || '',
+        valor_sin_iva: String(d.valor_sin_iva || ''), valor_iva: String(d.valor_iva || ''), valor_con_iva: String(d.valor_con_iva || ''),
+        rete_fuente: String(d.rete_fuente || ''), rete_iva: String(d.rete_iva || ''), rete_ica: String(d.rete_ica || ''),
+        concepto: d.concepto || '', categoria_concepto: d.categoria_concepto || '',
+        categoria_concepto_ia: d.categoria_concepto_ia || d.categoria_concepto || '',
+        tipo_movimiento: item.tipoMovimiento, adquiriente_nit: d.adquiriente_nit || '', adquiriente_nombre: d.adquiriente_nombre || '',
+        cliente_id: item.clienteId || '',
+        regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
+        desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
+      };
+      const res = await fetch('/api/invoices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (res.ok) { item.estado = 'guardada'; guardadas++; }
+    } catch (e) { /* se deja como estaba, no bloquea el resto del lote */ }
+  }
+
+  btnGuardarTodas.textContent = `✓ ${guardadas} facturas guardadas`;
+  renderSummary();
+  setTimeout(() => {
+    btnGuardarTodas.textContent = 'Guardar facturas listas';
+  }, 2500);
+});
+
+async function requireAuthAndInit(){
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const user = await res.json();
+    document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('userAvatar').src = user.avatarUrl || '';
+    document.getElementById('userName').textContent = user.nombre || user.email;
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.href = '/login.html';
+    });
+    const clientsRes = await fetch('/api/clients');
+    myClients = clientsRes.ok ? await clientsRes.json() : [];
+  } catch (e) {
+    window.location.href = '/login.html';
+  }
+}
+requireAuthAndInit();
+</script>
+</body>
+</html>
