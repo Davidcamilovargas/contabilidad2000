@@ -172,6 +172,30 @@ footer{
   h1{font-size:21px;}
 }
 
+/* ---------- modal de vista previa del documento original (factura/RUT escaneado) ---------- */
+.file-modal{
+  position:fixed; inset:0; z-index:1000;
+  display:none; align-items:center; justify-content:center;
+  padding:28px;
+}
+.file-modal.show{ display:flex; }
+.file-modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,0.78); }
+.file-modal-content{
+  position:relative; z-index:1; max-width:min(900px, 92vw); max-height:88vh;
+  background:#0E1315; border:1px solid var(--line); border-radius:10px;
+  padding:14px; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 40px 80px -20px rgba(0,0,0,0.7);
+}
+.file-modal-content img{ max-width:100%; max-height:80vh; object-fit:contain; display:block; border-radius:4px; }
+.file-modal-content iframe{ width:min(820px, 86vw); height:80vh; border:none; border-radius:4px; background:#fff; }
+.file-modal-close{
+  position:absolute; top:-14px; right:-14px; width:34px; height:34px;
+  border-radius:50%; background:var(--ember); color:#fff; border:2px solid var(--paper);
+  font-size:16px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  transition:transform .15s var(--ease);
+}
+.file-modal-close:hover{ transform:scale(1.08); }
+
 @media (prefers-reduced-motion: reduce){
   *, *::before, *::after{
     animation-duration:0.01ms !important;

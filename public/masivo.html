@@ -52,6 +52,11 @@
   #summaryTable select{
     font-family:inherit; font-size:12.5px; padding:6px 8px; border:1px solid var(--line); border-radius:5px; background:#fff;
   }
+  .btn-ver{
+    background:none; border:1px solid var(--line); border-radius:6px; color:var(--ink-soft);
+    font-size:14px; padding:5px 9px; cursor:pointer; transition:border-color .15s ease, color .15s ease;
+  }
+  .btn-ver:hover{ border-color:var(--ember); color:var(--ember-deep); }
 
   .status-badge{
     display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:11px;
@@ -115,6 +120,7 @@
       <thead>
         <tr>
           <th>Archivo</th>
+          <th>Ver</th>
           <th>Proveedor</th>
           <th style="text-align:right">Valor</th>
           <th>Categoría</th>
@@ -132,6 +138,15 @@
   </div>
 
   <footer>Cada factura se procesa igual que en Escanear — la carga masiva solo encadena varias a la vez.</footer>
+</div>
+
+<div class="file-modal" id="fileModal">
+  <div class="file-modal-backdrop" id="fileModalBackdrop"></div>
+  <div class="file-modal-content">
+    <button type="button" class="file-modal-close" id="btnCloseModal" aria-label="Cerrar">✕</button>
+    <img id="modalImg" alt="Factura escaneada" style="display:none;">
+    <iframe id="modalPdf" title="Factura escaneada (PDF)" style="display:none;"></iframe>
+  </div>
 </div>
 
 <script>
@@ -177,9 +192,46 @@ const summaryBody = document.getElementById('summaryBody');
 const btnGuardarTodas = document.getElementById('btnGuardarTodas');
 const countListasEl = document.getElementById('countListas');
 const countRevisarEl = document.getElementById('countRevisar');
+const fileModal = document.getElementById('fileModal');
+const fileModalBackdrop = document.getElementById('fileModalBackdrop');
+const btnCloseModal = document.getElementById('btnCloseModal');
+const modalImg = document.getElementById('modalImg');
+const modalPdf = document.getElementById('modalPdf');
 
 let myClients = [];
 let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, estado: 'procesando'|'listo'|'revisar'|'error'|'guardada' }
+
+// Vista completa del archivo original de una fila del lote -- usa el
+// mismo File que ya está en memoria (item.file), sin volver a pedirlo.
+// Se usa un object URL en vez de convertir a base64 porque es más
+// liviano y funciona igual para imagen o PDF.
+let urlModalActual = null;
+
+function abrirVistaCompleta(item){
+  if (!item || !item.file) return;
+  if (urlModalActual) URL.revokeObjectURL(urlModalActual); // libera la vista anterior antes de crear una nueva
+  urlModalActual = URL.createObjectURL(item.file);
+
+  const esPdf = item.file.type === 'application/pdf' || /\.pdf$/i.test(item.nombre || '');
+  if (esPdf) {
+    modalPdf.src = urlModalActual;
+    modalPdf.style.display = 'block';
+    modalImg.style.display = 'none';
+  } else {
+    modalImg.src = urlModalActual;
+    modalImg.style.display = 'block';
+    modalPdf.style.display = 'none';
+  }
+  fileModal.classList.add('show');
+}
+function cerrarVistaCompleta(){
+  fileModal.classList.remove('show');
+  modalPdf.src = '';
+  if (urlModalActual) { URL.revokeObjectURL(urlModalActual); urlModalActual = null; }
+}
+btnCloseModal.addEventListener('click', cerrarVistaCompleta);
+fileModalBackdrop.addEventListener('click', cerrarVistaCompleta);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarVistaCompleta(); });
 
 uploadZone.addEventListener('click', () => fileInput.click());
 uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
@@ -339,6 +391,7 @@ function renderSummary(){
     if (item.estado === 'error') {
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
+        <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
         <td colspan="4" style="color:#B0402D;">${escapeHtml(item.errorMsg || 'No se pudo procesar')}</td>
         <td><span class="status-badge error">✕ Error</span></td>
       `;
@@ -368,6 +421,7 @@ function renderSummary(){
 
     tr.innerHTML = `
       <td>${escapeHtml(item.nombre)}</td>
+      <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
       <td>${escapeHtml(d.nombre_razon_social || '—')}</td>
       <td class="money">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</td>
       <td><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></td>
@@ -400,6 +454,14 @@ summaryBody.addEventListener('change', (e) => {
     item.estado = 'listo'; // el contador ya lo confirmó a mano
     renderSummary();
   }
+});
+
+summaryBody.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-role="ver"]');
+  if (!btn) return;
+  const idx = Number(btn.dataset.idx);
+  if (isNaN(idx)) return;
+  abrirVistaCompleta(lote[idx]);
 });
 
 function actualizarContadores(){

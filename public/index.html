@@ -94,7 +94,14 @@
   .preview-thumb{
     position:relative; width:84px;height:84px; flex-shrink:0;
     overflow:hidden; border:1px solid var(--line);
+    cursor:pointer;
   }
+  .preview-thumb::after{
+    content:"🔍"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.35); opacity:0; transition:opacity .15s var(--ease); font-size:18px;
+  }
+  .preview-thumb:hover::after{ opacity:1; }
+  #previewPdfIcon{ cursor:pointer; }
   .preview-frame img{width:84px;height:84px;object-fit:cover;display:block;}
   .scan-beam{
     position:absolute; left:0; right:0; top:0; height:2px;
@@ -319,7 +326,10 @@
   <div id="result">
     <div class="result-head">
       <h2>Datos extraídos</h2>
-      <span class="stamp">revisar antes de usar</span>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <button type="button" class="btn ghost" id="btnVerFactura" style="padding:7px 14px; font-size:12px;">🔍 Ver factura</button>
+        <span class="stamp">revisar antes de usar</span>
+      </div>
     </div>
 
     <div id="movStatus"></div>
@@ -333,6 +343,15 @@
   </div>
 
   <footer>Los datos se leen automáticamente y pueden contener errores — verifica siempre contra la factura original.</footer>
+</div>
+
+<div class="file-modal" id="fileModal">
+  <div class="file-modal-backdrop" id="fileModalBackdrop"></div>
+  <div class="file-modal-content">
+    <button type="button" class="file-modal-close" id="btnCloseModal" aria-label="Cerrar">✕</button>
+    <img id="modalImg" alt="Factura escaneada" style="display:none;">
+    <iframe id="modalPdf" title="Factura escaneada (PDF)" style="display:none;"></iframe>
+  </div>
 </div>
 
 <script>
@@ -422,6 +441,12 @@ const resultEl = document.getElementById('result');
 const ledger = document.getElementById('ledger');
 const btnAgain = document.getElementById('btnAgain');
 const btnSave = document.getElementById('btnSave');
+const btnVerFactura = document.getElementById('btnVerFactura');
+const fileModal = document.getElementById('fileModal');
+const fileModalBackdrop = document.getElementById('fileModalBackdrop');
+const btnCloseModal = document.getElementById('btnCloseModal');
+const modalImg = document.getElementById('modalImg');
+const modalPdf = document.getElementById('modalPdf');
 
 let currentBase64 = null;
 let currentMediaType = null;
@@ -617,6 +642,33 @@ function handleFile(file){
   };
   reader.readAsDataURL(file);
 }
+
+// Vista completa del documento original -- útil para comparar contra
+// lo que la IA leyó, sin tener que ir a buscar el archivo de nuevo.
+// Usa el mismo base64 que ya se guardó en memoria al elegir el archivo.
+function abrirVistaCompleta(){
+  if (!currentBase64) return;
+  if (currentIsPdf) {
+    modalPdf.src = `data:application/pdf;base64,${currentBase64}`;
+    modalPdf.style.display = 'block';
+    modalImg.style.display = 'none';
+  } else {
+    modalImg.src = `data:${currentMediaType || 'image/jpeg'};base64,${currentBase64}`;
+    modalImg.style.display = 'block';
+    modalPdf.style.display = 'none';
+  }
+  fileModal.classList.add('show');
+}
+function cerrarVistaCompleta(){
+  fileModal.classList.remove('show');
+  modalPdf.src = ''; // deja de renderizar el PDF al cerrar
+}
+btnCloseModal.addEventListener('click', cerrarVistaCompleta);
+fileModalBackdrop.addEventListener('click', cerrarVistaCompleta);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarVistaCompleta(); });
+document.querySelector('.preview-thumb').addEventListener('click', abrirVistaCompleta);
+previewPdfIcon.addEventListener('click', abrirVistaCompleta);
+btnVerFactura.addEventListener('click', abrirVistaCompleta);
 
 btnExtract.addEventListener('click', extractInvoice);
 btnAgain.addEventListener('click', resetAll);
