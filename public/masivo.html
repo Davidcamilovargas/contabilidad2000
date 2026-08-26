@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   .wrap{ max-width:1240px; }
 
@@ -100,8 +101,8 @@
   <div id="uploadZone">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF5A36" stroke-width="1.5"><path d="M12 3v13m0-13l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
     <h2>Sube varias facturas a la vez</h2>
-    <p>Selecciona o arrastra varios archivos (fotos o PDF) — se procesan uno por uno.</p>
-    <input type="file" id="fileInputMasivo" multiple accept="image/*,application/pdf">
+    <p>Selecciona o arrastra varios archivos (fotos o PDF), o un <b>.zip</b> con varias facturas adentro — se procesan uno por uno.</p>
+    <input type="file" id="fileInputMasivo" multiple accept="image/*,application/pdf,.zip,application/zip,application/x-zip-compressed">
   </div>
 
   <div id="progressArea">
@@ -186,11 +187,88 @@ uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag
 uploadZone.addEventListener('drop', (e) => {
   e.preventDefault();
   uploadZone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) procesarLote(e.dataTransfer.files);
+  if (e.dataTransfer.files.length) manejarArchivosSeleccionados(e.dataTransfer.files);
 });
 fileInput.addEventListener('change', () => {
-  if (fileInput.files.length) procesarLote(fileInput.files);
+  if (fileInput.files.length) manejarArchivosSeleccionados(fileInput.files);
 });
+
+// Extensiones que sabemos leer (las mismas que acepta /api/extract).
+const EXT_SOPORTADAS = /\.(jpe?g|png|webp|heic|heif|pdf)$/i;
+
+function mimeFromExt(nombre){
+  const ext = (nombre.split('.').pop() || '').toLowerCase();
+  const mapa = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+    heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf',
+  };
+  return mapa[ext] || 'application/octet-stream';
+}
+
+function esArchivoZip(file){
+  return /\.zip$/i.test(file.name || '') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+}
+
+// Descomprime un .zip y agrega a `salida` cada imagen/PDF que encuentre
+// adentro (recorriendo subcarpetas). Ignora basura típica de zips
+// (metadatos de Mac, archivos ocultos) y cualquier archivo que no sepamos leer.
+async function extraerZip(zipFile, salida){
+  const zip = await JSZip.loadAsync(zipFile);
+  const entradas = Object.values(zip.files);
+  for (const entry of entradas) {
+    if (entry.dir) continue;
+    if (entry.name.startsWith('__MACOSX/')) continue;
+    const nombreArchivo = entry.name.split('/').pop() || '';
+    if (!nombreArchivo || nombreArchivo.startsWith('.')) continue;
+    if (!EXT_SOPORTADAS.test(nombreArchivo)) continue;
+
+    const blob = await entry.async('blob');
+    const tipo = mimeFromExt(nombreArchivo);
+    // Se conserva la ruta dentro del zip (ej. "enero/factura1.jpg") como
+    // nombre, para que el resumen muestre de qué carpeta salió cada una.
+    salida.push(new File([blob], entry.name, { type: tipo }));
+  }
+}
+
+// Punto de entrada único para archivos sueltos y/o .zip mezclados en la
+// misma selección: descomprime los .zip que encuentre y deja el resto
+// de archivos tal cual, para luego procesarlos todos igual que siempre.
+async function manejarArchivosSeleccionados(fileList){
+  const archivos = Array.from(fileList);
+  const zips = archivos.filter(esArchivoZip);
+  const sueltos = archivos.filter((f) => !esArchivoZip(f));
+
+  if (zips.length === 0) {
+    fileInput.value = '';
+    procesarLote(sueltos);
+    return;
+  }
+
+  progressArea.classList.add('show');
+  summaryWrap.classList.remove('show');
+  summaryBody.innerHTML = '';
+  progressText.textContent = zips.length === 1 ? 'Descomprimiendo el .zip...' : `Descomprimiendo ${zips.length} archivos .zip...`;
+  progressBarInner.style.width = '0%';
+  fileInput.value = '';
+
+  const extraidos = [...sueltos];
+  try {
+    for (const zip of zips) {
+      await extraerZip(zip, extraidos);
+    }
+  } catch (err) {
+    console.error('Error leyendo .zip:', err);
+    progressText.textContent = 'No se pudo leer el .zip — verifica que no esté dañado o protegido con contraseña.';
+    return;
+  }
+
+  if (extraidos.length === 0) {
+    progressText.textContent = 'El .zip no tenía imágenes ni PDF reconocibles adentro.';
+    return;
+  }
+
+  procesarLote(extraidos);
+}
 
 function fileToBase64(file){
   return new Promise((resolve, reject) => {

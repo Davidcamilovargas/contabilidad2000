@@ -673,15 +673,72 @@ app.delete('/api/invoices/:id', requireAuth, async (req, res) => {
 // por el modelo Flash vigente (revisa https://ai.google.dev/gemini-api/docs/models).
 const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
-// Endpoint que recibe el archivo (imagen o PDF) y llama a la API gratuita de Gemini
-app.post('/api/extract', requireAuth, async (req, res) => {
-  const { base64, mediaType, isPdf } = req.body;
+// Llama a Gemini con un archivo (imagen o PDF) + un prompt de texto, y
+// devuelve el JSON ya parseado. Centraliza la llamada HTTP y la limpieza
+// de la respuesta (Gemini a veces envuelve el JSON en ```json ... ```)
+// para que /api/extract y /api/extract-rut no dupliquen esta lógica.
+// Si algo falla, lanza un error con `.status` (código HTTP a devolver
+// al navegador) y `.publicMessage` (texto seguro para mostrarle al contador).
+async function llamarGeminiJSON(base64, effectiveMediaType, prompt) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': API_KEY
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { inline_data: { mime_type: effectiveMediaType, data: base64 } },
+              { text: prompt }
+            ]
+          }
+        ]
+      })
+    }
+  );
 
-  if (!base64 || !mediaType) {
-    return res.status(400).json({ error: 'Faltan datos del archivo (base64 o mediaType).' });
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('Error de Gemini API:', response.status, errText);
+    let detail = errText;
+    try {
+      const parsedErr = JSON.parse(errText);
+      detail = parsedErr.error?.message || errText;
+    } catch (_) { /* dejar el texto crudo si no es JSON */ }
+    const err = new Error(detail);
+    err.status = response.status;
+    err.publicMessage = `Error de la API de Gemini (${response.status}): ${detail}`;
+    throw err;
   }
 
-  const prompt = `Eres un asistente contable. Analiza la imagen o documento de esta factura colombiana y extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
+  const data = await response.json();
+  const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!textOut) {
+    const err = new Error('Gemini no devolvió texto.');
+    err.status = 500;
+    err.publicMessage = 'No se recibió una respuesta de texto de la API.';
+    throw err;
+  }
+
+  let clean = textOut.trim();
+  clean = clean.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
+
+  try {
+    return JSON.parse(clean);
+  } catch (parseErr) {
+    const err = new Error('No se pudo parsear como JSON: ' + clean.slice(0, 300));
+    err.status = 500;
+    err.publicMessage = 'No se pudo interpretar la respuesta de la IA. Intenta con una imagen más clara.';
+    throw err;
+  }
+}
+
+const INVOICE_PROMPT = `Eres un asistente contable. Analiza la imagen o documento de esta factura colombiana y extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
 
 {
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
@@ -716,57 +773,18 @@ Muchas facturas electrónicas colombianas incluyen una sección "Retenciones" o 
 
 Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, rete_fuente, rete_iva y rete_ica, que en ese caso van en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.`;
 
+// Endpoint que recibe el archivo (imagen o PDF) de una factura y llama a la API gratuita de Gemini
+app.post('/api/extract', requireAuth, async (req, res) => {
+  const { base64, mediaType, isPdf } = req.body;
+
+  if (!base64 || !mediaType) {
+    return res.status(400).json({ error: 'Faltan datos del archivo (base64 o mediaType).' });
+  }
+
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': API_KEY
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { inline_data: { mime_type: effectiveMediaType, data: base64 } },
-                { text: prompt }
-              ]
-            }
-          ]
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Error de Gemini API:', response.status, errText);
-      let detail = errText;
-      try {
-        const parsedErr = JSON.parse(errText);
-        detail = parsedErr.error?.message || errText;
-      } catch (_) { /* dejar el texto crudo si no es JSON */ }
-      return res.status(response.status).json({ error: `Error de la API de Gemini (${response.status}): ${detail}` });
-    }
-
-    const data = await response.json();
-    const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textOut) {
-      return res.status(500).json({ error: 'No se recibió una respuesta de texto de la API.' });
-    }
-
-    let clean = textOut.trim();
-    clean = clean.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch (parseErr) {
-      return res.status(500).json({ error: 'No se pudo interpretar la respuesta de la IA. Intenta con una imagen más clara.' });
-    }
+    const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
 
     // Capa de seguridad extra: si la IA devolvió centavos (ej. 39915.96) en
     // vez del entero pedido, se redondea aquí antes de mostrarlo/guardarlo.
@@ -796,8 +814,66 @@ Si algún campo no se puede determinar con certeza, usa una cadena vacía "" par
     res.json(parsed);
 
   } catch (err) {
-    console.error('Error al llamar a Gemini:', err);
-    res.status(500).json({ error: 'Error de conexión con la API de Gemini.' });
+    console.error('Error al llamar a Gemini (factura):', err);
+    res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
+  }
+});
+
+// ---------- Lectura del RUT con IA ----------
+
+// Solo estos códigos de responsabilidad tributaria tienen un checkbox en
+// la pantalla de Clientes -- cualquier otro código que la IA encuentre
+// en el RUT se descarta, porque no hay dónde marcarlo en el formulario.
+const RESPONSABILIDADES_SOPORTADAS = new Set(['05', '07', '48', '14', '47', '55']);
+
+const RUT_PROMPT = `Eres un asistente contable colombiano. Analiza este documento, que es un RUT (Registro Único Tributario) emitido por la DIAN, y extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
+
+{
+  "tipo_persona": "'natural' si la Casilla 4 marca 'Persona Natural', 'juridica' si marca 'Persona Jurídica'. Si no es claro, cadena vacía.",
+  "nombre": "Si es persona jurídica: la Razón Social completa (Casilla 12). Si es persona natural: primer apellido + segundo apellido + primer nombre + otros nombres (Casillas 31-35), en el orden 'Nombres Apellidos'. Cadena vacía si no se encuentra con certeza.",
+  "nit": "El Número de Identificación Tributaria (Casilla 5), solo dígitos, SIN el dígito de verificación.",
+  "dv": "El Dígito de Verificación (Casilla 6), un solo dígito. Cadena vacía si no aparece.",
+  "direccion": "La dirección principal registrada (sección de ubicación / dirección seccional), cadena vacía si no aparece con claridad.",
+  "ciudad": "El municipio o ciudad de esa dirección principal, cadena vacía si no aparece.",
+  "telefono": "El teléfono principal o 'Teléfono 1' si aparece, solo dígitos, cadena vacía si no aparece.",
+  "correo": "El correo electrónico si aparece en el documento, cadena vacía si no aparece.",
+  "ciiu": "El código CIIU de la Actividad Económica Principal (Casilla 46), solo el número (ej: 6201), cadena vacía si no aparece.",
+  "responsabilidades": "Revisa la sección 'Responsabilidades, Calidades y Atributos' (Casilla 53). De TODOS los códigos marcados ahí, reporta ÚNICAMENTE los que coincidan con esta lista cerrada -- 05 (Renta régimen ordinario), 07 (Agente retenedor renta), 48 (Impuesto sobre las ventas - IVA), 14 (Informante de exógena), 47 (Régimen Simple de Tributación - RST), 55 (Beneficiarios finales). Devuelve los que encuentres de esta lista separados por coma, ej: '05,07,48'. Si el documento no marca ninguno de estos códigos específicos, cadena vacía. Ignora cualquier otro código que no esté en esta lista."
+}
+
+Este documento varía de formato según el año en que se generó, pero la numeración de casillas del RUT es estándar -- básate en las etiquetas de cada sección más que en la posición exacta.
+
+No inventes datos que no estén en el documento. Si algún campo no se puede leer con certeza, usa una cadena vacía "" para ese campo -- es preferible dejarlo vacío para que el contador lo complete a mano, que adivinar.`;
+
+// Endpoint que recibe el RUT (imagen o PDF) y usa la IA para pre-llenar
+// el formulario de "Agregar cliente" -- el contador siempre revisa y
+// completa lo que falte antes de guardar, esto solo ahorra tecleo.
+app.post('/api/extract-rut', requireAuth, async (req, res) => {
+  const { base64, mediaType, isPdf } = req.body;
+
+  if (!base64 || !mediaType) {
+    return res.status(400).json({ error: 'Faltan datos del archivo (base64 o mediaType).' });
+  }
+
+  const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
+
+  try {
+    const parsed = await llamarGeminiJSON(base64, effectiveMediaType, RUT_PROMPT);
+
+    if (parsed.tipo_persona !== 'natural' && parsed.tipo_persona !== 'juridica') {
+      parsed.tipo_persona = '';
+    }
+
+    const codigos = String(parsed.responsabilidades || '')
+      .split(',')
+      .map((c) => c.trim())
+      .filter((c) => RESPONSABILIDADES_SOPORTADAS.has(c));
+    parsed.responsabilidades = codigos.join(',');
+
+    res.json(parsed);
+  } catch (err) {
+    console.error('Error al llamar a Gemini (RUT):', err);
+    res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
   }
 });
 

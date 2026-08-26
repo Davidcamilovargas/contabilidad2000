@@ -94,12 +94,14 @@
     padding:4px 9px; border-radius:100px; background:#F2EFE7; color:var(--ink-soft);
   }
   .client-chip.retenedor{ background:var(--ember-soft); color:#B5482E; }
+  .row-actions{ display:flex; gap:2px; flex-shrink:0; }
   .del-btn{
     background:none; border:none; color:var(--ink-faint);
     font-family:'JetBrains Mono',monospace; font-size:11.5px;
     cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
   }
   .del-btn:hover{ color:#B0402D; }
+  .del-btn.edit-btn:hover{ color:var(--moss-deep); }
 
   #clientEmpty{
     text-align:center; padding:50px 20px; color:var(--ink-faint);
@@ -144,8 +146,31 @@
 
   <div id="addForm" class="reveal">
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-      <h2>Agregar cliente</h2>
-      <span id="planBadge" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); background:#F2EFE7; padding:6px 12px; border-radius:100px;"></span>
+      <h2 id="formTitle">Agregar cliente</h2>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button type="button" class="btn ghost" id="btnCancelarEdicion" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
+        <span id="planBadge" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); background:#F2EFE7; padding:6px 12px; border-radius:100px;"></span>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">RUT (documento) — opcional</div>
+      <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;">Si lo subes, la IA puede leerlo y completarte varios campos de abajo sola (nombre, NIT, dirección, actividad económica, responsabilidades...). Es opcional — también puedes llenar todo a mano, sin subir nada aquí.</div>
+      <div class="rut-upload">
+        <input type="file" id="inputRutArchivo" accept="application/pdf,image/*">
+        <span class="rut-filename" id="rutFilename"></span>
+      </div>
+      <button type="button" class="btn ghost" id="btnLeerRut" style="display:none; margin-top:12px; padding:9px 16px; font-size:12.5px;">✨ Leer datos del RUT con IA</button>
+
+      <div id="rutProgressWrap" style="display:none; margin-top:14px;">
+        <div id="rutProgressText" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); margin-bottom:6px;"></div>
+        <div style="height:6px; background:var(--line); border-radius:100px; overflow:hidden;">
+          <div id="rutProgressBar" style="height:100%; width:0%; background:var(--ember); border-radius:100px; transition:width .35s ease;"></div>
+        </div>
+      </div>
+
+      <div id="rutIaStatus" style="font-size:12.5px; margin-top:10px; display:none;"></div>
+      <div style="font-size:11.5px; color:var(--ink-faint); margin-top:8px;">Según la calidad del documento, a veces la IA no encuentra todos los campos — revisa siempre antes de guardar.</div>
     </div>
 
     <div class="form-section">
@@ -265,14 +290,6 @@
     </div>
 
     <div class="form-section">
-      <div class="form-section-title">RUT (documento)</div>
-      <div class="rut-upload">
-        <input type="file" id="inputRutArchivo" accept="application/pdf,image/*">
-        <span class="rut-filename" id="rutFilename"></span>
-      </div>
-    </div>
-
-    <div class="form-section">
       <div class="form-section-title">Contacto principal</div>
       <div class="form-row cols-4">
         <div class="field">
@@ -293,8 +310,8 @@
         </div>
       </div>
     </div>
-
-    <div class="form-section">
+    <!-- Información bancaria (opcional) -->
+<!--    <div class="form-section">
       <div class="form-section-title">Información bancaria (opcional)</div>
       <div class="form-row cols-2" style="grid-template-columns:1.5fr 1fr 1.5fr;">
         <div class="field">
@@ -314,7 +331,7 @@
           <input type="text" id="inputNumeroCuenta" placeholder="00000000000">
         </div>
       </div>
-    </div>
+    </div>-->
 
     <button class="btn" id="btnAdd">+ Agregar cliente</button>
     <div id="formError"></div>
@@ -358,6 +375,10 @@ const inputCiiuOtro = document.getElementById('inputCiiuOtro');
 const ciiuOtroWrap = document.getElementById('ciiuOtroWrap');
 const inputRutArchivo = document.getElementById('inputRutArchivo');
 const rutFilename = document.getElementById('rutFilename');
+const btnLeerRut = document.getElementById('btnLeerRut');
+const rutIaStatus = document.getElementById('rutIaStatus');
+const btnCancelarEdicion = document.getElementById('btnCancelarEdicion');
+const formTitle = document.getElementById('formTitle');
 const inputContactoNombre = document.getElementById('inputContactoNombre');
 const inputContactoCargo = document.getElementById('inputContactoCargo');
 const inputContactoTelefono = document.getElementById('inputContactoTelefono');
@@ -372,22 +393,180 @@ let clients = [];
 let allInvoices = [];
 let currentRutBase64 = '';
 let currentRutNombre = '';
+// true solo si el contador tocó el input de archivo del RUT en esta
+// sesión del formulario -- al editar, si no lo toca, no mandamos nada
+// de RUT al guardar (para no borrar el que ya estaba guardado).
+let rutFileChanged = false;
+// null = modo "agregar cliente nuevo". Si tiene un id, el formulario
+// está editando ese cliente y el botón guarda con PATCH en vez de POST.
+let editingId = null;
 
 inputCiiu.addEventListener('change', () => {
   ciiuOtroWrap.style.display = inputCiiu.value === 'otro' ? 'flex' : 'none';
 });
 
 inputRutArchivo.addEventListener('change', () => {
+  rutFileChanged = true;
   const file = inputRutArchivo.files[0];
-  if (!file) { currentRutBase64 = ''; currentRutNombre = ''; rutFilename.textContent = ''; return; }
+  if (!file) {
+    currentRutBase64 = ''; currentRutNombre = ''; rutFilename.textContent = '';
+    btnLeerRut.style.display = 'none';
+    rutIaStatus.style.display = 'none';
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     currentRutBase64 = reader.result.split(',')[1];
     currentRutNombre = file.name;
     rutFilename.textContent = '✓ ' + file.name;
+    btnLeerRut.style.display = 'inline-block';
+    rutIaStatus.style.display = 'none';
   };
   reader.readAsDataURL(file);
 });
+
+// Barra de progreso "simulada" mientras se lee el RUT -- no hay forma de
+// saber el % real de avance de la IA (es una sola llamada al servidor),
+// así que la barra avanza sola con el tiempo y se frena cerca del 90%
+// para no dar la sensación de que ya terminó cuando todavía no responde.
+// Esto es solo para que el contador vea que algo está pasando, no que la
+// pantalla quedó pegada.
+function iniciarProgresoFalsoRut(){
+  const wrap = document.getElementById('rutProgressWrap');
+  const texto = document.getElementById('rutProgressText');
+  const barra = document.getElementById('rutProgressBar');
+
+  wrap.style.display = 'block';
+  barra.style.width = '0%';
+  texto.textContent = 'Subiendo el documento...';
+
+  let pct = 0;
+  const interval = setInterval(() => {
+    if (pct < 20) pct += 4;
+    else if (pct < 70) pct += 2;
+    else if (pct < 90) pct += 0.5;
+    pct = Math.min(pct, 90);
+    barra.style.width = pct + '%';
+    if (pct >= 20) texto.textContent = 'Leyendo el RUT con IA...';
+  }, 220);
+
+  return {
+    completar(){
+      clearInterval(interval);
+      barra.style.width = '100%';
+      texto.textContent = '✓ Lectura completa';
+      setTimeout(() => { wrap.style.display = 'none'; }, 700);
+    },
+    detener(){
+      clearInterval(interval);
+      wrap.style.display = 'none';
+    },
+  };
+}
+
+// Manda el RUT que se acaba de seleccionar a /api/extract-rut y usa lo
+// que devuelva la IA para pre-llenar el formulario. No todos los RUT
+// traen todos los campos igual de claros -- lo que no se pueda leer se
+// deja para que el contador lo complete a mano.
+btnLeerRut.addEventListener('click', async () => {
+  if (!currentRutBase64) return;
+  const file = inputRutArchivo.files[0];
+  const textoOriginal = btnLeerRut.textContent;
+  btnLeerRut.disabled = true;
+  btnLeerRut.textContent = 'Leyendo RUT...';
+  rutIaStatus.style.display = 'none';
+  const progreso = iniciarProgresoFalsoRut();
+
+  try {
+    const isPdf = (file && file.type === 'application/pdf') || /\.pdf$/i.test(currentRutNombre || '');
+    const res = await fetch('/api/extract-rut', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base64: currentRutBase64,
+        mediaType: (file && file.type) || (isPdf ? 'application/pdf' : 'image/jpeg'),
+        isPdf,
+      }),
+    });
+    const data = await leerRespuestaJSON(res);
+    if (!res.ok) throw new Error(data.error || 'No se pudo leer el RUT.');
+
+    progreso.completar();
+
+    const camposClave = ['nombre', 'nit', 'direccion', 'ciudad', 'ciiu', 'responsabilidades'];
+    const encontrados = camposClave.filter((k) => data[k]).length;
+
+    aplicarDatosRut(data);
+
+    if (encontrados >= camposClave.length - 1) {
+      rutIaStatus.textContent = '✓ Datos completados desde el RUT — revisa antes de guardar.';
+      rutIaStatus.style.color = 'var(--moss-deep)';
+    } else if (encontrados > 0) {
+      rutIaStatus.textContent = '⚠ Solo se pudieron leer algunos datos del RUT — completa el resto a mano.';
+      rutIaStatus.style.color = 'var(--stamp)';
+    } else {
+      rutIaStatus.textContent = '⚠ No se pudo leer ningún dato de este RUT — complétalos a mano.';
+      rutIaStatus.style.color = 'var(--stamp)';
+    }
+    rutIaStatus.style.display = 'block';
+  } catch (err) {
+    progreso.detener();
+    rutIaStatus.textContent = '✕ ' + err.message;
+    rutIaStatus.style.color = 'var(--stamp)';
+    rutIaStatus.style.display = 'block';
+  } finally {
+    btnLeerRut.disabled = false;
+    btnLeerRut.textContent = textoOriginal;
+  }
+});
+
+// Lee la respuesta como texto primero y recién ahí intenta convertirla a
+// JSON -- si el servidor responde con una página HTML en vez de JSON
+// (típicamente porque la ruta /api/extract-rut todavía no existe en el
+// servidor que está corriendo, por ejemplo si quedó una versión vieja de
+// server.js sin reiniciar), esto da un mensaje claro en vez del típico
+// "Unexpected token '<' ... is not valid JSON".
+async function leerRespuestaJSON(res){
+  const texto = await res.text();
+  try {
+    return JSON.parse(texto);
+  } catch (e) {
+    throw new Error('El servidor respondió con algo inesperado, no con el resultado de la IA. Revisa que server.js esté actualizado y el servidor reiniciado (o redesplegado).');
+  }
+}
+
+// Rellena el formulario con lo que devolvió /api/extract-rut. Solo toca
+// un campo cuando la IA sí encontró algo -- si vino vacío, se deja lo
+// que ya hubiera en el formulario (por si el contador ya lo escribió).
+function aplicarDatosRut(d){
+  if (d.nombre) inputNombre.value = d.nombre;
+  if (d.nit) inputNit.value = d.nit;
+  if (d.dv) inputDv.value = d.dv;
+  if (d.tipo_persona) inputTipoPersona.value = d.tipo_persona;
+  if (d.direccion) inputDireccion.value = d.direccion;
+  if (d.ciudad) inputCiudad.value = d.ciudad;
+  if (d.telefono) inputTelefono.value = d.telefono;
+  if (d.correo) inputCorreo.value = d.correo;
+
+  if (d.ciiu) {
+    const opcionExiste = [...inputCiiu.options].some((o) => o.value === d.ciiu);
+    if (opcionExiste) {
+      inputCiiu.value = d.ciiu;
+      ciiuOtroWrap.style.display = 'none';
+    } else {
+      inputCiiu.value = 'otro';
+      inputCiiuOtro.value = d.ciiu;
+      ciiuOtroWrap.style.display = 'flex';
+    }
+  }
+
+  if (d.responsabilidades) {
+    const codigos = d.responsabilidades.split(',').map((c) => c.trim());
+    document.querySelectorAll('.resp-code').forEach((cb) => {
+      if (codigos.includes(cb.value)) cb.checked = true;
+    });
+  }
+}
 
 function statsForClient(client){
   const byId = allInvoices.filter(inv => inv.cliente_id === client.id);
@@ -425,7 +604,10 @@ function renderClients(){
           <div class="nit">NIT ${c.nit}${c.dv ? '-' + c.dv : ''}</div>
         </div>
         <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
-        <button class="del-btn" data-id="${c.id}">eliminar</button>
+        <div class="row-actions">
+          <button class="del-btn edit-btn" data-action="editar" data-id="${c.id}">editar</button>
+          <button class="del-btn" data-action="eliminar" data-id="${c.id}">eliminar</button>
+        </div>
       </div>
       ${chips.length ? `<div class="client-chips">${chips.join('')}</div>` : ''}
     `;
@@ -438,19 +620,28 @@ function renderClients(){
 }
 
 clientListEl.addEventListener('click', async (e) => {
-  if (!e.target.classList.contains('del-btn')) return;
-  const id = e.target.dataset.id;
-  if (!confirm('¿Eliminar este cliente de la lista? Las facturas ya guardadas no se borran.')) return;
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const id = btn.dataset.id;
 
-  try {
-    const res = await fetch('/api/clients/' + id, { method: 'DELETE' });
-    if (!res.ok) throw new Error('No se pudo eliminar.');
-    clients = clients.filter(c => c.id !== id);
-    renderClients();
-    planInfo.clientesActuales = Math.max(0, planInfo.clientesActuales - 1);
-    renderPlanBadge();
-  } catch (err) {
-    alert('No se pudo eliminar: ' + err.message);
+  if (btn.dataset.action === 'editar') {
+    iniciarEdicion(id);
+    return;
+  }
+
+  if (btn.dataset.action === 'eliminar') {
+    if (!confirm('¿Eliminar este cliente de la lista? Las facturas ya guardadas no se borran.')) return;
+    try {
+      const res = await fetch('/api/clients/' + id, { method: 'DELETE' });
+      if (!res.ok) throw new Error('No se pudo eliminar.');
+      clients = clients.filter(c => c.id !== id);
+      if (editingId === id) cancelarEdicion();
+      renderClients();
+      planInfo.clientesActuales = Math.max(0, planInfo.clientesActuales - 1);
+      renderPlanBadge();
+    } catch (err) {
+      alert('No se pudo eliminar: ' + err.message);
+    }
   }
 });
 
@@ -471,6 +662,9 @@ function resetForm(){
   rutFilename.textContent = '';
   currentRutBase64 = '';
   currentRutNombre = '';
+  rutFileChanged = false;
+  btnLeerRut.style.display = 'none';
+  rutIaStatus.style.display = 'none';
   inputContactoNombre.value = '';
   inputContactoCargo.value = '';
   inputContactoTelefono.value = '';
@@ -479,6 +673,71 @@ function resetForm(){
   inputTipoCuenta.value = '';
   inputNumeroCuenta.value = '';
 }
+
+// Lleva al formulario los datos de un cliente ya guardado, para editarlo.
+function iniciarEdicion(id){
+  const c = clients.find((x) => x.id === id);
+  if (!c) return;
+
+  resetForm();
+  editingId = id;
+
+  inputNombre.value = c.nombre || '';
+  inputNit.value = c.nit || '';
+  inputDv.value = c.dv || '';
+  inputTipoPersona.value = c.tipo_persona || '';
+  inputDireccion.value = c.direccion || '';
+  inputCiudad.value = c.ciudad || '';
+  inputTelefono.value = c.telefono || '';
+  inputCorreo.value = c.correo || '';
+
+  const respGuardadas = (c.responsabilidades || '').split(',').map((s) => s.trim());
+  document.querySelectorAll('.resp-code').forEach((cb) => { cb.checked = respGuardadas.includes(cb.value); });
+
+  if (c.ciiu && [...inputCiiu.options].some((o) => o.value === c.ciiu)) {
+    inputCiiu.value = c.ciiu;
+  } else if (c.ciiu) {
+    inputCiiu.value = 'otro';
+    inputCiiuOtro.value = c.ciiu;
+    ciiuOtroWrap.style.display = 'flex';
+  }
+
+  // El archivo del RUT no se puede "precargar" en un <input type="file">
+  // por seguridad del navegador -- si ya tenía uno guardado, se lo
+  // indicamos y el contador solo necesita elegir uno nuevo si lo quiere
+  // reemplazar. Si no elige nada, el RUT guardado se queda intacto.
+  rutFilename.textContent = c.rut_archivo
+    ? ('✓ ' + (c.rut_archivo_nombre || 'RUT ya guardado') + ' — elige un archivo para reemplazarlo')
+    : '';
+
+  inputContactoNombre.value = c.contacto_nombre || '';
+  inputContactoCargo.value = c.contacto_cargo || '';
+  inputContactoTelefono.value = c.contacto_telefono || '';
+  inputContactoCorreo.value = c.contacto_correo || '';
+  inputBanco.value = c.banco || '';
+  inputTipoCuenta.value = c.tipo_cuenta || '';
+  inputNumeroCuenta.value = c.numero_cuenta || '';
+
+  formTitle.textContent = 'Editar cliente';
+  btnAdd.textContent = 'Guardar cambios';
+  btnCancelarEdicion.style.display = 'inline-block';
+  formError.classList.remove('show');
+  renderPlanBadge(); // el límite de plan no debe bloquear guardar una edición
+
+  document.getElementById('addForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function cancelarEdicion(){
+  editingId = null;
+  resetForm();
+  formTitle.textContent = 'Agregar cliente';
+  btnAdd.textContent = '+ Agregar cliente';
+  btnCancelarEdicion.style.display = 'none';
+  formError.classList.remove('show');
+  renderPlanBadge();
+}
+
+btnCancelarEdicion.addEventListener('click', cancelarEdicion);
 
 btnAdd.addEventListener('click', async () => {
   formError.classList.remove('show');
@@ -495,48 +754,68 @@ btnAdd.addEventListener('click', async () => {
   const ciiuFinal = inputCiiu.value === 'otro' ? inputCiiuOtro.value.trim() : inputCiiu.value;
   const responsabilidades = [...document.querySelectorAll('.resp-code:checked')].map(cb => cb.value).join(',');
 
+  const payload = {
+    nombre, nit, dv,
+    tipo_persona: inputTipoPersona.value,
+    direccion: inputDireccion.value.trim(),
+    ciudad: inputCiudad.value.trim(),
+    telefono: inputTelefono.value.trim(),
+    correo: inputCorreo.value.trim(),
+    ciiu: ciiuFinal,
+    responsabilidades,
+    contacto_nombre: inputContactoNombre.value.trim(),
+    contacto_cargo: inputContactoCargo.value.trim(),
+    contacto_telefono: inputContactoTelefono.value.trim(),
+    contacto_correo: inputContactoCorreo.value.trim(),
+    banco: inputBanco.value.trim(),
+    tipo_cuenta: inputTipoCuenta.value,
+    numero_cuenta: inputNumeroCuenta.value.trim(),
+  };
+
+  // El RUT solo se manda si el contador tocó el input de archivo en esta
+  // sesión -- al editar, si no eligió uno nuevo, no se envían estas 2
+  // llaves para que el servidor no toque (ni borre) el RUT ya guardado.
+  if (!editingId || rutFileChanged) {
+    payload.rut_archivo = currentRutBase64;
+    payload.rut_archivo_nombre = currentRutNombre;
+  }
+
+  const estabaEditando = !!editingId;
   btnAdd.disabled = true;
+  btnAdd.textContent = estabaEditando ? 'Guardando...' : 'Agregando...';
   try {
-    const res = await fetch('/api/clients', {
-      method: 'POST',
+    const url = estabaEditando ? ('/api/clients/' + editingId) : '/api/clients';
+    const method = estabaEditando ? 'PATCH' : 'POST';
+    const res = await fetch(url, {
+      method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nombre, nit, dv,
-        tipo_persona: inputTipoPersona.value,
-        direccion: inputDireccion.value.trim(),
-        ciudad: inputCiudad.value.trim(),
-        telefono: inputTelefono.value.trim(),
-        correo: inputCorreo.value.trim(),
-        ciiu: ciiuFinal,
-        responsabilidades,
-        rut_archivo: currentRutBase64,
-        rut_archivo_nombre: currentRutNombre,
-        contacto_nombre: inputContactoNombre.value.trim(),
-        contacto_cargo: inputContactoCargo.value.trim(),
-        contacto_telefono: inputContactoTelefono.value.trim(),
-        contacto_correo: inputContactoCorreo.value.trim(),
-        banco: inputBanco.value.trim(),
-        tipo_cuenta: inputTipoCuenta.value,
-        numero_cuenta: inputNumeroCuenta.value.trim(),
-      })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'No se pudo agregar.');
+    if (!res.ok) throw new Error(data.error || (estabaEditando ? 'No se pudo guardar el cambio.' : 'No se pudo agregar.'));
 
-    clients.push(data);
+    if (estabaEditando) {
+      const idx = clients.findIndex((c) => c.id === editingId);
+      if (idx !== -1) clients[idx] = data;
+      cancelarEdicion();
+    } else {
+      clients.push(data);
+      planInfo.clientesActuales += 1;
+      renderPlanBadge();
+      resetForm();
+      inputNombre.focus();
+    }
+
     clients.sort((a, b) => a.nombre.localeCompare(b.nombre));
     renderClients();
-
-    planInfo.clientesActuales += 1;
-    renderPlanBadge();
-
-    resetForm();
-    inputNombre.focus();
   } catch (err) {
     formError.textContent = err.message;
     formError.classList.add('show');
   } finally {
     btnAdd.disabled = false;
+    // editingId ya quedó en null (por cancelarEdicion) si la edición se
+    // guardó bien -- este texto siempre refleja el estado real actual.
+    btnAdd.textContent = editingId ? 'Guardar cambios' : '+ Agregar cliente';
   }
 });
 
@@ -570,8 +849,11 @@ function renderPlanBadge(){
   const alLimite = limiteClientes !== null && clientesActuales >= limiteClientes;
   badge.style.color = alLimite ? '#B0402D' : 'var(--ink-soft)';
   badge.style.background = alLimite ? '#FBE4DE' : '#F2EFE7';
-  btnAdd.disabled = alLimite;
-  btnAdd.title = alLimite ? `Llegaste al máximo de tu plan (${limiteClientes} clientes). Habla con nosotros para subir de plan.` : '';
+  // El límite de plan solo debe bloquear AGREGAR un cliente nuevo -- si
+  // se está editando uno que ya existe, no cuenta como uno adicional.
+  const bloqueaGuardar = alLimite && !editingId;
+  btnAdd.disabled = bloqueaGuardar;
+  btnAdd.title = bloqueaGuardar ? `Llegaste al máximo de tu plan (${limiteClientes} clientes). Habla con nosotros para subir de plan.` : '';
 }
 
 async function requireAuthAndInit(){
