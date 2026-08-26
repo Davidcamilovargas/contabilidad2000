@@ -617,6 +617,7 @@ function handleFile(file){
   resultEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');
+  btnExtract.textContent = 'Leer factura'; // es un archivo distinto, no un reintento
 
   currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
 
@@ -689,7 +690,29 @@ function resetAll(){
   currentDesgloseCategorias = {};
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
+  btnExtract.textContent = 'Leer factura';
   window.scrollTo({top:0, behavior:'smooth'});
+}
+
+// No hay forma de saber cuánto va a tardar la IA en leer una factura --
+// varía según el tamaño del archivo y qué tan ocupado esté el modelo
+// gratuito de Gemini en ese momento. En vez de inventar una barra de
+// progreso falsa, se muestra un contador real de segundos transcurridos
+// -- así el contador (persona) sabe que sigue viva la espera, no que la
+// pantalla se congeló.
+let contadorLecturaInterval = null;
+function iniciarContadorLectura(){
+  let segundos = 0;
+  statusText.textContent = 'Leyendo factura… 0s';
+  contadorLecturaInterval = setInterval(() => {
+    segundos += 1;
+    let texto = `Leyendo factura… ${segundos}s`;
+    if (segundos >= 8) texto += ' — puede tardar un poco más si la IA está saturada';
+    statusText.textContent = texto;
+  }, 1000);
+}
+function detenerContadorLectura(){
+  if (contadorLecturaInterval) { clearInterval(contadorLecturaInterval); contadorLecturaInterval = null; }
 }
 
 async function extractInvoice(){
@@ -698,10 +721,10 @@ async function extractInvoice(){
   savedMsg.classList.remove('show');
   resultEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
-  statusText.textContent = "Leyendo factura…";
   statusEl.classList.add('show');
   scanBeam.classList.add('active');
   btnExtract.disabled = true;
+  iniciarContadorLectura();
 
   try{
     const response = await fetch('/api/extract', {
@@ -730,7 +753,12 @@ async function extractInvoice(){
   }catch(e){
     errEl.textContent = "No se pudo leer la factura: " + e.message;
     errEl.classList.add('show');
+    // El mismo botón sirve para reintentar con el mismo archivo (sigue
+    // en memoria) -- se lo dejamos explícito para que no piense que
+    // tiene que volver a subirlo.
+    btnExtract.textContent = '🔄 Intentar de nuevo';
   }finally{
+    detenerContadorLectura();
     statusEl.classList.remove('show');
     scanBeam.classList.remove('active');
     btnExtract.disabled = false;
