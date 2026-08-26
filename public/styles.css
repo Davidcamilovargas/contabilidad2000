@@ -196,6 +196,32 @@ footer{
 }
 .file-modal-close:hover{ transform:scale(1.08); }
 
+/* ---------- ficha de detalle de una factura (solo lectura, para revisar
+   lo que leyó la IA de un vistazo -- ej. dentro del modal de Carga masiva) ---------- */
+.factura-detalle{ font-size:13px; }
+.factura-detalle .fd-movimiento{
+  display:flex; align-items:center; gap:10px; font-family:'JetBrains Mono',monospace; font-size:12.5px;
+  border:1px solid var(--moss); background:#E3F3EE; color:#154F41;
+  padding:11px 14px; border-radius:8px; margin-bottom:14px;
+}
+.factura-detalle .fd-movimiento.egreso{ border-color:var(--ember); background:var(--ember-soft); color:#B5482E; }
+.factura-detalle .fd-movimiento.alerta{ border-color:#E8B84B; background:#FBF3D9; color:#7A5C0A; }
+.factura-detalle .fd-dot{ width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.factura-detalle .fd-table{ border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--paper-raised); }
+.factura-detalle .fd-row{ display:grid; grid-template-columns:170px 1fr; border-bottom:1px solid var(--line); }
+.factura-detalle .fd-row:last-child{ border-bottom:none; }
+.factura-detalle .fd-label{
+  font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--ink-soft); padding:10px 14px; background:#F2EFE7; border-right:1px solid var(--line);
+  display:flex; align-items:center;
+}
+.factura-detalle .fd-value{ padding:10px 14px; display:flex; align-items:center; font-size:13.5px; color:var(--ink); word-break:break-word; }
+.factura-detalle .fd-value.money{ font-family:'JetBrains Mono',monospace; font-weight:600; }
+@media (max-width:480px){
+  .factura-detalle .fd-row{ grid-template-columns:1fr; }
+  .factura-detalle .fd-label{ border-right:none; border-bottom:1px solid var(--line); }
+}
+
 @media (prefers-reduced-motion: reduce){
   *, *::before, *::after{
     animation-duration:0.01ms !important;

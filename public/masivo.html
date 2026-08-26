@@ -58,6 +58,29 @@
   }
   .btn-ver:hover{ border-color:var(--ember); color:var(--ember-deep); }
 
+  /* El modal de Carga masiva es más ancho que el de Escanear -- muestra
+     el documento original Y la ficha completa que leyó la IA, lado a
+     lado, para comparar sin tener que adivinar si acertó. */
+  #fileModal .file-modal-content{
+    max-width:min(1180px, 95vw); width:100%; max-height:92vh;
+    display:flex; gap:18px; align-items:stretch;
+  }
+  #modalPreview{
+    flex:1 1 42%; min-width:0; display:flex; align-items:center; justify-content:center;
+    background:#0E1315; border-radius:6px; overflow:hidden;
+  }
+  #modalPreview img{ max-width:100%; max-height:82vh; object-fit:contain; }
+  #modalPreview iframe{ width:100%; height:82vh; border:none; background:#fff; }
+  #modalDatos{
+    flex:1 1 58%; min-width:0; overflow-y:auto; max-height:82vh; padding-right:6px;
+    --paper-raised:#FBF9F4; --ink:#1B2420; --ink-soft:#4E5A52; --ink-faint:#8A9289; --line:#DEDACD;
+  }
+  @media (max-width:820px){
+    #fileModal .file-modal-content{ flex-direction:column; overflow-y:auto; }
+    #modalPreview img, #modalPreview iframe{ max-height:34vh; }
+    #modalDatos{ max-height:none; }
+  }
+
   .status-badge{
     display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:11px;
     padding:4px 9px; border-radius:100px; white-space:nowrap;
@@ -144,8 +167,11 @@
   <div class="file-modal-backdrop" id="fileModalBackdrop"></div>
   <div class="file-modal-content">
     <button type="button" class="file-modal-close" id="btnCloseModal" aria-label="Cerrar">✕</button>
-    <img id="modalImg" alt="Factura escaneada" style="display:none;">
-    <iframe id="modalPdf" title="Factura escaneada (PDF)" style="display:none;"></iframe>
+    <div id="modalPreview">
+      <img id="modalImg" alt="Factura escaneada" style="display:none;">
+      <iframe id="modalPdf" title="Factura escaneada (PDF)" style="display:none;"></iframe>
+    </div>
+    <div id="modalDatos"></div>
   </div>
 </div>
 
@@ -181,6 +207,29 @@ const CATEGORIAS = [
   ["hoteles_restaurantes","Hoteles y restaurantes"],
   ["otro","Otro"],
 ];
+const CATEGORIA_LABELS = Object.fromEntries(CATEGORIAS);
+
+// Mismos campos que se ven en la ficha de Escanear -- para poder
+// mostrar el detalle completo de una factura del lote (no solo el
+// resumen de la fila) dentro del modal de "Ver".
+const FICHA_CAMPOS = [
+  {key:'tipo_doc', label:'Tipo Doc (13/31)'},
+  {key:'nit_cc', label:'Nit Emisor (Vendedor)'},
+  {key:'dv', label:'DV'},
+  {key:'nombre_razon_social', label:'Nombre Emisor (Vendedor)'},
+  {key:'adquiriente_nit', label:'Nit Adquiriente (Comprador)'},
+  {key:'adquiriente_nombre', label:'Nombre Adquiriente (Comprador)'},
+  {key:'letras_fe', label:'Letras F-E'},
+  {key:'numeros_fe', label:'Números F-E'},
+  {key:'fecha_factura', label:'Fecha Factura'},
+  {key:'valor_sin_iva', label:'Valor Sin IVA', money:true},
+  {key:'valor_iva', label:'Valor IVA', money:true},
+  {key:'valor_con_iva', label:'Valor Con IVA', money:true},
+  {key:'rete_fuente', label:'Rete Fuente', money:true},
+  {key:'rete_iva', label:'Rete IVA', money:true},
+  {key:'rete_ica', label:'Rete ICA', money:true},
+  {key:'concepto', label:'Concepto'},
+];
 
 const uploadZone = document.getElementById('uploadZone');
 const fileInput = document.getElementById('fileInputMasivo');
@@ -207,6 +256,74 @@ let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, es
 // liviano y funciona igual para imagen o PDF.
 let urlModalActual = null;
 
+// Dibuja el mismo aviso de "✓ Ingreso/Egreso" que se ve en Escanear --
+// así, de un vistazo, se sabe si la IA identificó bien al cliente, sin
+// tener que ir a comparar la fila contra la factura original.
+function renderFichaMovimiento(item){
+  if (item.estado === 'error') {
+    return `<div class="fd-movimiento alerta"><span class="fd-dot"></span><span>✕ No se pudo leer este archivo con la IA.</span></div>`;
+  }
+  if (item.estado === 'revisar') {
+    return `<div class="fd-movimiento alerta"><span class="fd-dot"></span><span>⚠ No se identificó el cliente automáticamente -- selecciónalo en la fila de la tabla.</span></div>`;
+  }
+  const cliente = myClients.find(c => c.id === item.clienteId);
+  const label = item.tipoMovimiento === 'ingreso' ? 'Ingreso' : 'Egreso';
+  const detalle = item.tipoMovimiento === 'ingreso' ? 'le vendió a' : 'le compró a';
+  const otraParte = item.tipoMovimiento === 'ingreso'
+    ? (item.data?.adquiriente_nombre || 'su cliente')
+    : (item.data?.nombre_razon_social || 'su proveedor');
+  const claseTipo = item.tipoMovimiento === 'ingreso' ? '' : 'egreso';
+  return `
+    <div class="fd-movimiento ${claseTipo}">
+      <span class="fd-dot"></span>
+      <span>✓ <b>${label}</b> — ${escapeHtml(cliente ? cliente.nombre : '')} ${detalle} ${escapeHtml(otraParte)}.</span>
+    </div>
+  `;
+}
+
+// Ficha completa de una factura del lote -- todos los campos que leyó
+// la IA, de solo lectura (la edición real sigue pasando en la fila de
+// la tabla). Esto es solo para comprobar de un vistazo si acertó.
+function renderFichaCompleta(item){
+  const modalDatos = document.getElementById('modalDatos');
+
+  if (item.estado === 'error' || !item.data) {
+    modalDatos.innerHTML = `<div class="factura-detalle">${renderFichaMovimiento(item)}</div>`;
+    return;
+  }
+
+  const d = item.data;
+  const filasCampos = FICHA_CAMPOS.map((f) => {
+    let valor = d[f.key];
+    if (f.money) {
+      valor = '$' + (Number(valor) || 0).toLocaleString('es-CO');
+    } else if (valor === undefined || valor === null || valor === '') {
+      valor = '—';
+    }
+    return `
+      <div class="fd-row">
+        <div class="fd-label">${escapeHtml(f.label)}</div>
+        <div class="fd-value${f.money ? ' money' : ''}">${escapeHtml(valor)}</div>
+      </div>
+    `;
+  }).join('');
+
+  const categoriaLabel = CATEGORIA_LABELS[d.categoria_concepto] || d.categoria_concepto || '—';
+  const filaCategoria = `
+    <div class="fd-row">
+      <div class="fd-label">Categoría (retención)</div>
+      <div class="fd-value">${escapeHtml(categoriaLabel)}</div>
+    </div>
+  `;
+
+  modalDatos.innerHTML = `
+    <div class="factura-detalle">
+      ${renderFichaMovimiento(item)}
+      <div class="fd-table">${filasCampos}${filaCategoria}</div>
+    </div>
+  `;
+}
+
 function abrirVistaCompleta(item){
   if (!item || !item.file) return;
   if (urlModalActual) URL.revokeObjectURL(urlModalActual); // libera la vista anterior antes de crear una nueva
@@ -222,6 +339,7 @@ function abrirVistaCompleta(item){
     modalImg.style.display = 'block';
     modalPdf.style.display = 'none';
   }
+  renderFichaCompleta(item);
   fileModal.classList.add('show');
 }
 function cerrarVistaCompleta(){
