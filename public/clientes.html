@@ -669,9 +669,12 @@ function resetForm(){
   inputContactoCargo.value = '';
   inputContactoTelefono.value = '';
   inputContactoCorreo.value = '';
-  inputBanco.value = '';
-  inputTipoCuenta.value = '';
-  inputNumeroCuenta.value = '';
+  // Los 3 campos de banco están comentados en el HTML por ahora (fase
+  // futura) -- si no existen en la página, no truena, simplemente no
+  // hace nada con ellos.
+  if (inputBanco) inputBanco.value = '';
+  if (inputTipoCuenta) inputTipoCuenta.value = '';
+  if (inputNumeroCuenta) inputNumeroCuenta.value = '';
 }
 
 // Lleva al formulario los datos de un cliente ya guardado, para editarlo.
@@ -714,9 +717,9 @@ function iniciarEdicion(id){
   inputContactoCargo.value = c.contacto_cargo || '';
   inputContactoTelefono.value = c.contacto_telefono || '';
   inputContactoCorreo.value = c.contacto_correo || '';
-  inputBanco.value = c.banco || '';
-  inputTipoCuenta.value = c.tipo_cuenta || '';
-  inputNumeroCuenta.value = c.numero_cuenta || '';
+  if (inputBanco) inputBanco.value = c.banco || '';
+  if (inputTipoCuenta) inputTipoCuenta.value = c.tipo_cuenta || '';
+  if (inputNumeroCuenta) inputNumeroCuenta.value = c.numero_cuenta || '';
 
   formTitle.textContent = 'Editar cliente';
   btnAdd.textContent = 'Guardar cambios';
@@ -767,9 +770,11 @@ btnAdd.addEventListener('click', async () => {
     contacto_cargo: inputContactoCargo.value.trim(),
     contacto_telefono: inputContactoTelefono.value.trim(),
     contacto_correo: inputContactoCorreo.value.trim(),
-    banco: inputBanco.value.trim(),
-    tipo_cuenta: inputTipoCuenta.value,
-    numero_cuenta: inputNumeroCuenta.value.trim(),
+    // Estos 3 campos están comentados en el HTML por ahora -- si no
+    // existen en la página, se manda cadena vacía en vez de tronar.
+    banco: inputBanco ? inputBanco.value.trim() : '',
+    tipo_cuenta: inputTipoCuenta ? inputTipoCuenta.value : '',
+    numero_cuenta: inputNumeroCuenta ? inputNumeroCuenta.value.trim() : '',
   };
 
   // El RUT solo se manda si el contador tocó el input de archivo en esta
