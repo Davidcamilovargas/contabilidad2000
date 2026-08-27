@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="/retenciones.js"></script>
 <style>
   .wrap{ max-width:1240px; }
 
@@ -256,6 +257,7 @@ const modalImg = document.getElementById('modalImg');
 const modalPdf = document.getElementById('modalPdf');
 
 let myClients = [];
+let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida, misma fuente que Facturas/Escanear)
 let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, estado: 'procesando'|'listo'|'revisar'|'error'|'guardada' }
 
 // Vista completa del archivo original de una fila del lote -- usa el
@@ -324,11 +326,41 @@ function renderFichaCompleta(item){
     </div>
   `;
 
+  // Retención en la fuente SUGERIDA -- mismo cálculo (retenciones.js)
+  // que usan Escanear y Facturas, cruzando la categoría, el cliente
+  // identificado para esta fila y cualquier tarifa ya aprendida antes
+  // para este proveedor. Ver retenciones.js para el detalle y las
+  // salvedades (esto no reemplaza asesoría tributaria).
+  const clienteFicha = myClients.find(c => c.id === item.clienteId);
+  const sugerido = (clienteFicha && typeof calcularRetencionSugerida === 'function')
+    ? calcularRetencionSugerida(d, clienteFicha, tarifasAprendidas)
+    : null;
+  let filaRetencion = '';
+  if (sugerido) {
+    const montoTexto = sugerido.mismaTarifa
+      ? `$${sugerido.bajo.toLocaleString('es-CO')}`
+      : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')} (según si el proveedor declara renta)`;
+    filaRetencion = `
+      <div class="fd-row">
+        <div class="fd-label">Retención sugerida</div>
+        <div class="fd-value money">${montoTexto}</div>
+      </div>
+    `;
+  } else if (clienteFicha && clienteFicha.agente_retenedor && !(d.regimen_simple === true || d.regimen_simple === 'true')) {
+    filaRetencion = `
+      <div class="fd-row">
+        <div class="fd-label">Retención sugerida</div>
+        <div class="fd-value">— (bajo el umbral, o categoría sin tarifa confirmada)</div>
+      </div>
+    `;
+  }
+
   modalDatos.innerHTML = `
     <div class="factura-detalle">
       ${renderFichaMovimiento(item)}
-      <div class="fd-table">${filasCampos}${filaCategoria}</div>
+      <div class="fd-table">${filasCampos}${filaCategoria}${filaRetencion}</div>
     </div>
+    <div style="font-size:11px;color:var(--ink-faint);margin-top:10px;">Retención estimada, no leída del documento -- no es asesoría tributaria, verifica la norma vigente.</div>
   `;
 }
 
@@ -735,6 +767,16 @@ async function requireAuthAndInit(){
     });
     const clientsRes = await fetch('/api/clients');
     myClients = clientsRes.ok ? await clientsRes.json() : [];
+    try {
+      const tarifasRes = await fetch('/api/tarifas-aprendidas');
+      if (tarifasRes.ok) {
+        const rows = await tarifasRes.json();
+        tarifasAprendidas = {};
+        rows.forEach(t => { tarifasAprendidas[`${t.nit_proveedor}|${t.categoria}`] = Number(t.tarifa); });
+      }
+    } catch (e) {
+      console.warn('No se pudieron cargar las tarifas aprendidas:', e.message);
+    }
   } catch (e) {
     window.location.href = '/login.html';
   }

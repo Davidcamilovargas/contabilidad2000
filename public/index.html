@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<script src="/retenciones.js"></script>
 <style>
   /* Estilos propios de esta página (el resto vive en styles.css) */
 
@@ -403,12 +404,27 @@ const FIELDS = [
   ]}
 ];
 
-// Umbrales orientativos de retención en la fuente para 2026 (UVT = $52.374).
-// IMPORTANTE: estas bases han cambiado varias veces este año por decisiones
-// judiciales — esto es solo una alerta informativa, NO una determinación
-// tributaria. El contador siempre debe verificar la norma vigente.
-const UMBRAL_RETENCION_SERVICIOS = 105000;  // 2 UVT ($52.374 x 2) -- Decreto 572 volvió a aplicar desde el 1 jul 2026 (Consejo de Estado, exp. 30229)
-const UMBRAL_RETENCION_COMPRAS = 524000;    // 10 UVT ($52.374 x 10) -- mismo caso, revirtió a la base original
+// Las tarifas y umbrales de retención en la fuente ahora viven en
+// /public/retenciones.js (cargado en el <head>) -- es la misma tabla
+// que usan Facturas y Carga masiva, para que no queden versiones
+// distintas si cambia la norma. Aquí solo se guardan los textos
+// legibles para el aviso, y un umbral de respaldo para categorías que
+// no están en la tabla (ej. "otro").
+const UMBRAL_RETENCION_RESPALDO = 524000; // 10 UVT ($52.374 x 10) -- solo se usa si la categoría no está en TARIFAS_RETENCION
+const CATEGORIA_TEXTOS_RETENCION = {
+  compras:                  'compras (10 UVT)',
+  compras_tarjeta:          'compras con tarjeta (desde $0)',
+  servicios:                'servicios (2 UVT)',
+  honorarios_juridica:      'honorarios (desde $0)',
+  honorarios_natural:       'honorarios (desde $0)',
+  arrendamiento_muebles:    'arrendamiento de muebles (desde $0)',
+  arrendamiento_inmuebles:  'arrendamiento de inmuebles (10 UVT)',
+  transporte_carga:         'transporte de carga (2 UVT)',
+  transporte_pasajeros:     'transporte de pasajeros (10 UVT)',
+  licenciamiento_software:  'licenciamiento de software (desde $0)',
+  vigilancia_aseo:          'vigilancia/aseo (2 UVT)',
+  hoteles_restaurantes:     'hoteles/restaurantes (2 UVT)',
+};
 
 (function animateTitle(){
   const text = "Kárdex IA";
@@ -457,6 +473,7 @@ let currentRegimenSimple = false;
 let currentCategoriaConceptoIA = '';
 let currentDesgloseCategorias = {};
 let myClients = [];
+let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida)
 
 // Se carga una sola vez al abrir la página -- se usa para detectar
 // automáticamente si una factura es Ingreso o Egreso comparando NITs.
@@ -466,6 +483,23 @@ async function loadMyClients(){
     if (res.ok) myClients = await res.json();
   } catch (e) {
     console.warn('No se pudo cargar la lista de clientes:', e.message);
+  }
+}
+
+// Tarifas ya confirmadas antes por el contador para un proveedor
+// concreto -- si existen, calcularRetencionSugerida() las usa en vez
+// de mostrar un rango. Es la misma fuente que usa Facturas.
+async function loadTarifasAprendidas(){
+  try {
+    const res = await fetch('/api/tarifas-aprendidas');
+    if (!res.ok) return;
+    const rows = await res.json();
+    tarifasAprendidas = {};
+    rows.forEach(t => {
+      tarifasAprendidas[`${t.nit_proveedor}|${t.categoria}`] = Number(t.tarifa);
+    });
+  } catch (e) {
+    console.warn('No se pudieron cargar las tarifas aprendidas:', e.message);
   }
 }
 
@@ -482,6 +516,7 @@ async function requireAuthAndInit(){
       window.location.href = '/login.html';
     });
     loadMyClients();
+    loadTarifasAprendidas();
   } catch (e) {
     window.location.href = '/login.html';
   }
@@ -969,30 +1004,14 @@ function showRetencionHint(data){
   const subtotal = Number(data.valor_sin_iva) || 0;
   const iva = Number(data.valor_iva) || 0;
 
-  // Umbral y texto orientativo por cada una de las 12 categorías --
-  // ya no se agrupa todo en "servicios vs. compras", cada categoría
-  // tiene su propia base mínima real (vigente desde el 1 jul 2026).
-  const UMBRALES_POR_CATEGORIA = {
-    compras:                  { umbral: UMBRAL_RETENCION_COMPRAS,   texto: 'compras (10 UVT)' },
-    compras_tarjeta:          { umbral: 0,                          texto: 'compras con tarjeta (desde $0)' },
-    servicios:                { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'servicios (2 UVT)' },
-    honorarios_juridica:      { umbral: 0,                          texto: 'honorarios (desde $0)' },
-    honorarios_natural:       { umbral: 0,                          texto: 'honorarios (desde $0)' },
-    arrendamiento_muebles:    { umbral: 0,                          texto: 'arrendamiento de muebles (desde $0)' },
-    arrendamiento_inmuebles:  { umbral: UMBRAL_RETENCION_COMPRAS,   texto: 'arrendamiento de inmuebles (10 UVT)' },
-    transporte_carga:         { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'transporte de carga (2 UVT)' },
-    transporte_pasajeros:     { umbral: UMBRAL_RETENCION_COMPRAS,   texto: 'transporte de pasajeros (10 UVT)' },
-    licenciamiento_software:  { umbral: 0,                          texto: 'licenciamiento de software (desde $0)' },
-    vigilancia_aseo:          { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'vigilancia/aseo (2 UVT)' },
-    hoteles_restaurantes:     { umbral: UMBRAL_RETENCION_SERVICIOS, texto: 'hoteles/restaurantes (2 UVT)' },
-  };
-  const config = UMBRALES_POR_CATEGORIA[categoria] || { umbral: UMBRAL_RETENCION_COMPRAS, texto: 'general (10 UVT)' };
-  const umbral = config.umbral;
-  const tipoTexto = config.texto;
-
-  // Régimen Simple está exento de Rete Fuente y Rete ICA, pero NO de
-  // Rete IVA -- son reglas independientes, no se apagan juntas.
-  const posibleReteFuente = !esRegimenSimple && subtotal > 0 && subtotal >= umbral;
+  // Umbral (de la tabla compartida en retenciones.js) y texto legible
+  // para el aviso. Si la categoría no está en la tabla (ej. "otro"),
+  // se usa un umbral de respaldo solo para el mensaje informativo --
+  // calcularRetencionSugerida() de todas formas no calcula nada para
+  // esa categoría.
+  const configCategoria = (typeof TARIFAS_RETENCION !== 'undefined') ? TARIFAS_RETENCION[categoria] : null;
+  const umbral = configCategoria ? configCategoria.umbral : UMBRAL_RETENCION_RESPALDO;
+  const tipoTexto = CATEGORIA_TEXTOS_RETENCION[categoria] || 'general (10 UVT)';
   const posibleReteIva = iva > 0 && subtotal >= umbral;
 
   let html = '';
@@ -1011,18 +1030,53 @@ function showRetencionHint(data){
     return;
   }
 
-  if (posibleReteFuente || posibleReteIva) {
-    const partes = [];
-    if (posibleReteFuente) partes.push(`Rete Fuente (umbral orientativo de ${tipoTexto})`);
-    if (posibleReteIva) partes.push('Rete IVA');
-    html = `<b>⚠ Esta factura podría requerir retención</b>` +
-      `El subtotal (${subtotal.toLocaleString('es-CO')}) supera el umbral orientativo, y el documento no muestra que ya se haya practicado. Revisa: ${partes.join(' y ')}. Verifica si tu empresa es agente retenedor y si aplica.` +
-      `<span class="fine">Umbral basado en la UVT 2026 vigente al momento de construir esta app — esta base cambió varias veces este año, confirma la norma actual antes de decidir. No es asesoría tributaria.</span>`;
+  // A partir de aquí se intenta calcular un monto real (no solo un
+  // aviso de umbral), cruzando la categoría, el cliente que se
+  // identificó para esta factura (¿es agente retenedor?) y cualquier
+  // tarifa ya aprendida antes para este proveedor -- todo con la
+  // misma función/tabla que usan Facturas y Carga masiva.
+  const cliente = myClients.find(c => c.id === currentClienteId);
+  const invParaCalculo = { ...data, desglose_categorias: currentDesgloseCategorias };
+  const sugerido = (cliente && typeof calcularRetencionSugerida === 'function')
+    ? calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas)
+    : null;
+
+  if (sugerido) {
+    const montoTexto = sugerido.mismaTarifa
+      ? `$${sugerido.bajo.toLocaleString('es-CO')}`
+      : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
+    html = `<b>⚠ Retención en la fuente sugerida: ${montoTexto}</b>` +
+      `Calculada sobre ${tipoTexto} para ${escapeHtml(cliente.nombre || 'este cliente')} (agente retenedor). ` +
+      (sugerido.mismaTarifa ? '' : 'El rango depende de si el proveedor es declarante de renta o no — confírmalo para saber cuál de los dos valores aplica. ') +
+      (posibleReteIva ? 'También revisa si corresponde <b>Rete IVA</b> aparte. ' : '') +
+      `<span class="fine">Estimado con la tarifa vigente conocida al construir esta app — la base de retención cambió varias veces en 2026 por decisiones judiciales. Verifica la norma actual antes de aplicar este valor. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
     retencionHintEl.classList.add('show');
-  } else {
-    retencionHintEl.classList.remove('show');
+    return;
   }
+
+  // No se calculó un monto -- el motivo cambia el mensaje, para que el
+  // usuario sepa si es porque falta info (cliente sin identificar) o
+  // porque de verdad no aplica.
+  if (!currentClienteId) {
+    html = `<b>ℹ Retención no calculada</b>` +
+      `Aún no se ha identificado el cliente de esta factura — selecciona uno arriba para que el sistema calcule si le corresponde practicar retención. `;
+  } else if (!cliente || !cliente.agente_retenedor) {
+    html = `<b>ℹ Este cliente no es agente retenedor</b>` +
+      `Según sus datos guardados, no le corresponde practicar Rete Fuente en esta factura. Si esto no es correcto, revisa la ficha del cliente en la pestaña Clientes. `;
+  } else if (!configCategoria) {
+    html = `<b>ℹ Categoría "otro" sin tarifa confirmada</b>` +
+      `No hay una tarifa de retención confiable para esta categoría en la tabla — revisa manualmente si aplica. `;
+  } else {
+    html = `<b>ℹ Bajo el umbral de retención</b>` +
+      `El subtotal (${subtotal.toLocaleString('es-CO')}) no supera el umbral orientativo para ${tipoTexto}, así que normalmente no se practica retención. `;
+  }
+  if (posibleReteIva) {
+    html += `Aun así, revisa si corresponde <b>Rete IVA</b> aparte. `;
+  }
+  html += `<span class="fine">No es asesoría tributaria — verifica siempre con tu criterio profesional.</span>`;
+  retencionHintEl.innerHTML = html;
+  retencionHintEl.classList.add('show');
 }
 
 function currentFieldValues(){
