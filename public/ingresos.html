@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Ingresos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="/estadisticas.js"></script>
+<style>
+  .wrap{ max-width:1240px; }
+
+  .stat-cards{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-bottom:24px; }
+  @media (max-width:760px){ .stat-cards{ grid-template-columns:1fr; } }
+  .stat-card{
+    background:#171E20; border:1px solid #2B3436; border-radius:12px; padding:20px 22px;
+  }
+  .stat-card .label{ font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--white-faint); }
+  .stat-card .value{ font-family:'Archivo',sans-serif; font-weight:800; font-size:28px; color:#fff; margin-top:8px; }
+  .stat-card.accent .value{ color:var(--moss); }
+  .stat-card .sub{ font-family:'JetBrains Mono',monospace; font-size:12px; margin-top:6px; }
+  .sub.up{ color:var(--moss); }
+  .sub.down{ color:var(--ember); }
+  .sub.flat{ color:var(--white-faint); }
+
+  .chart-card{
+    background:#FBF9F4; border-radius:12px; padding:22px 24px; margin-bottom:20px;
+    box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
+  }
+  .chart-card h2{ font-family:'Archivo',sans-serif; font-size:15px; margin:0 0 16px; color:#1B2420; }
+  .chart-wrap{ position:relative; height:280px; }
+
+  .two-col{ display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width:880px){ .two-col{ grid-template-columns:1fr; } }
+
+  .rank-list{ list-style:none; margin:0; padding:0; }
+  .rank-list li{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:11px 0; border-bottom:1px solid #DEDACD; font-size:13px; color:#1B2420;
+  }
+  .rank-list li:last-child{ border-bottom:none; }
+  .rank-list .nombre{ display:flex; align-items:center; gap:10px; }
+  .rank-list .puesto{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:#8A9289;
+    width:20px; text-align:right; flex-shrink:0;
+  }
+  .rank-list .monto{ font-family:'JetBrains Mono',monospace; font-weight:600; white-space:nowrap; }
+  .empty-note{ font-family:'JetBrains Mono',monospace; font-size:12.5px; color:#8A9289; padding:20px 0; text-align:center; }
+
+  #loading{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--white-soft);
+    display:flex; align-items:center; gap:10px; padding:30px 0;
+  }
+  .dot{width:7px;height:7px;background:var(--ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="brand"><h1 id="titleLetters"></h1></div>
+    <div class="header-right">
+      <span class="tag"><span class="live-dot"></span>en línea</span>
+      <div class="user-badge" id="userBadge" style="display:none;">
+        <img id="userAvatar" src="" alt="">
+        <span class="user-name" id="userName"></span>
+        <button id="btnLogout">Salir</button>
+      </div>
+    </div>
+  </header>
+  <div class="sub reveal">Estadísticas de todo lo que tus clientes han vendido — Kárdex IA lo agrupa por mes, cliente y categoría.</div>
+
+  <nav class="tabs reveal">
+    <a href="/">Escanear</a>
+    <a href="/facturas.html">Facturas</a>
+    <a href="/kardex.html">Kárdex</a>
+    <a href="/clientes.html">Clientes</a>
+    <a href="/masivo.html">Carga masiva</a>
+    <a href="/ingresos.html" class="active">Ingresos</a>
+    <a href="/egresos.html">Egresos</a>
+    <a href="/balance.html">Balance</a>
+  </nav>
+
+  <div id="loading"><span class="dot"></span> Cargando ingresos…</div>
+
+  <div id="content" style="display:none;">
+    <div class="stat-cards">
+      <div class="stat-card accent">
+        <div class="label">Ingresos este mes</div>
+        <div class="value" id="totalMesActual">$0</div>
+        <div class="sub" id="comparativoMes">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Acumulado (12 meses)</div>
+        <div class="value" id="totalAcumulado">$0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Facturas de ingreso</div>
+        <div class="value" id="totalFacturas">0</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h2>Tendencia de ingresos — últimos 12 meses</h2>
+      <div class="chart-wrap"><canvas id="chartTendencia"></canvas></div>
+    </div>
+
+    <div class="two-col">
+      <div class="chart-card">
+        <h2>Top clientes por ingreso</h2>
+        <ul class="rank-list" id="rankClientes"></ul>
+      </div>
+      <div class="chart-card">
+        <h2>Por categoría</h2>
+        <div class="chart-wrap" style="height:220px;"><canvas id="chartCategoria"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Los totales se calculan sobre el valor con IVA de cada factura marcada como Ingreso.</footer>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? '\u00A0' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function fmtCOP(n){ return '$' + Math.round(n).toLocaleString('es-CO'); }
+
+async function cargarYRenderizar(){
+  const TIPO = 'ingreso';
+  const res = await fetch('/api/invoices');
+  if (!res.ok) { window.location.href = '/login.html'; return; }
+  const todas = await res.json();
+  const invoices = filtrarPorTipo(todas, TIPO);
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  // ---- Tarjetas superiores ----
+  const meses12 = totalesPorMes(invoices, 12);
+  const mesActual = meses12[meses12.length - 1].total;
+  const mesAnterior = meses12[meses12.length - 2].total;
+  document.getElementById('totalMesActual').textContent = fmtCOP(mesActual);
+  document.getElementById('totalAcumulado').textContent = fmtCOP(meses12.reduce((a, m) => a + m.total, 0));
+  document.getElementById('totalFacturas').textContent = invoices.length;
+
+  const compEl = document.getElementById('comparativoMes');
+  if (mesAnterior === 0 && mesActual === 0) {
+    compEl.textContent = 'Sin datos aún';
+    compEl.className = 'sub flat';
+  } else if (mesAnterior === 0) {
+    compEl.textContent = '↑ Primer mes con ingresos';
+    compEl.className = 'sub up';
+  } else {
+    const cambio = ((mesActual - mesAnterior) / mesAnterior) * 100;
+    compEl.textContent = (cambio >= 0 ? '↑ ' : '↓ ') + Math.abs(cambio).toFixed(0) + '% vs. mes anterior';
+    compEl.className = 'sub ' + (cambio >= 0 ? 'up' : 'down');
+  }
+
+  // ---- Top clientes (no depende de la librería de gráficas) ----
+  const clientesEl = document.getElementById('rankClientes');
+  const contrapartes = totalesPorContraparte(invoices, TIPO).slice(0, 8);
+  if (contrapartes.length === 0) {
+    clientesEl.innerHTML = '<div class="empty-note">Sin ingresos registrados todavía.</div>';
+  } else {
+    clientesEl.innerHTML = contrapartes.map((c, i) => `
+      <li><span class="nombre"><span class="puesto">${i + 1}</span> ${escapeHtml(c.nombre)}</span><span class="monto">${fmtCOP(c.total)}</span></li>
+    `).join('');
+  }
+
+  // ---- Gráficas -- protegidas aparte: si Chart.js no cargó (red
+  // lenta, bloqueador de anuncios, etc.), el resto de la página ya
+  // quedó lista igual, no se rompe todo por esto.
+  try {
+    new Chart(document.getElementById('chartTendencia'), {
+      type: 'line',
+      data: {
+        labels: meses12.map(m => etiquetaMes(m.mes)),
+        datasets: [{
+          label: 'Ingresos',
+          data: meses12.map(m => m.total),
+          borderColor: '#2E8A73', backgroundColor: 'rgba(46,138,115,0.12)',
+          fill: true, tension: 0.3, pointRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { ticks: { callback: (v) => '$' + (v/1000).toLocaleString('es-CO') + 'k' } } },
+      },
+    });
+
+    const categorias = totalesPorCategoria(invoices).slice(0, 6);
+    new Chart(document.getElementById('chartCategoria'), {
+      type: 'bar',
+      data: {
+        labels: categorias.map(c => CATEGORIA_LABELS_COMPARTIDO[c.categoria] || c.categoria),
+        datasets: [{ data: categorias.map(c => c.total), backgroundColor: '#2E8A73', borderRadius: 4 }],
+      },
+      options: {
+        indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { ticks: { callback: (v) => '$' + (v/1000).toLocaleString('es-CO') + 'k' } } },
+      },
+    });
+  } catch (err) {
+    console.error('No se pudieron dibujar las gráficas:', err.message);
+    document.querySelectorAll('.chart-wrap').forEach((el) => {
+      el.innerHTML = '<div class="empty-note">No se pudo cargar la librería de gráficas (revisa tu conexión). Los números de arriba siguen siendo correctos.</div>';
+    });
+  }
+}
+
+async function requireAuthAndInit(){
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const user = await res.json();
+    document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('userAvatar').src = user.avatarUrl || '';
+    document.getElementById('userName').textContent = user.nombre || user.email;
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.href = '/login.html';
+    });
+    cargarYRenderizar();
+  } catch (e) {
+    window.location.href = '/login.html';
+  }
+}
+requireAuthAndInit();
+</script>
+</body>
+</html>

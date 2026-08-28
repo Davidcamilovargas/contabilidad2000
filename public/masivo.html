@@ -132,6 +132,9 @@
     <a href="/kardex.html">Kárdex</a>
     <a href="/clientes.html">Clientes</a>
     <a href="/masivo.html" class="active">Carga masiva</a>
+    <a href="/ingresos.html">Ingresos</a>
+    <a href="/egresos.html">Egresos</a>
+    <a href="/balance.html">Balance</a>
   </nav>
 
   <div id="uploadZone">
@@ -156,6 +159,7 @@
           <th>Proveedor</th>
           <th style="text-align:right">Valor</th>
           <th>Categoría</th>
+          <th>Subcuenta (PUC)</th>
           <th>Movimiento / Cliente</th>
           <th>Estado</th>
         </tr>
@@ -615,7 +619,7 @@ function renderSummary(){
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
         <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="4" style="color:var(--ink-soft);">Leyendo con IA…</td>
+        <td colspan="5" style="color:var(--ink-soft);">Leyendo con IA…</td>
         <td><span class="status-badge procesando">⏳ Procesando</span></td>
       `;
       summaryBody.appendChild(tr);
@@ -626,7 +630,7 @@ function renderSummary(){
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
         <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="4" style="color:#B0402D;">
+        <td colspan="5" style="color:#B0402D;">
           ${escapeHtml(item.errorMsg || 'No se pudo procesar')}
           <button type="button" class="btn-reintentar" data-role="reintentar" data-idx="${idx}">🔄 Reintentar</button>
         </td>
@@ -639,6 +643,17 @@ function renderSummary(){
     const d = item.data;
     const categoriaOpts = CATEGORIAS.map(([val, label]) =>
       `<option value="${val}" ${val === (d.categoria_concepto || 'otro') ? 'selected' : ''}>${label}</option>`
+    ).join('');
+
+    // Mismo principio que en Escanear: el contador confirma la
+    // subcuenta exacta del gasto (PUC), el sistema nunca la adivina
+    // sola cuando hay ambigüedad (ej. "Compras" puede ser inventario,
+    // papelería, aseo...).
+    const categoriaActual = d.categoria_concepto || 'otro';
+    const subcuentaActual = d.subcuenta_gasto || (SUBCUENTAS_GASTO[categoriaActual] || SUBCUENTAS_GASTO['otro'])[0][0];
+    if (!d.subcuenta_gasto) d.subcuenta_gasto = subcuentaActual; // fijar el default la primera vez
+    const subcuentaOpts = (SUBCUENTAS_GASTO[categoriaActual] || SUBCUENTAS_GASTO['otro']).map(([codigo, nombre]) =>
+      `<option value="${codigo}" ${codigo === subcuentaActual ? 'selected' : ''}>${codigo === 'inventario' ? nombre : codigo + ' — ' + nombre}</option>`
     ).join('');
 
     let movimientoHtml;
@@ -662,6 +677,7 @@ function renderSummary(){
       <td>${escapeHtml(d.nombre_razon_social || '—')}</td>
       <td class="money">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</td>
       <td><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></td>
+      <td><select data-idx="${idx}" data-role="subcuenta" style="min-width:170px;">${subcuentaOpts}</select></td>
       <td>${movimientoHtml}</td>
       <td><span class="status-badge ${item.estado}">${item.estado === 'listo' ? '✓ Listo' : '⚠ Revisar'}</span></td>
     `;
@@ -678,6 +694,15 @@ summaryBody.addEventListener('change', (e) => {
 
   if (e.target.dataset.role === 'categoria') {
     item.data.categoria_concepto = e.target.value;
+    // Al cambiar la categoría, la subcuenta vieja ya no tiene sentido
+    // -- se repuebla sola con el default de la categoría nueva.
+    const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
+    item.data.subcuenta_gasto = opciones[0][0];
+    renderSummary();
+  }
+
+  if (e.target.dataset.role === 'subcuenta') {
+    item.data.subcuenta_gasto = e.target.value;
   }
 
   if (e.target.dataset.role === 'cliente-manual') {
@@ -738,6 +763,7 @@ btnGuardarTodas.addEventListener('click', async () => {
         cliente_id: item.clienteId || '',
         regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
         desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
+        subcuenta_gasto: d.subcuenta_gasto || '',
       };
       const res = await fetch('/api/invoices', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)

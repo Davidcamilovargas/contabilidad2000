@@ -273,6 +273,9 @@
     <a href="/kardex.html">Kárdex</a>
     <a href="/clientes.html">Clientes</a>
     <a href="/masivo.html">Carga masiva</a>
+    <a href="/ingresos.html">Ingresos</a>
+    <a href="/egresos.html">Egresos</a>
+    <a href="/balance.html">Balance</a>
   </nav>
 
   <div class="intake reveal" id="intake">
@@ -472,6 +475,7 @@ let currentClienteId = '';
 let currentRegimenSimple = false;
 let currentCategoriaConceptoIA = '';
 let currentDesgloseCategorias = {};
+let currentSubcuentaGasto = '';
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida)
 
@@ -723,6 +727,7 @@ function resetAll(){
   currentClienteId = '';
   currentRegimenSimple = false;
   currentDesgloseCategorias = {};
+  currentSubcuentaGasto = '';
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   btnExtract.textContent = 'Leer factura';
@@ -909,6 +914,45 @@ function renderResult(data){
     }
 
     ledger.appendChild(row);
+
+    // Debajo de la categoría, un segundo selector con las subcuentas
+    // reales del PUC para esa categoría -- el contador elige la
+    // específica (nunca se adivina sola), y de ahí en adelante el
+    // sistema ya sabe la cuenta contable exacta del gasto.
+    if (f.key === 'categoria_concepto') {
+      const subLabel = document.createElement('div');
+      subLabel.className = 'field-label';
+      subLabel.textContent = 'Subcuenta del gasto (PUC)';
+      subLabel.style.fontSize = '11px';
+
+      const subValueWrap = document.createElement('div');
+      subValueWrap.className = 'field-value';
+      const subSelect = document.createElement('select');
+      subSelect.id = 'subcuentaGastoSelect';
+
+      function poblarSubcuentas(categoria){
+        subSelect.innerHTML = '';
+        const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
+        opciones.forEach(([codigo, nombre]) => {
+          const opt = document.createElement('option');
+          opt.value = codigo;
+          opt.textContent = codigo === 'inventario' ? nombre : `${codigo} — ${nombre}`;
+          subSelect.appendChild(opt);
+        });
+        currentSubcuentaGasto = opciones[0][0];
+      }
+      poblarSubcuentas(input.value);
+
+      subSelect.addEventListener('change', () => { currentSubcuentaGasto = subSelect.value; });
+      input.addEventListener('change', () => poblarSubcuentas(input.value));
+
+      subValueWrap.appendChild(subSelect);
+      const subRow = document.createElement('div');
+      subRow.className = 'field-row';
+      subRow.appendChild(subLabel);
+      subRow.appendChild(subValueWrap);
+      ledger.appendChild(subRow); // row ya está en el DOM -- esto queda justo después
+    }
   });
 
   resultEl.classList.add('show');
@@ -1095,6 +1139,7 @@ function currentFieldValues(){
   out.regimen_simple = currentRegimenSimple;
   out.categoria_concepto_ia = currentCategoriaConceptoIA;
   out.desglose_categorias = JSON.stringify(currentDesgloseCategorias || {});
+  out.subcuenta_gasto = currentSubcuentaGasto || '';
   return out;
 }
 

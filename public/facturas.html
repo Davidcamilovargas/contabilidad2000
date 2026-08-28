@@ -151,6 +151,9 @@
     <a href="/kardex.html">Kárdex</a>
     <a href="/clientes.html">Clientes</a>
     <a href="/masivo.html">Carga masiva</a>
+    <a href="/ingresos.html">Ingresos</a>
+    <a href="/egresos.html">Egresos</a>
+    <a href="/balance.html">Balance</a>
   </nav>
 
   <div class="toolbar reveal">
@@ -574,6 +577,7 @@ btnExport.addEventListener('click', async () => {
     // proveedor no es Régimen Simple, y la categoría del concepto tiene
     // una tarifa confirmada (compras/servicios/honorarios/arrendamientos).
     let sugeridoBajoTotal = 0, sugeridoAltoTotal = 0, facturasConSugerencia = 0;
+    const cuentasPUCDelMes = new Map(); // cuenta -> nombre, sin duplicados
     filtered.forEach((inv) => {
       const cliente = myClients.find(c => c.id === inv.cliente_id);
       const sugerido = calcularRetencionSugerida(inv, cliente, tarifasAprendidas);
@@ -581,6 +585,7 @@ btnExport.addEventListener('click', async () => {
         sugeridoBajoTotal += sugerido.bajo;
         sugeridoAltoTotal += sugerido.alto;
         facturasConSugerencia++;
+        (sugerido.cuentasPUC || []).forEach((c) => cuentasPUCDelMes.set(c.cuenta, c.nombre));
       }
     });
 
@@ -616,6 +621,21 @@ btnExport.addEventListener('click', async () => {
     } else {
       addBoxRow('Rango bajo (tarifa declarante)', sugeridoBajoTotal);
       addBoxRow('Rango alto (tarifa no declarante)', sugeridoAltoTotal);
+
+      if (cuentasPUCDelMes.size > 0) {
+        const cuentasTexto = [...cuentasPUCDelMes.entries()]
+          .map(([cuenta, nombre]) => `${cuenta} (${nombre})`)
+          .join(', ');
+        const rCuentas = sheet.rowCount + 1;
+        sheet.getCell(rCuentas, 1).value = 'Cuentas PUC (Retención en la fuente):';
+        sheet.getCell(rCuentas, 1).font = { name: 'Calibri', size: 10, color: { argb: COLOR_INK } };
+        sheet.mergeCells(rCuentas, 1, rCuentas, 1);
+        sheet.getCell(rCuentas, 2).value = cuentasTexto;
+        sheet.getCell(rCuentas, 2).font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLOR_INK } };
+        sheet.mergeCells(rCuentas, 2, rCuentas, 4);
+        [1,2,3,4].forEach(c => sheet.getCell(rCuentas, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2EFE7' } });
+      }
+
       const noteRow = sheet.rowCount + 1;
       sheet.getCell(noteRow, 1).value =
         `Calculado sobre ${facturasConSugerencia} de ${filtered.length} factura(s) -- con cliente marcado como agente retenedor y categoría con tarifa confirmada. ` +

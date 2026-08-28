@@ -128,6 +128,11 @@ async function ensureSchema() {
   // misma factura) -- se guarda como texto JSON, ej: '{"compras":442000,"servicios":140000}'.
   // Vacío ('' o '{}') significa que toda la factura es una sola categoría.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS desglose_categorias TEXT DEFAULT '';`);
+  // La subcuenta PUC del gasto (clase 5) que el contador confirmó a
+  // mano -- distinta de la cuenta de retención (grupo 2365). El
+  // sistema nunca la adivina sola cuando hay ambigüedad (ej. "compras"
+  // puede ser inventario, papelería, aseo...), el contador la elige.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS subcuenta_gasto TEXT DEFAULT '';`);
   // Login: cada factura/cliente queda asociada al contador que la guardó.
   // Nullable a propósito -- los datos guardados ANTES del login existían
   // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
@@ -418,7 +423,7 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple', 'desglose_categorias',
+  'regimen_simple', 'desglose_categorias', 'subcuenta_gasto',
 ];
 
 function rowToInvoice(row) {

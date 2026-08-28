@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Balance General</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="/estadisticas.js"></script>
+<style>
+  .wrap{ max-width:1240px; }
+
+  .stat-cards{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-bottom:24px; }
+  @media (max-width:760px){ .stat-cards{ grid-template-columns:1fr; } }
+  .stat-card{ background:#171E20; border:1px solid #2B3436; border-radius:12px; padding:20px 22px; }
+  .stat-card .label{ font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--white-faint); }
+  .stat-card .value{ font-family:'Archivo',sans-serif; font-weight:800; font-size:28px; color:#fff; margin-top:8px; }
+  .stat-card.ingresos .value{ color:var(--moss); }
+  .stat-card.egresos .value{ color:var(--ember); }
+  .stat-card.balance .value.positivo{ color:var(--moss); }
+  .stat-card.balance .value.negativo{ color:var(--ember); }
+
+  .chart-card{
+    background:#FBF9F4; border-radius:12px; padding:22px 24px; margin-bottom:20px;
+    box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
+  }
+  .chart-card h2{ font-family:'Archivo',sans-serif; font-size:15px; margin:0 0 16px; color:#1B2420; }
+  .chart-wrap{ position:relative; height:300px; }
+
+  #tablaMensual{ width:100%; border-collapse:collapse; }
+  #tablaMensual th{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:#8A9289; text-align:right; padding:10px 14px; border-bottom:1px solid #DEDACD;
+  }
+  #tablaMensual th:first-child{ text-align:left; }
+  #tablaMensual td{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; text-align:right; padding:10px 14px;
+    border-bottom:1px solid #DEDACD; color:#1B2420;
+  }
+  #tablaMensual td:first-child{ text-align:left; font-family:'Inter',sans-serif; }
+  #tablaMensual .balance-pos{ color:#154F41; font-weight:600; }
+  #tablaMensual .balance-neg{ color:#B5482E; font-weight:600; }
+
+  #loading{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--white-soft);
+    display:flex; align-items:center; gap:10px; padding:30px 0;
+  }
+  .dot{width:7px;height:7px;background:var(--ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="brand"><h1 id="titleLetters"></h1></div>
+    <div class="header-right">
+      <span class="tag"><span class="live-dot"></span>en línea</span>
+      <div class="user-badge" id="userBadge" style="display:none;">
+        <img id="userAvatar" src="" alt="">
+        <span class="user-name" id="userName"></span>
+        <button id="btnLogout">Salir</button>
+      </div>
+    </div>
+  </header>
+  <div class="sub reveal">Ingresos menos egresos, mes a mes — la foto completa de cómo le va a tu cliente.</div>
+
+  <nav class="tabs reveal">
+    <a href="/">Escanear</a>
+    <a href="/facturas.html">Facturas</a>
+    <a href="/kardex.html">Kárdex</a>
+    <a href="/clientes.html">Clientes</a>
+    <a href="/masivo.html">Carga masiva</a>
+    <a href="/ingresos.html">Ingresos</a>
+    <a href="/egresos.html">Egresos</a>
+    <a href="/balance.html" class="active">Balance</a>
+  </nav>
+
+  <div id="loading"><span class="dot"></span> Cargando balance…</div>
+
+  <div id="content" style="display:none;">
+    <div class="stat-cards">
+      <div class="stat-card ingresos">
+        <div class="label">Ingresos (12 meses)</div>
+        <div class="value" id="totalIngresos">$0</div>
+      </div>
+      <div class="stat-card egresos">
+        <div class="label">Egresos (12 meses)</div>
+        <div class="value" id="totalEgresos">$0</div>
+      </div>
+      <div class="stat-card balance">
+        <div class="label">Balance neto (12 meses)</div>
+        <div class="value" id="totalBalance">$0</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h2>Ingresos vs. Egresos — últimos 12 meses</h2>
+      <div class="chart-wrap"><canvas id="chartComparativo"></canvas></div>
+    </div>
+
+    <div class="chart-card">
+      <h2>Balance mes a mes</h2>
+      <table id="tablaMensual">
+        <thead><tr><th>Mes</th><th>Ingresos</th><th>Egresos</th><th>Balance</th></tr></thead>
+        <tbody id="tablaMensualBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>El balance es Ingresos menos Egresos, calculado sobre el valor con IVA de cada factura.</footer>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? '\u00A0' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+function fmtCOP(n){
+  const signo = n < 0 ? '-$' : '$';
+  return signo + Math.round(Math.abs(n)).toLocaleString('es-CO');
+}
+
+async function cargarYRenderizar(){
+  const res = await fetch('/api/invoices');
+  if (!res.ok) { window.location.href = '/login.html'; return; }
+  const todas = await res.json();
+  const ingresos = filtrarPorTipo(todas, 'ingreso');
+  const egresos = filtrarPorTipo(todas, 'egreso');
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  const ingresosPorMes = totalesPorMes(ingresos, 12);
+  const egresosPorMes = totalesPorMes(egresos, 12);
+
+  const totalIngresos = ingresosPorMes.reduce((a, m) => a + m.total, 0);
+  const totalEgresos = egresosPorMes.reduce((a, m) => a + m.total, 0);
+  const balanceTotal = totalIngresos - totalEgresos;
+
+  document.getElementById('totalIngresos').textContent = fmtCOP(totalIngresos);
+  document.getElementById('totalEgresos').textContent = fmtCOP(totalEgresos);
+  const balEl = document.getElementById('totalBalance');
+  balEl.textContent = fmtCOP(balanceTotal);
+  balEl.classList.add(balanceTotal >= 0 ? 'positivo' : 'negativo');
+
+  // ---- Tabla mensual (no depende de la librería de gráficas) ----
+  const tbody = document.getElementById('tablaMensualBody');
+  tbody.innerHTML = ingresosPorMes.map((m, i) => {
+    const ing = m.total;
+    const egr = egresosPorMes[i].total;
+    const bal = ing - egr;
+    return `
+      <tr>
+        <td>${etiquetaMes(m.mes)}</td>
+        <td>${fmtCOP(ing)}</td>
+        <td>${fmtCOP(egr)}</td>
+        <td class="${bal >= 0 ? 'balance-pos' : 'balance-neg'}">${fmtCOP(bal)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  // ---- Gráfica comparativa -- protegida: si Chart.js no cargó, el
+  // resto de la página (tarjetas y tabla) ya quedó lista igual.
+  try {
+    new Chart(document.getElementById('chartComparativo'), {
+      type: 'line',
+      data: {
+        labels: ingresosPorMes.map(m => etiquetaMes(m.mes)),
+        datasets: [
+          { label: 'Ingresos', data: ingresosPorMes.map(m => m.total), borderColor: '#2E8A73', backgroundColor: 'rgba(46,138,115,0.1)', fill: true, tension: 0.3, pointRadius: 3 },
+          { label: 'Egresos', data: egresosPorMes.map(m => m.total), borderColor: '#FF5A36', backgroundColor: 'rgba(255,90,54,0.1)', fill: true, tension: 0.3, pointRadius: 3 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top', labels: { font: { family: 'Inter' } } } },
+        scales: { y: { ticks: { callback: (v) => '$' + (v/1000).toLocaleString('es-CO') + 'k' } } },
+      },
+    });
+  } catch (err) {
+    console.error('No se pudo dibujar la gráfica:', err.message);
+    document.querySelectorAll('.chart-wrap').forEach((el) => {
+      el.innerHTML = '<div class="empty-note" style="font-family:JetBrains Mono, monospace; font-size:12.5px; color:#8A9289; padding:40px 0; text-align:center;">No se pudo cargar la librería de gráficas (revisa tu conexión). La tabla de abajo sigue siendo correcta.</div>';
+    });
+  }
+}
+
+async function requireAuthAndInit(){
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const user = await res.json();
+    document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('userAvatar').src = user.avatarUrl || '';
+    document.getElementById('userName').textContent = user.nombre || user.email;
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.href = '/login.html';
+    });
+    cargarYRenderizar();
+  } catch (e) {
+    window.location.href = '/login.html';
+  }
+}
+requireAuthAndInit();
+</script>
+</body>
+</html>
