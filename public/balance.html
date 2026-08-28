@@ -50,6 +50,18 @@
   }
   .dot{width:7px;height:7px;background:var(--ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
+
+  .filtro-cliente{ display:flex; align-items:center; gap:10px; margin-bottom:20px; flex-wrap:wrap; }
+  .filtro-cliente label{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase;
+    letter-spacing:.05em; color:var(--white-faint);
+  }
+  #clientSelect{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12.5px; letter-spacing:.5px; text-transform:uppercase;
+    padding:9px 14px; border:1px solid #DEDACD; background:#FBF9F4;
+    color:#1B2420; border-radius:6px; cursor:pointer;
+  }
 </style>
 </head>
 <body>
@@ -82,6 +94,10 @@
   <div id="loading"><span class="dot"></span> Cargando balance…</div>
 
   <div id="content" style="display:none;">
+    <div class="filtro-cliente reveal">
+      <label for="clientSelect">Cliente</label>
+      <select id="clientSelect"></select>
+    </div>
     <div class="stat-cards">
       <div class="stat-card ingresos">
         <div class="label">Ingresos (12 meses)</div>
@@ -131,15 +147,63 @@ function fmtCOP(n){
   return signo + Math.round(Math.abs(n)).toLocaleString('es-CO');
 }
 
-async function cargarYRenderizar(){
-  const res = await fetch('/api/invoices');
-  if (!res.ok) { window.location.href = '/login.html'; return; }
-  const todas = await res.json();
-  const ingresos = filtrarPorTipo(todas, 'ingreso');
-  const egresos = filtrarPorTipo(todas, 'egreso');
+const clientSelect = document.getElementById('clientSelect');
+let allInvoices = [];
+let myClients = [];
+let chartComparativo = null;
+
+// Mismo patrón que el selector de cliente en Facturas -- "Todos los
+// clientes" por defecto, cada cliente del contador, y las facturas que
+// quedaron sin cliente identificado.
+function populateClientSelect(){
+  clientSelect.innerHTML = '';
+  const optAll = document.createElement('option');
+  optAll.value = 'todos';
+  optAll.textContent = 'Todos los clientes';
+  clientSelect.appendChild(optAll);
+
+  myClients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.nombre;
+    clientSelect.appendChild(opt);
+  });
+
+  const optSinAsignar = document.createElement('option');
+  optSinAsignar.value = 'sin-asignar';
+  optSinAsignar.textContent = 'Sin cliente asignado';
+  clientSelect.appendChild(optSinAsignar);
+
+  clientSelect.value = 'todos';
+}
+
+function invoicesDelClienteSeleccionado(){
+  const clientId = clientSelect.value;
+  if (clientId === 'todos') return allInvoices;
+  if (clientId === 'sin-asignar') return allInvoices.filter(inv => !inv.cliente_id);
+  return allInvoices.filter(inv => inv.cliente_id === clientId);
+}
+
+async function cargarDatos(){
+  const [invRes, cliRes] = await Promise.all([
+    fetch('/api/invoices'),
+    fetch('/api/clients'),
+  ]);
+  if (!invRes.ok) { window.location.href = '/login.html'; return; }
+  allInvoices = await invRes.json();
+  myClients = cliRes.ok ? await cliRes.json() : [];
 
   document.getElementById('loading').style.display = 'none';
   document.getElementById('content').style.display = 'block';
+
+  populateClientSelect();
+  renderizar();
+}
+
+function renderizar(){
+  const todasDelCliente = invoicesDelClienteSeleccionado();
+  const ingresos = filtrarPorTipo(todasDelCliente, 'ingreso');
+  const egresos = filtrarPorTipo(todasDelCliente, 'egreso');
 
   const ingresosPorMes = totalesPorMes(ingresos, 12);
   const egresosPorMes = totalesPorMes(egresos, 12);
@@ -152,6 +216,7 @@ async function cargarYRenderizar(){
   document.getElementById('totalEgresos').textContent = fmtCOP(totalEgresos);
   const balEl = document.getElementById('totalBalance');
   balEl.textContent = fmtCOP(balanceTotal);
+  balEl.classList.remove('positivo', 'negativo'); // por si ya se había renderizado antes con otro cliente
   balEl.classList.add(balanceTotal >= 0 ? 'positivo' : 'negativo');
 
   // ---- Tabla mensual (no depende de la librería de gráficas) ----
@@ -172,8 +237,12 @@ async function cargarYRenderizar(){
 
   // ---- Gráfica comparativa -- protegida: si Chart.js no cargó, el
   // resto de la página (tarjetas y tabla) ya quedó lista igual.
+  // Si ya había una gráfica dibujada de una selección de cliente
+  // anterior, hay que destruirla antes de dibujar la nueva -- Chart.js
+  // no permite reusar el mismo <canvas> sin liberar la instancia previa.
+  if (chartComparativo) { chartComparativo.destroy(); chartComparativo = null; }
   try {
-    new Chart(document.getElementById('chartComparativo'), {
+    chartComparativo = new Chart(document.getElementById('chartComparativo'), {
       type: 'line',
       data: {
         labels: ingresosPorMes.map(m => etiquetaMes(m.mes)),
@@ -196,6 +265,8 @@ async function cargarYRenderizar(){
   }
 }
 
+clientSelect.addEventListener('change', renderizar);
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
@@ -208,7 +279,7 @@ async function requireAuthAndInit(){
       await fetch('/auth/logout', { method: 'POST' });
       window.location.href = '/login.html';
     });
-    cargarYRenderizar();
+    cargarDatos();
   } catch (e) {
     window.location.href = '/login.html';
   }
