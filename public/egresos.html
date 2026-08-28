@@ -8,7 +8,26 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script>
+  // Chart.js se intenta cargar desde cdnjs primero; si ese CDN en
+  // particular está bloqueado para el usuario (bloqueador de anuncios,
+  // firewall corporativo, un ISP que filtra cdnjs.cloudflare.com...) se
+  // reintenta con jsDelivr antes de rendirse -- así la gráfica no
+  // depende de un solo proveedor. window.chartJsListo nunca rechaza:
+  // resuelve true si algún CDN cargó, o false si ninguno pudo.
+  function cargarScript(src){
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve(true);
+      s.onerror = () => reject(new Error('No se pudo cargar ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  window.chartJsListo = cargarScript('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js')
+    .catch(() => cargarScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js'))
+    .catch((err) => { console.warn('No se pudo cargar Chart.js desde ningún CDN:', err.message); return false; });
+</script>
 <script src="/estadisticas.js"></script>
 <style>
   .wrap{ max-width:1240px; }
@@ -213,7 +232,7 @@ async function cargarDatos(){
   renderizar();
 }
 
-function renderizar(){
+async function renderizar(){
   const invoices = filtrarPorTipo(invoicesDelClienteSeleccionado(), TIPO);
 
   // ---- Tarjetas superiores ----
@@ -256,6 +275,7 @@ function renderizar(){
   // no permite reusar el mismo <canvas> sin liberar la instancia previa.
   if (chartTendencia) { chartTendencia.destroy(); chartTendencia = null; }
   if (chartCategoria) { chartCategoria.destroy(); chartCategoria = null; }
+  await window.chartJsListo; // espera a que termine de intentar cargar Chart.js (cdnjs y, si falla, jsDelivr) antes de usarlo
   try {
     chartTendencia = new Chart(document.getElementById('chartTendencia'), {
       type: 'line',
