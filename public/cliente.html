@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Ficha de cliente</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<script src="/estadisticas.js"></script>
+<style>
+  .wrap{ max-width:1240px; }
+
+  .breadcrumb{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint);
+    margin-bottom:10px;
+  }
+  .breadcrumb a{ color:var(--ink-soft); }
+  .breadcrumb a:hover{ color:var(--ink); }
+
+  .cliente-header{
+    display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:18px;
+    background:#171E20; border:1px solid #2B3436; border-radius:12px; padding:24px 26px; margin-bottom:24px;
+  }
+  .cliente-header h2{
+    font-family:'Archivo',sans-serif; font-size:24px; font-weight:800; margin:0 0 8px; color:#fff;
+  }
+  .cliente-meta{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
+  .cliente-meta span{
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft);
+  }
+  .badge-retenedor{
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    padding:3px 9px; border-radius:100px; background:var(--moss-soft); color:#8FD4BE; white-space:nowrap;
+  }
+  .cliente-header-actions{ display:flex; flex-direction:column; gap:10px; align-items:stretch; }
+  .cliente-header-actions .btn{ text-align:center; white-space:nowrap; text-decoration:none; display:inline-block; }
+
+  .client-tabbar{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    margin-bottom:24px;
+  }
+  .client-tabbar a{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em;
+    color:rgba(255,255,255,.62); text-decoration:none; padding:8px 14px;
+    border:1px solid #2B3436; border-radius:100px; transition:all .15s ease; white-space:nowrap;
+  }
+  .client-tabbar a:hover{ color:#fff; border-color:#3D5A45; }
+
+  .stat-cards{ display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px; }
+  @media (max-width:900px){ .stat-cards{ grid-template-columns:repeat(2, 1fr); } }
+  @media (max-width:480px){ .stat-cards{ grid-template-columns:1fr; } }
+  .stat-card{ background:#171E20; border:1px solid #2B3436; border-radius:12px; padding:20px 22px; }
+  .stat-card .label{ font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); }
+  .stat-card .value{ font-family:'Archivo',sans-serif; font-weight:800; font-size:26px; color:#fff; margin-top:8px; }
+  .stat-card .value.positivo{ color:var(--moss); }
+  .stat-card .value.negativo{ color:var(--ember); }
+
+  .chart-card{
+    background:#FBF9F4; border-radius:12px; padding:22px 24px; margin-bottom:20px;
+    box-shadow:0 30px 60px -24px rgba(0,0,0,0.55);
+  }
+  .chart-card .card-head{
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;
+  }
+  .chart-card h2{ font-family:'Archivo',sans-serif; font-size:15px; margin:0; color:#1B2420; }
+  .chart-card .ver-todas{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#B5482E; text-decoration:none;
+  }
+  .chart-card .ver-todas:hover{ text-decoration:underline; }
+
+  table.mini-facturas{ width:100%; border-collapse:collapse; }
+  .mini-facturas th{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:#8A9289; text-align:left; padding:10px 14px; background:#F2EFE7; border-bottom:1px solid #DEDACD;
+  }
+  .mini-facturas th.money{ text-align:right; }
+  .mini-facturas td{ padding:14px; font-size:13.5px; border-bottom:1px solid #DEDACD; color:#1B2420; vertical-align:top; }
+  .mini-facturas tbody tr:last-child td{ border-bottom:none; }
+  .mini-facturas td.money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
+  .mini-facturas td.date{ font-family:'JetBrains Mono',monospace; white-space:nowrap; color:#4E5A52; font-size:12.5px; }
+  .mini-facturas .contraparte-nombre{ font-weight:600; }
+  .mini-facturas .concepto{ color:#4E5A52; font-size:12.5px; }
+
+  .mov-badge{
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+    padding:3px 8px; border-radius:100px; white-space:nowrap;
+  }
+  .mov-badge.egreso{ background:var(--ember-soft); color:#B5482E; }
+  .mov-badge.ingreso{ background:#DCEEE8; color:#154F41; }
+  .mov-badge .mov-dot{ width:5px; height:5px; border-radius:50%; background:currentColor; }
+
+  .empty-note{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:#8A9289; padding:20px 0; text-align:center;
+  }
+
+  #loading, #notFound{
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
+    display:flex; align-items:center; gap:10px; padding:30px 0;
+  }
+  #notFound a{ color:var(--ember); }
+  .dot{width:7px;height:7px;background:var(--ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="brand"><h1 id="titleLetters"></h1></div>
+    <div class="header-right">
+      <span class="tag"><span class="live-dot"></span>en línea</span>
+      <div class="user-badge" id="userBadge" style="display:none;">
+        <img id="userAvatar" src="" alt="">
+        <span class="user-name" id="userName"></span>
+        <button id="btnLogout">Salir</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="breadcrumb reveal"><a href="/">← Inicio</a></div>
+
+  <div id="loading"><span class="dot"></span> Cargando cliente…</div>
+  <div id="notFound" style="display:none;">No encontramos ese cliente. <a href="/">Vuelve a Inicio</a> y selecciona uno de la lista.</div>
+
+  <div id="content" style="display:none;">
+    <div class="cliente-header reveal">
+      <div>
+        <h2 id="clienteNombre">—</h2>
+        <div class="cliente-meta" id="clienteMeta"></div>
+      </div>
+      <div class="cliente-header-actions">
+        <a class="btn primary" id="btnEscanearCliente" href="#">📸 Escanear factura para este cliente</a>
+        <a class="btn ghost" id="btnCargaMasivaCliente" href="#">📦 Carga masiva para este cliente</a>
+        <a class="btn ghost" id="btnEditarCliente" href="#">Editar datos del cliente</a>
+      </div>
+    </div>
+
+    <div class="client-tabbar reveal" id="clientTabbar">
+      <a href="#" id="ctbFacturas">📄 Facturas</a>
+      <a href="#" id="ctbKardex">📚 Kárdex</a>
+      <a href="#" id="ctbIngresos">📈 Ingresos</a>
+      <a href="#" id="ctbEgresos">📉 Egresos</a>
+      <a href="#" id="ctbBalance">⚖️ Balance</a>
+    </div>
+
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="label">Facturas guardadas</div>
+        <div class="value" id="statFacturas">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Ingresos (12 meses)</div>
+        <div class="value" id="statIngresos">$0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Egresos (12 meses)</div>
+        <div class="value" id="statEgresos">$0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Balance (12 meses)</div>
+        <div class="value" id="statBalance">$0</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="card-head">
+        <h2>Últimas facturas de este cliente</h2>
+        <a class="ver-todas" id="linkVerTodas" href="#">Ver todas en Facturas →</a>
+      </div>
+      <table class="mini-facturas" id="tablaFacturas">
+        <thead>
+          <tr>
+            <th>Mov.</th>
+            <th>Contraparte</th>
+            <th>Concepto</th>
+            <th>Fecha</th>
+            <th class="money">Total</th>
+          </tr>
+        </thead>
+        <tbody id="tablaFacturasBody"></tbody>
+      </table>
+      <div id="facturasEmpty" class="empty-note" style="display:none;">Aún no hay facturas guardadas para este cliente. Escanea la primera con el botón de arriba.</div>
+    </div>
+  </div>
+
+  <footer>Los totales de arriba son de los últimos 12 meses, igual que en Ingresos/Egresos/Balance.</footer>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? ' ' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function fmtCOP(n){
+  const signo = n < 0 ? '-$' : '$';
+  return signo + Math.round(Math.abs(n)).toLocaleString('es-CO');
+}
+
+const TIPO_PERSONA_LABELS = { natural: 'Persona natural', juridica: 'Persona jurídica' };
+
+function totalUltimos12Meses(invoices, tipo){
+  return totalesPorMes(filtrarPorTipo(invoices, tipo), 12).reduce((a, m) => a + m.total, 0);
+}
+
+// Para ordenar "más reciente primero" sin depender de que fecha_factura
+// siempre venga bien formada -- si no se puede parsear, se manda al final.
+function fechaOrdenable(fecha){
+  const [d, m, y] = (fecha || '').split('/');
+  if (!d || !m || !y) return 0;
+  return new Date(Number(y), Number(m) - 1, Number(d)).getTime();
+}
+
+async function cargarYRenderizar(){
+  const clienteId = new URLSearchParams(window.location.search).get('id');
+  if (!clienteId) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('notFound').style.display = 'flex';
+    return;
+  }
+
+  const [invRes, cliRes] = await Promise.all([
+    fetch('/api/invoices'),
+    fetch('/api/clients'),
+  ]);
+  if (!invRes.ok || !cliRes.ok) { window.location.href = '/login.html'; return; }
+  const allInvoices = await invRes.json();
+  const myClients = await cliRes.json();
+  const cliente = myClients.find(c => c.id === clienteId);
+
+  document.getElementById('loading').style.display = 'none';
+
+  if (!cliente) {
+    document.getElementById('notFound').style.display = 'flex';
+    return;
+  }
+
+  document.getElementById('content').style.display = 'block';
+  document.getElementById('btnEscanearCliente').href = '/escanear.html?cliente=' + encodeURIComponent(cliente.id);
+  document.getElementById('btnCargaMasivaCliente').href = '/masivo.html?cliente=' + encodeURIComponent(cliente.id);
+  document.getElementById('btnEditarCliente').href = '/clientes.html?editar=' + encodeURIComponent(cliente.id);
+  document.getElementById('linkVerTodas').href = '/facturas.html?cliente=' + encodeURIComponent(cliente.id);
+
+  // Menú del cliente -- lleva a Facturas/Kárdex/Ingresos/Egresos/Balance
+  // ya filtrados solo para este cliente (nunca mezclado con los demás).
+  const clienteIdUrl = encodeURIComponent(cliente.id);
+  document.getElementById('ctbFacturas').href = '/facturas.html?cliente=' + clienteIdUrl;
+  document.getElementById('ctbKardex').href = '/kardex.html?cliente=' + clienteIdUrl;
+  document.getElementById('ctbIngresos').href = '/ingresos.html?cliente=' + clienteIdUrl;
+  document.getElementById('ctbEgresos').href = '/egresos.html?cliente=' + clienteIdUrl;
+  document.getElementById('ctbBalance').href = '/balance.html?cliente=' + clienteIdUrl;
+
+  // ---- Encabezado ----
+  document.title = `Kárdex IA — ${cliente.nombre}`;
+  document.getElementById('clienteNombre').textContent = cliente.nombre;
+  const metaPartes = [];
+  if (cliente.nit) metaPartes.push(`<span>NIT ${escapeHtml(cliente.nit)}${cliente.dv ? '-' + escapeHtml(cliente.dv) : ''}</span>`);
+  if (cliente.tipo_persona && TIPO_PERSONA_LABELS[cliente.tipo_persona]) metaPartes.push(`<span>${TIPO_PERSONA_LABELS[cliente.tipo_persona]}</span>`);
+  if (cliente.ciudad) metaPartes.push(`<span>${escapeHtml(cliente.ciudad)}</span>`);
+  if (cliente.telefono) metaPartes.push(`<span>${escapeHtml(cliente.telefono)}</span>`);
+  if (cliente.correo) metaPartes.push(`<span>${escapeHtml(cliente.correo)}</span>`);
+  if (cliente.agente_retenedor) metaPartes.push('<span class="badge-retenedor">● Agente retenedor</span>');
+  document.getElementById('clienteMeta').innerHTML = metaPartes.join('');
+
+  // ---- Tarjetas ----
+  const facturasCliente = allInvoices.filter(inv => inv.cliente_id === cliente.id);
+  document.getElementById('statFacturas').textContent = facturasCliente.length;
+
+  const ingresos12 = totalUltimos12Meses(facturasCliente, 'ingreso');
+  const egresos12 = totalUltimos12Meses(facturasCliente, 'egreso');
+  const balance12 = ingresos12 - egresos12;
+  document.getElementById('statIngresos').textContent = fmtCOP(ingresos12);
+  document.getElementById('statEgresos').textContent = fmtCOP(egresos12);
+  const balEl = document.getElementById('statBalance');
+  balEl.textContent = fmtCOP(balance12);
+  balEl.classList.add(balance12 >= 0 ? 'positivo' : 'negativo');
+
+  // ---- Últimas facturas (máximo 15, más recientes primero) ----
+  const tbody = document.getElementById('tablaFacturasBody');
+  const tabla = document.getElementById('tablaFacturas');
+  const emptyEl = document.getElementById('facturasEmpty');
+
+  if (facturasCliente.length === 0) {
+    tabla.style.display = 'none';
+    emptyEl.style.display = 'block';
+    return;
+  }
+
+  const ultimas = [...facturasCliente]
+    .sort((a, b) => fechaOrdenable(b.fecha_factura) - fechaOrdenable(a.fecha_factura))
+    .slice(0, 15);
+
+  tbody.innerHTML = ultimas.map(inv => {
+    const movTipo = inv.tipo_movimiento || 'egreso';
+    // La contraparte depende de si esta factura es un ingreso o un
+    // egreso PARA ESTE cliente -- si es ingreso, él fue quien vendió,
+    // así que la contraparte es quien compró (adquiriente); si es
+    // egreso, él compró, así que la contraparte es el proveedor.
+    const contraparte = movTipo === 'ingreso'
+      ? (inv.adquiriente_nombre || 'Sin identificar')
+      : (inv.nombre_razon_social || 'Sin identificar');
+    const sinIva = Number(inv.valor_sin_iva) || 0;
+    const iva = Number(inv.valor_iva) || 0;
+    const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
+    return `
+      <tr>
+        <td><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
+        <td><div class="contraparte-nombre">${escapeHtml(contraparte)}</div></td>
+        <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
+        <td class="date">${escapeHtml(inv.fecha_factura) || '—'}</td>
+        <td class="money">${fmtCOP(conIva)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function requireAuthAndInit(){
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const user = await res.json();
+    document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('userAvatar').src = user.avatarUrl || '';
+    document.getElementById('userName').textContent = user.nombre || user.email;
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.href = '/login.html';
+    });
+    cargarYRenderizar();
+  } catch (e) {
+    window.location.href = '/login.html';
+  }
+}
+requireAuthAndInit();
+</script>
+</body>
+</html>

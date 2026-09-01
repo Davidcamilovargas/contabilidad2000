@@ -743,9 +743,37 @@ async function llamarGeminiJSON(base64, effectiveMediaType, prompt) {
   }
 }
 
-const INVOICE_PROMPT = `Eres un asistente contable. Analiza la imagen o documento de esta factura colombiana y extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
+const INVOICE_PROMPT = `Eres un asistente contable colombiano. Antes de extraer ningún dato, tu PRIMERA tarea es identificar qué tipo de documento es la imagen o archivo que recibiste, porque Kárdex IA SOLO debe procesar los dos únicos documentos que se pueden causar contablemente en Colombia: la factura de venta y la cuenta de cobro. Cualquier otro tipo de documento debe rechazarse, aunque tenga valores y NIT parecidos a una factura.
+
+CÓMO IDENTIFICAR CADA TIPO (usa estas señales, no solo el título del documento):
+
+FACTURA DE VENTA (electrónica o física) -- tipo_documento = "factura_venta":
+- Dice explícitamente "Factura de Venta", "Factura Electrónica de Venta" o "Invoice".
+- Trae CUFE (Código Único de Facturación Electrónica) o un código QR de validación de la DIAN.
+- Trae número de resolución de facturación autorizada por la DIAN y/o un consecutivo con prefijo (ej: FE-1234, SETP990).
+- Identifica con NIT o cédula tanto al vendedor/emisor como al comprador/adquiriente.
+- Discrimina subtotal, IVA (si aplica) y valor total.
+
+CUENTA DE COBRO -- tipo_documento = "cuenta_cobro":
+- Dice explícitamente "Cuenta de Cobro".
+- La emite típicamente una persona natural NO obligada a facturar (independientes, honorarios, servicios ocasionales) -- NO tiene CUFE, código QR de la DIAN, ni resolución de facturación.
+- Trae: fecha, nombre y NIT/cédula de quien cobra, nombre y NIT/cédula (o razón social) de quien debe pagar, una descripción del servicio o concepto, y el valor total a pagar.
+- A menudo incluye la frase "no obligado(a) a facturar" (o similar) y un espacio de firma.
+
+CUALQUIER OTRO DOCUMENTO -- tipo_documento = "otro" (SIEMPRE rechazar, documento_valido debe ser false), por ejemplo:
+- Comprobantes o recibos de pago, soportes o confirmaciones de transferencia bancaria, extractos bancarios.
+- Cotizaciones, proformas, órdenes de compra o remisiones sin valor fiscal.
+- Contratos, recibos de consignación, tickets no fiscales, reportes o resúmenes de pagos.
+- Capturas de pantalla de apps de pago, comprobantes de Nequi/Daviplata/PSE, o cualquier documento que no sea ni una factura de venta ni una cuenta de cobro.
+
+Si tienes dudas genuinas entre factura de venta y cuenta de cobro, elige la que mejor encaje y sigue adelante -- el rechazo (tipo_documento = "otro") es solo para documentos que claramente NO son ninguno de los dos.
+
+Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
 
 {
+  "tipo_documento": "'factura_venta' si es una factura de venta (electrónica o física), 'cuenta_cobro' si es una cuenta de cobro, 'otro' para cualquier otro documento (comprobantes de pago, extractos, cotizaciones, contratos, etc.) -- ver criterios arriba",
+  "documento_valido": "true SOLO si tipo_documento es 'factura_venta' o 'cuenta_cobro'. false para 'otro'",
+  "motivo_rechazo": "si documento_valido es false, una frase breve en español explicando qué parece ser el documento en su lugar (ej: 'Este documento parece ser un comprobante de transferencia bancaria, no una factura ni una cuenta de cobro'). Si documento_valido es true, cadena vacía",
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
   "nit_cc": "número de identificación del proveedor/emisor, solo dígitos",
   "dv": "dígito de verificación si aparece, si no aparece pon una cadena vacía",
@@ -776,7 +804,9 @@ Ejemplo correcto: si el documento muestra "1.487.500", el JSON debe llevar 14875
 
 Muchas facturas electrónicas colombianas incluyen una sección "Retenciones" o "Valores informativos" con Rete fuente, Rete IVA y Rete ICA (casi siempre en 0 si no aplica) — revisa si el documento la tiene antes de responder.
 
-Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, rete_fuente, rete_iva y rete_ica, que en ese caso van en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.`;
+Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, rete_fuente, rete_iva y rete_ica, que en ese caso van en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.
+
+Si documento_valido es false (el documento no es factura de venta ni cuenta de cobro), igual completa nombre_razon_social y concepto con lo que alcances a leer si es evidente (ayuda a que el contador entienda qué era el archivo), pero deja los campos de valores en 0 y el resto en cadena vacía -- no hace falta forzar una lectura completa de un documento que de todos modos se va a rechazar.`;
 
 // Endpoint que recibe el archivo (imagen o PDF) de una factura y llama a la API gratuita de Gemini
 app.post('/api/extract', requireAuth, async (req, res) => {
@@ -790,6 +820,21 @@ app.post('/api/extract', requireAuth, async (req, res) => {
 
   try {
     const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
+
+    // Kárdex IA solo causa dos tipos de documento: factura de venta y
+    // cuenta de cobro -- son los únicos con validez legal para registrar
+    // un ingreso o egreso. Si la IA determinó que el archivo es otra cosa
+    // (comprobante de pago, extracto bancario, cotización, contrato...),
+    // se rechaza aquí antes de guardarlo o mostrarlo como si fuera una
+    // factura válida. Aplica igual para Escanear (uno por uno) y Carga
+    // masiva (por archivo), porque ambos pasan por este mismo endpoint.
+    if (parsed.documento_valido === false || (parsed.tipo_documento && parsed.tipo_documento !== 'factura_venta' && parsed.tipo_documento !== 'cuenta_cobro')) {
+      const err = new Error('Documento rechazado -- no es factura ni cuenta de cobro (tipo detectado: ' + (parsed.tipo_documento || 'desconocido') + ').');
+      err.status = 422;
+      const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
+      err.publicMessage = `Este archivo no parece ser una factura de venta ni una cuenta de cobro.${motivo} Kárdex IA solo procesa esos dos tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`;
+      throw err;
+    }
 
     // Capa de seguridad extra: si la IA devolvió centavos (ej. 39915.96) en
     // vez del entero pedido, se redondea aquí antes de mostrarlo/guardarlo.

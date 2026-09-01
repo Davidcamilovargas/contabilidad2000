@@ -94,7 +94,7 @@
     padding:4px 9px; border-radius:100px; background:#F2EFE7; color:var(--ink-soft);
   }
   .client-chip.retenedor{ background:var(--ember-soft); color:#B5482E; }
-  .row-actions{ display:flex; gap:2px; flex-shrink:0; }
+  .row-actions{ display:flex; gap:2px; flex-shrink:0; align-items:center; }
   .del-btn{
     background:none; border:none; color:var(--ink-faint);
     font-family:'JetBrains Mono',monospace; font-size:11.5px;
@@ -102,6 +102,8 @@
   }
   .del-btn:hover{ color:#B0402D; }
   .del-btn.edit-btn:hover{ color:var(--moss-deep); }
+  .del-btn.ficha-btn{ color:var(--ember-deep); }
+  .del-btn.ficha-btn:hover{ color:var(--ember); }
 
   #clientEmpty{
     text-align:center; padding:50px 20px; color:var(--ink-faint);
@@ -137,14 +139,8 @@
   <div class="sub reveal">Las empresas que atiendes — Kárdex IA usa esta lista para detectar solo si una factura es un ingreso o un egreso.</div>
 
   <nav class="tabs reveal">
-    <a href="/">Escanear</a>
-    <a href="/facturas.html">Facturas</a>
-    <a href="/kardex.html">Kárdex</a>
+    <a href="/">Inicio</a>
     <a href="/clientes.html" class="active">Clientes</a>
-    <a href="/masivo.html">Carga masiva</a>
-    <a href="/ingresos.html">Ingresos</a>
-    <a href="/egresos.html">Egresos</a>
-    <a href="/balance.html">Balance</a>
   </nav>
 
   <div id="addForm" class="reveal">
@@ -603,11 +599,12 @@ function renderClients(){
     row.innerHTML = `
       <div class="client-row-top">
         <div class="info">
-          <div class="name">${c.nombre}</div>
+          <div class="name"><a href="/cliente.html?id=${c.id}" style="color:inherit; text-decoration:none;">${c.nombre}</a></div>
           <div class="nit">NIT ${c.nit}${c.dv ? '-' + c.dv : ''}</div>
         </div>
         <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
         <div class="row-actions">
+          <a class="del-btn ficha-btn" href="/cliente.html?id=${c.id}">ver ficha →</a>
           <button class="del-btn edit-btn" data-action="editar" data-id="${c.id}">editar</button>
           <button class="del-btn" data-action="eliminar" data-id="${c.id}">eliminar</button>
         </div>
@@ -827,6 +824,17 @@ btnAdd.addEventListener('click', async () => {
   }
 });
 
+// Si llegamos aquí con ?editar=<id> en la URL (por ejemplo desde el botón
+// "Editar datos del cliente" en la ficha del cliente, o desde Inicio),
+// abrimos el formulario ya en modo edición para ese cliente en particular.
+function aplicarEditarDesdeURL(){
+  const params = new URLSearchParams(window.location.search);
+  const editarId = params.get('editar');
+  if (!editarId) return;
+  const existe = clients.some((c) => c.id === editarId);
+  if (existe) iniciarEdicion(editarId);
+}
+
 async function loadAll(){
   try {
     const [clientsRes, invoicesRes] = await Promise.all([
@@ -838,6 +846,7 @@ async function loadAll(){
 
     loadingEl.style.display = 'none';
     renderClients();
+    aplicarEditarDesdeURL();
   } catch (e) {
     loadingEl.innerHTML = 'No se pudieron cargar los clientes: ' + e.message;
   }

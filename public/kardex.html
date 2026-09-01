@@ -135,6 +135,28 @@
   .dot{width:7px;height:7px;background:var(--k-ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
+  .client-tabbar{
+    display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
+    background:var(--k-carbon-raised); border:1px solid var(--k-carbon-line); border-radius:10px;
+    padding:12px 18px; margin-bottom:20px;
+  }
+  .client-tabbar .ctb-back{
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:#fff; text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-back:hover{ color:var(--k-ember); }
+  .client-tabbar .ctb-links{ display:flex; gap:6px; flex-wrap:wrap; }
+  .client-tabbar .ctb-links a{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--k-white-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--k-carbon-line); border-radius:100px;
+    transition:all .15s ease;
+  }
+  .client-tabbar .ctb-links a:hover{ color:#fff; border-color:#3D5A45; }
+  .client-tabbar .ctb-links a.active{ background:var(--k-ember); border-color:var(--k-ember); color:#fff; }
+  .client-tabbar .ctb-exit{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--k-white-faint); text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-exit:hover{ color:#fff; }
+
   @media (max-width:560px){
     .kardex-table thead th:nth-child(2), .kardex-table tbody td:nth-child(2){ display:none; }
   }
@@ -159,15 +181,23 @@
   <div class="sub reveal">El historial completo de cada proveedor, con saldo acumulado — como el kárdex de siempre.</div>
 
   <nav class="tabs reveal">
-    <a href="/">Escanear</a>
-    <a href="/facturas.html">Facturas</a>
-    <a href="/kardex.html" class="active">Kárdex</a>
+    <a href="/">Inicio</a>
     <a href="/clientes.html">Clientes</a>
-    <a href="/masivo.html">Carga masiva</a>
-    <a href="/ingresos.html">Ingresos</a>
-    <a href="/egresos.html">Egresos</a>
-    <a href="/balance.html">Balance</a>
   </nav>
+
+  <div class="client-tabbar reveal" id="clientTabbar" style="display:none;">
+    <a href="#" class="ctb-back" id="ctbFicha">← Ficha del cliente</a>
+    <span class="ctb-links">
+      <a href="#" id="ctbFacturas">Facturas</a>
+      <a href="#" id="ctbKardex">Kárdex</a>
+      <a href="#" id="ctbIngresos">Ingresos</a>
+      <a href="#" id="ctbEgresos">Egresos</a>
+      <a href="#" id="ctbBalance">Balance</a>
+      <a href="#" id="ctbEscanear">Escanear</a>
+      <a href="#" id="ctbMasivo">Carga masiva</a>
+    </span>
+    <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
+  </div>
 
   <div class="kardex-toolbar reveal">
     <select id="clientSelect"></select>
@@ -250,6 +280,24 @@ function invoicesForSelectedClient(){
   if (clientId === 'todos') return allInvoices;
   if (clientId === 'sin-asignar') return allInvoices.filter(inv => !inv.cliente_id);
   return allInvoices.filter(inv => inv.cliente_id === clientId);
+}
+
+// Muestra el menú del cliente (Facturas/Kárdex/Ingresos/Egresos/Balance/
+// Escanear/Carga masiva, todos con ?cliente= para no mezclarse con los
+// demás clientes) cuando se llegó a esta página desde la ficha de uno en
+// particular.
+function aplicarClientTabbar(clienteId){
+  const qs = '?cliente=' + encodeURIComponent(clienteId);
+  document.getElementById('ctbFicha').href = '/cliente.html?id=' + encodeURIComponent(clienteId);
+  document.getElementById('ctbFacturas').href = '/facturas.html' + qs;
+  document.getElementById('ctbKardex').href = '/kardex.html' + qs;
+  document.getElementById('ctbIngresos').href = '/ingresos.html' + qs;
+  document.getElementById('ctbEgresos').href = '/egresos.html' + qs;
+  document.getElementById('ctbBalance').href = '/balance.html' + qs;
+  document.getElementById('ctbEscanear').href = '/escanear.html' + qs;
+  document.getElementById('ctbMasivo').href = '/masivo.html' + qs;
+  document.getElementById('ctbKardex').classList.add('active');
+  document.getElementById('clientTabbar').style.display = 'flex';
 }
 
 function formatCOP(value){
@@ -384,6 +432,15 @@ async function loadKardex(){
     allInvoices = await invRes.json();
     myClients = clientsRes.ok ? await clientsRes.json() : [];
     populateClients();
+
+    // Si se llegó desde la ficha de un cliente, viene fijo en la URL
+    // (?cliente=ID) -- se preselecciona y se muestra su menú.
+    const clienteUrl = new URLSearchParams(window.location.search).get('cliente');
+    if (clienteUrl && myClients.some(c => c.id === clienteUrl)) {
+      clientSelect.value = clienteUrl;
+      aplicarClientTabbar(clienteUrl);
+    }
+
     providers = buildProviders();
 
     loadingEl.style.display = 'none';

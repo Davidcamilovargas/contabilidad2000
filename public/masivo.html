@@ -106,6 +106,23 @@
   #saveAllBar .info b{ color:#fff; }
 
   .fila-cliente-select{ min-width:160px; }
+
+  /* Aviso de que ya se viene con un cliente fijo -- porque se eligió
+     antes desde la ficha de ese cliente en Inicio. Mientras esté
+     visible, cada factura del lote se asigna directamente a este
+     cliente -- ya no hay que elegirlo fila por fila. */
+  .cliente-fijo{
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
+    font-family:'JetBrains Mono',monospace; font-size:12.5px;
+    border:1px solid var(--moss); background:var(--moss-soft); color:#fff;
+    padding:11px 16px; border-radius:8px; margin-bottom:20px;
+  }
+  .cliente-fijo b{ color:#fff; }
+  .cliente-fijo a{ color:var(--ink-soft); text-decoration:underline; text-underline-offset:2px; }
+  .cliente-fijo a:hover{ color:var(--ink); }
+  .cliente-fijo .cf-links{ display:flex; gap:14px; flex-wrap:wrap; }
+  .cliente-fijo .cf-links a{ text-decoration:none; opacity:.85; }
+  .cliente-fijo .cf-links a:hover{ opacity:1; text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -124,23 +141,30 @@
       </div>
     </div>
   </header>
-  <div class="sub reveal">Sube varias facturas de una vez — el sistema las procesa en fila y te muestra un resumen para revisar rápido.</div>
+  <div class="sub reveal">Sube varias facturas o cuentas de cobro de una vez — el sistema las procesa en fila y te muestra un resumen para revisar rápido. Otro tipo de documento (comprobantes de pago, extractos, cotizaciones...) se rechaza automáticamente.</div>
 
   <nav class="tabs reveal">
-    <a href="/">Escanear</a>
-    <a href="/facturas.html">Facturas</a>
-    <a href="/kardex.html">Kárdex</a>
+    <a href="/">Inicio</a>
     <a href="/clientes.html">Clientes</a>
-    <a href="/masivo.html" class="active">Carga masiva</a>
-    <a href="/ingresos.html">Ingresos</a>
-    <a href="/egresos.html">Egresos</a>
-    <a href="/balance.html">Balance</a>
   </nav>
+
+  <div class="cliente-fijo reveal" id="clienteFijoBanner" style="display:none;">
+    <span>📌 Cargando facturas para <b id="clienteFijoNombre"></b></span>
+    <span class="cf-links" id="clienteFijoLinks">
+      <a href="#" id="cfFicha">Ficha</a>
+      <a href="#" id="cfFacturas">Facturas</a>
+      <a href="#" id="cfKardex">Kárdex</a>
+      <a href="#" id="cfIngresos">Ingresos</a>
+      <a href="#" id="cfEgresos">Egresos</a>
+      <a href="#" id="cfBalance">Balance</a>
+    </span>
+    <a href="/clientes.html" id="clienteFijoQuitar">Cambiar cliente</a>
+  </div>
 
   <div id="uploadZone">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF5A36" stroke-width="1.5"><path d="M12 3v13m0-13l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
-    <h2>Sube varias facturas a la vez</h2>
-    <p>Selecciona o arrastra varios archivos (fotos o PDF), o un <b>.zip</b> con varias facturas adentro — se procesan uno por uno.</p>
+    <h2>Sube varias facturas o cuentas de cobro a la vez</h2>
+    <p>Selecciona o arrastra varios archivos (fotos o PDF), o un <b>.zip</b> con varias facturas o cuentas de cobro adentro — se procesan uno por uno. Solo se aceptan facturas de venta y cuentas de cobro; cualquier otro documento se marca como rechazado en el resumen.</p>
     <input type="file" id="fileInputMasivo" multiple accept="image/*,application/pdf,.zip,application/zip,application/x-zip-compressed">
   </div>
 
@@ -263,6 +287,33 @@ const modalPdf = document.getElementById('modalPdf');
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida, misma fuente que Facturas/Escanear)
 let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, estado: 'procesando'|'listo'|'revisar'|'error'|'guardada' }
+
+// Si se llegó aquí desde la ficha de un cliente (Inicio → cliente →
+// "Carga masiva para este cliente"), el cliente viene fijo en la URL
+// (?cliente=ID) -- todas las facturas del lote se asignan a él, y solo
+// falta confirmar si cada una es un ingreso o un egreso PARA ÉL.
+let clientePreseleccionado = null;
+
+function aplicarClientePreseleccionado(){
+  const clienteId = new URLSearchParams(window.location.search).get('cliente');
+  if (!clienteId) return;
+  const cliente = myClients.find(c => c.id === clienteId);
+  if (!cliente) return; // id inválido o de otro contador -- se ignora, sigue el flujo normal
+
+  clientePreseleccionado = cliente;
+  document.getElementById('clienteFijoNombre').textContent = cliente.nombre;
+  document.getElementById('clienteFijoBanner').style.display = 'flex';
+
+  // Enlaces rápidos a las demás páginas de este mismo cliente, sin
+  // perder el filtro ni mezclarlo con los demás clientes.
+  const qs = '?cliente=' + encodeURIComponent(cliente.id);
+  document.getElementById('cfFicha').href = '/cliente.html?id=' + encodeURIComponent(cliente.id);
+  document.getElementById('cfFacturas').href = '/facturas.html' + qs;
+  document.getElementById('cfKardex').href = '/kardex.html' + qs;
+  document.getElementById('cfIngresos').href = '/ingresos.html' + qs;
+  document.getElementById('cfEgresos').href = '/egresos.html' + qs;
+  document.getElementById('cfBalance').href = '/balance.html' + qs;
+}
 
 // Vista completa del archivo original de una fila del lote -- usa el
 // mismo File que ya está en memoria (item.file), sin volver a pedirlo.
@@ -543,6 +594,18 @@ async function extraerFactura(file){
 // los clientes registrados para decidir solo si es ingreso o egreso,
 // y de cuál cliente. Si no hay coincidencia, queda para revisar.
 function detectarClienteYMovimiento(data){
+  // Si ya viene un cliente fijo (?cliente=ID desde su ficha), no se
+  // busca entre TODOS los clientes -- solo se confirma si esta factura
+  // en concreto es un ingreso o un egreso PARA ese cliente en particular.
+  if (clientePreseleccionado) {
+    const c = clientePreseleccionado;
+    const esComprador = c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit;
+    const esVendedor = c.nit && data.nit_cc && c.nit === data.nit_cc;
+    if (esComprador) return { clienteId: c.id, tipoMovimiento: 'egreso', confiado: true };
+    if (esVendedor) return { clienteId: c.id, tipoMovimiento: 'ingreso', confiado: true };
+    return { clienteId: c.id, tipoMovimiento: 'egreso', confiado: false }; // cliente ya fijo, falta confirmar el tipo
+  }
+
   const asComprador = myClients.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
   const asVendedor = myClients.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
   if (asComprador) return { clienteId: asComprador.id, tipoMovimiento: 'egreso', confiado: true };
@@ -661,6 +724,16 @@ function renderSummary(){
       const cliente = myClients.find(c => c.id === item.clienteId);
       const label = item.tipoMovimiento === 'ingreso' ? 'Ingreso' : 'Egreso';
       movimientoHtml = `<span>${label} — ${escapeHtml(cliente ? cliente.nombre : '')}</span>`;
+    } else if (clientePreseleccionado) {
+      // El cliente ya está fijo -- solo falta confirmar si esta factura
+      // es un ingreso o un egreso para él (el NIT no lo dejó claro).
+      movimientoHtml = `
+        <select class="fila-cliente-select" data-idx="${idx}" data-role="tipo-manual">
+          <option value="">-- ¿Ingreso o egreso?</option>
+          <option value="egreso">Egreso (compró)</option>
+          <option value="ingreso">Ingreso (vendió)</option>
+        </select>
+      `;
     } else {
       const opciones = myClients.map(c => `<option value="${c.id}">${escapeHtml(c.nombre)}</option>`).join('');
       movimientoHtml = `
@@ -714,6 +787,15 @@ summaryBody.addEventListener('change', (e) => {
     item.clienteId = clienteId;
     item.tipoMovimiento = esComprador ? 'egreso' : (esVendedor ? 'ingreso' : 'egreso');
     item.estado = 'listo'; // el contador ya lo confirmó a mano
+    renderSummary();
+  }
+
+  // Cliente ya fijo (viene de su ficha) -- aquí solo se confirma el
+  // tipo de movimiento, el cliente de la fila ya estaba asignado.
+  if (e.target.dataset.role === 'tipo-manual') {
+    if (!e.target.value) return;
+    item.tipoMovimiento = e.target.value;
+    item.estado = 'listo';
     renderSummary();
   }
 });
@@ -793,6 +875,7 @@ async function requireAuthAndInit(){
     });
     const clientsRes = await fetch('/api/clients');
     myClients = clientsRes.ok ? await clientsRes.json() : [];
+    aplicarClientePreseleccionado();
     try {
       const tarifasRes = await fetch('/api/tarifas-aprendidas');
       if (tarifasRes.ok) {

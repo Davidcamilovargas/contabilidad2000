@@ -119,6 +119,28 @@
   .dot{width:7px;height:7px;background:var(--ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
+  .client-tabbar{
+    display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
+    background:#171E20; border:1px solid #2B3436; border-radius:10px;
+    padding:12px 18px; margin-bottom:20px;
+  }
+  .client-tabbar .ctb-back{
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:#fff; text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-back:hover{ color:var(--ember); }
+  .client-tabbar .ctb-links{ display:flex; gap:6px; flex-wrap:wrap; }
+  .client-tabbar .ctb-links a{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:rgba(255,255,255,.62); text-decoration:none; padding:6px 12px; border:1px solid #2B3436; border-radius:100px;
+    transition:all .15s ease;
+  }
+  .client-tabbar .ctb-links a:hover{ color:#fff; border-color:#3D5A45; }
+  .client-tabbar .ctb-links a.active{ background:var(--ember); border-color:var(--ember); color:#fff; }
+  .client-tabbar .ctb-exit{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,.4); text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-exit:hover{ color:#fff; }
+
   @media (max-width:760px){
     thead th:nth-child(3), tbody td:nth-child(3){ display:none; } /* Concepto */
     thead th:nth-child(5), tbody td:nth-child(5){ display:none; } /* Sin IVA */
@@ -146,15 +168,23 @@
   <div class="sub reveal">Todas las facturas que has guardado, organizadas por mes.</div>
 
   <nav class="tabs reveal">
-    <a href="/">Escanear</a>
-    <a href="/facturas.html" class="active">Facturas</a>
-    <a href="/kardex.html">Kárdex</a>
+    <a href="/">Inicio</a>
     <a href="/clientes.html">Clientes</a>
-    <a href="/masivo.html">Carga masiva</a>
-    <a href="/ingresos.html">Ingresos</a>
-    <a href="/egresos.html">Egresos</a>
-    <a href="/balance.html">Balance</a>
   </nav>
+
+  <div class="client-tabbar reveal" id="clientTabbar" style="display:none;">
+    <a href="#" class="ctb-back" id="ctbFicha">← Ficha del cliente</a>
+    <span class="ctb-links">
+      <a href="#" id="ctbFacturas">Facturas</a>
+      <a href="#" id="ctbKardex">Kárdex</a>
+      <a href="#" id="ctbIngresos">Ingresos</a>
+      <a href="#" id="ctbEgresos">Egresos</a>
+      <a href="#" id="ctbBalance">Balance</a>
+      <a href="#" id="ctbEscanear">Escanear</a>
+      <a href="#" id="ctbMasivo">Carga masiva</a>
+    </span>
+    <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
+  </div>
 
   <div class="toolbar reveal">
     <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -207,7 +237,7 @@
     </table>
   </div>
 
-  <div id="empty">No hay facturas guardadas para este mes todavía.<br>Ve a <a href="/">Escanear</a> para leer y guardar la primera.</div>
+  <div id="empty">No hay facturas guardadas para este mes todavía.<br>Ve a <a href="/escanear.html">Escanear</a> para leer y guardar la primera.</div>
 
   <footer>Los datos mostrados aquí son los que confirmaste al guardar cada factura.</footer>
 </div>
@@ -293,6 +323,24 @@ function invoicesForSelectedClient(){
   if (clientId === 'todos') return allInvoices;
   if (clientId === 'sin-asignar') return allInvoices.filter(inv => !inv.cliente_id);
   return allInvoices.filter(inv => inv.cliente_id === clientId);
+}
+
+// Muestra el menú del cliente (Facturas/Kárdex/Ingresos/Egresos/Balance/
+// Escanear/Carga masiva, todos con ?cliente= para no mezclarse con los
+// demás clientes) cuando se llegó a esta página desde la ficha de uno en
+// particular.
+function aplicarClientTabbar(clienteId){
+  const qs = '?cliente=' + encodeURIComponent(clienteId);
+  document.getElementById('ctbFicha').href = '/cliente.html?id=' + encodeURIComponent(clienteId);
+  document.getElementById('ctbFacturas').href = '/facturas.html' + qs;
+  document.getElementById('ctbKardex').href = '/kardex.html' + qs;
+  document.getElementById('ctbIngresos').href = '/ingresos.html' + qs;
+  document.getElementById('ctbEgresos').href = '/egresos.html' + qs;
+  document.getElementById('ctbBalance').href = '/balance.html' + qs;
+  document.getElementById('ctbEscanear').href = '/escanear.html' + qs;
+  document.getElementById('ctbMasivo').href = '/masivo.html' + qs;
+  document.getElementById('ctbFacturas').classList.add('active');
+  document.getElementById('clientTabbar').style.display = 'flex';
 }
 
 function monthKeyFromFecha(fecha){
@@ -433,6 +481,18 @@ async function loadInvoices(){
     }
 
     populateClients();
+
+    // Si se llegó desde la ficha de un cliente (Inicio → cliente → "Ver
+    // todas sus facturas"), el cliente viene fijo en la URL (?cliente=ID)
+    // -- se preselecciona en vez de arrancar en "Todos los clientes", y
+    // se muestra el menú de ese cliente para moverse entre sus páginas
+    // sin perder el filtro ni mezclarlo con los demás clientes.
+    const clienteUrl = new URLSearchParams(window.location.search).get('cliente');
+    if (clienteUrl && myClients.some(c => c.id === clienteUrl)) {
+      clientSelect.value = clienteUrl;
+      aplicarClientTabbar(clienteUrl);
+    }
+
     populateMonths(invoicesForSelectedClient());
     renderTable();
   } catch (e) {
