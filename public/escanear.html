@@ -1168,11 +1168,19 @@ function showRetencionHint(data){
 
   let html = '';
 
+  const cliente = myClients.find(c => c.id === currentClienteId);
+  const reteIvaSugerido = (posibleReteIva && typeof calcularReteIvaSugerido === 'function')
+    ? calcularReteIvaSugerido(data, cliente)
+    : null;
+  const reteIvaTexto = reteIvaSugerido !== null
+    ? ` Estimado: <b>$${reteIvaSugerido.toLocaleString('es-CO')}</b> (15% del IVA, tarifa general Art. 437-1 ET).`
+    : '';
+
   if (esRegimenSimple) {
     html += `<b>ℹ Proveedor de Régimen Simple detectado</b>` +
       `Por norma, no le corresponde Rete Fuente ni Rete ICA. `;
     if (posibleReteIva) {
-      html += `Pero sí podría corresponder <b>Rete IVA</b> — esa regla no cambia por ser Régimen Simple. Verifica si tu empresa es agente de retención de IVA.`;
+      html += `Pero sí podría corresponder <b>Rete IVA</b> — esa regla no cambia por ser Régimen Simple.${reteIvaTexto} Verifica si tu empresa es agente de retención de IVA.`;
     } else {
       html += `Tampoco se detectó un IVA que amerite revisar Rete IVA en este caso.`;
     }
@@ -1187,7 +1195,6 @@ function showRetencionHint(data){
   // identificó para esta factura (¿es agente retenedor?) y cualquier
   // tarifa ya aprendida antes para este proveedor -- todo con la
   // misma función/tabla que usan Facturas y Carga masiva.
-  const cliente = myClients.find(c => c.id === currentClienteId);
   const invParaCalculo = { ...data, desglose_categorias: currentDesgloseCategorias };
   const sugerido = (cliente && typeof calcularRetencionSugerida === 'function')
     ? calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas)
@@ -1200,7 +1207,7 @@ function showRetencionHint(data){
     html = `<b>⚠ Retención en la fuente sugerida: ${montoTexto}</b>` +
       `Calculada sobre ${tipoTexto} para ${escapeHtml(cliente.nombre || 'este cliente')} (agente retenedor). ` +
       (sugerido.mismaTarifa ? '' : 'El rango depende de si el proveedor es declarante de renta o no — confírmalo para saber cuál de los dos valores aplica. ') +
-      (posibleReteIva ? 'También revisa si corresponde <b>Rete IVA</b> aparte. ' : '') +
+      (posibleReteIva ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
       `<span class="fine">Estimado con la tarifa vigente conocida al construir esta app — la base de retención cambió varias veces en 2026 por decisiones judiciales. Verifica la norma actual antes de aplicar este valor. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
     retencionHintEl.classList.add('show');
@@ -1224,7 +1231,7 @@ function showRetencionHint(data){
       `El subtotal (${subtotal.toLocaleString('es-CO')}) no supera el umbral orientativo para ${tipoTexto}, así que normalmente no se practica retención. `;
   }
   if (posibleReteIva) {
-    html += `Aun así, revisa si corresponde <b>Rete IVA</b> aparte. `;
+    html += `Aun así, revisa si corresponde <b>Rete IVA</b> aparte.${reteIvaTexto} `;
   }
   html += `<span class="fine">No es asesoría tributaria — verifica siempre con tu criterio profesional.</span>`;
   retencionHintEl.innerHTML = html;

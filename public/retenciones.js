@@ -214,3 +214,39 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas){
     cuentasPUC: [{ cuenta: configBase.cuentaPUC, nombre: configBase.nombrePUC }],
   };
 }
+
+// ---------- Retención de IVA (ReteIVA) ----------
+//
+// Es un cálculo aparte de la retención en la fuente de arriba -- no
+// depende de la categoría del concepto, se aplica sobre el valor del
+// IVA de la factura (no sobre el subtotal). Tarifa general vigente:
+// 15% del IVA (Art. 437-1 del Estatuto Tributario) -- el Gobierno
+// puede fijarla hasta 50%, y hay casos especiales al 100% (servicios
+// de no residentes, chatarra) que esta función no cubre, por ser
+// casos poco comunes para un contador independiente.
+//
+// Usa el mismo umbral de la categoría (2 UVT servicios, 10 UVT
+// compras, etc.) aplicado sobre el SUBTOTAL -- es la misma cuantía
+// mínima que la retención en la fuente normal, según la tabla DIAN.
+const RETEIVA_TARIFA_GENERAL = 0.15;
+
+// Calcula el ReteIVA sugerido para una factura -- devuelve el monto
+// en pesos, o null si no aplica (cliente no es agente retenedor, no
+// hay IVA, o el subtotal no supera el umbral de su categoría).
+function calcularReteIvaSugerido(inv, cliente){
+  if (!cliente || !cliente.agente_retenedor) return null;
+
+  const ivaValor = Number(inv.valor_iva) || 0;
+  if (ivaValor <= 0) return null; // sin IVA, no hay nada que retener
+
+  const categoria = (inv.categoria_concepto || '').toLowerCase();
+  const config = TARIFAS_RETENCION[categoria];
+  // Sin una categoría con umbral confiable, no adivinamos -- mismo
+  // criterio que calcularRetencionSugerida().
+  if (!config) return null;
+
+  const subtotal = Number(inv.valor_sin_iva) || 0;
+  if (subtotal < config.umbral) return null;
+
+  return Math.round(ivaValor * RETEIVA_TARIFA_GENERAL);
+}

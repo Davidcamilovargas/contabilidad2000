@@ -410,10 +410,26 @@ function renderFichaCompleta(item){
     `;
   }
 
+  // ReteIVA sugerido -- cálculo aparte (15% del IVA, no de la
+  // categoría), mismo patrón que Escanear. Se aplica igual con
+  // Régimen Simple -- esa exención es solo para Rete Fuente/ICA.
+  const reteIvaSugerido = (clienteFicha && typeof calcularReteIvaSugerido === 'function')
+    ? calcularReteIvaSugerido(d, clienteFicha)
+    : null;
+  let filaReteIva = '';
+  if (reteIvaSugerido !== null) {
+    filaReteIva = `
+      <div class="fd-row">
+        <div class="fd-label">Rete IVA sugerido</div>
+        <div class="fd-value money">$${reteIvaSugerido.toLocaleString('es-CO')} <span style="font-weight:400; color:#8A9289;">(15% del IVA)</span></div>
+      </div>
+    `;
+  }
+
   modalDatos.innerHTML = `
     <div class="factura-detalle">
       ${renderFichaMovimiento(item)}
-      <div class="fd-table">${filasCampos}${filaCategoria}${filaRetencion}</div>
+      <div class="fd-table">${filasCampos}${filaCategoria}${filaRetencion}${filaReteIva}</div>
     </div>
     <div style="font-size:11px;color:var(--ink-faint);margin-top:10px;">Retención estimada, no leída del documento -- no es asesoría tributaria, verifica la norma vigente.</div>
   `;
