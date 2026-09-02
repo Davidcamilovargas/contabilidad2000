@@ -162,6 +162,7 @@
       <a href="#" id="ctbIngresos">📈 Ingresos</a>
       <a href="#" id="ctbEgresos">📉 Egresos</a>
       <a href="#" id="ctbBalance">⚖️ Balance</a>
+      <a href="#" id="ctbCartera">💰 Cartera</a>
     </div>
 
     <div class="stat-cards">
@@ -285,6 +286,7 @@ async function cargarYRenderizar(){
   document.getElementById('ctbIngresos').href = '/ingresos.html?cliente=' + clienteIdUrl;
   document.getElementById('ctbEgresos').href = '/egresos.html?cliente=' + clienteIdUrl;
   document.getElementById('ctbBalance').href = '/balance.html?cliente=' + clienteIdUrl;
+  document.getElementById('ctbCartera').href = '/cartera.html?cliente=' + clienteIdUrl;
 
   // ---- Encabezado ----
   document.title = `Kárdex IA — ${cliente.nombre}`;

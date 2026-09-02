@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { Pool } = require('pg');
 const integraciones = require('./integraciones');
+const cartera = require('./cartera');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -148,6 +149,47 @@ async function ensureSchema() {
   // búsqueda de duplicados por contador sea instantánea incluso con
   // miles de facturas guardadas.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_contador_filehash ON invoices (contador_id, file_hash) WHERE file_hash <> '';`);
+
+  // ---------- Cartera / conciliación bancaria ----------
+  // Cada fila es UN movimiento de un extracto bancario (un cargo o un
+  // abono). "estado" empieza en 'sin_conciliar'; cuando el contador
+  // confirma contra qué factura corresponde, pasa a 'conciliado' y
+  // queda invoice_id apuntando a esa factura -- varios movimientos
+  // pueden apuntar a la misma factura (pagos parciales). 'ignorado' es
+  // para movimientos que el contador marcó como que NO corresponden a
+  // ninguna factura (comisiones bancarias, traslados entre cuentas
+  // propias, etc.), para que dejen de aparecer como pendientes.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS movimientos_banco (
+      id UUID PRIMARY KEY,
+      contador_id UUID,
+      cliente_id UUID,
+      extracto_id UUID,
+      fecha TEXT DEFAULT '',
+      descripcion TEXT DEFAULT '',
+      valor TEXT DEFAULT '',
+      tipo TEXT DEFAULT '',
+      invoice_id UUID,
+      estado TEXT NOT NULL DEFAULT 'sin_conciliar',
+      file_hash TEXT DEFAULT '',
+      mes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  // Un contador no revisa la cartera por año -- la revisa mes a mes, igual
+  // que Facturas/Ingresos/Egresos. "mes" es el período contable que el
+  // contador eligió al subir ESE extracto (formato "AAAA-MM"), no una
+  // fecha calculada -- así un extracto que cruza fin de mes no queda
+  // partido entre dos períodos distintos sin que el contador lo decida.
+  await pool.query(`ALTER TABLE movimientos_banco ADD COLUMN IF NOT EXISTS mes TEXT DEFAULT '';`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_movbanco_contador_cliente ON movimientos_banco (contador_id, cliente_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_movbanco_mes ON movimientos_banco (contador_id, cliente_id, mes);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_movbanco_invoice ON movimientos_banco (invoice_id) WHERE invoice_id IS NOT NULL;`);
+  // Evita procesar dos veces el mismo extracto (mismos bytes) para el
+  // mismo cliente -- igual que file_hash en invoices, pero aquí por
+  // archivo de extracto completo, no por movimiento individual.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_movbanco_filehash ON movimientos_banco (contador_id, cliente_id, file_hash) WHERE file_hash <> '';`);
+
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contador_id UUID;`);
   // Si el cliente es agente retenedor -- sin esto no tiene sentido
   // calcular ninguna retención sugerida (si no es agente retenedor,
@@ -1210,6 +1252,318 @@ app.post('/api/extract-rut', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error al llamar a Gemini (RUT):', err);
     res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
+  }
+});
+
+// ---------- Cartera / conciliación bancaria ----------
+
+async function clienteEsDelContador(contadorId, clienteId) {
+  const { rows } = await pool.query('SELECT 1 FROM clients WHERE id = $1 AND contador_id = $2', [clienteId, contadorId]);
+  return rows.length > 0;
+}
+
+// Trae todas las facturas de un cliente con su saldo pendiente ya
+// calculado (valor_con_iva menos la suma de los movimientos ya
+// conciliados contra ella) -- una factura con saldo 0 ya quedó
+// totalmente pagada, y no vuelve a aparecer como pendiente.
+async function facturasConSaldo(contadorId, clienteId) {
+  const { rows: facturas } = await pool.query(
+    `SELECT id, nit_cc, adquiriente_nit, nombre_razon_social, adquiriente_nombre,
+            fecha_factura, tipo_movimiento, valor_con_iva, letras_fe, numeros_fe, concepto
+     FROM invoices WHERE contador_id = $1 AND cliente_id = $2`,
+    [contadorId, clienteId]
+  );
+  const { rows: pagos } = await pool.query(
+    `SELECT invoice_id, COALESCE(SUM(NULLIF(valor,'')::numeric),0) AS pagado
+     FROM movimientos_banco
+     WHERE contador_id = $1 AND cliente_id = $2 AND estado = 'conciliado' AND invoice_id IS NOT NULL
+     GROUP BY invoice_id`,
+    [contadorId, clienteId]
+  );
+  const pagadoPorFactura = {};
+  pagos.forEach((p) => { pagadoPorFactura[p.invoice_id] = Number(p.pagado); });
+  return facturas.map((f) => {
+    const total = Number(f.valor_con_iva) || 0;
+    const pagado = pagadoPorFactura[f.id] || 0;
+    return { ...f, saldo_pendiente: Math.max(0, total - pagado), pagado };
+  });
+}
+
+// Estado de cuenta completo de un cliente: facturas pendientes (por
+// cobrar y por pagar, con antigüedad), movimientos del banco sin
+// conciliar (con la sugerencia de cruce ya calculada), y los ya
+// conciliados/ignorados. Todo se calcula al vuelo -- no se guarda
+// ninguna sugerencia en la base de datos, así siempre refleja el estado
+// real de las facturas en este momento.
+app.get('/api/cartera/:clienteId', requireAuth, async (req, res) => {
+  try {
+    const clienteId = req.params.clienteId;
+    if (!(await clienteEsDelContador(req.userId, clienteId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+
+    const facturas = await facturasConSaldo(req.userId, clienteId);
+    const facturasPendientes = facturas.filter((f) => f.saldo_pendiente > 0);
+
+    const { rows: movimientos } = await pool.query(
+      `SELECT * FROM movimientos_banco WHERE contador_id = $1 AND cliente_id = $2 ORDER BY fecha DESC, created_at DESC`,
+      [req.userId, clienteId]
+    );
+
+    const hoy = Date.now();
+    const conAging = (f) => {
+      const [d, m, y] = String(f.fecha_factura || '').split('/');
+      let dias = null;
+      if (d && m && y) {
+        const t = new Date(Number(y), Number(m) - 1, Number(d)).getTime();
+        if (!isNaN(t)) dias = Math.floor((hoy - t) / 86400000);
+      }
+      return { ...f, dias_transcurridos: dias };
+    };
+
+    const sinConciliar = movimientos
+      .filter((m) => m.estado === 'sin_conciliar')
+      .map((m) => {
+        const movimiento = { fecha: m.fecha, descripcion: m.descripcion, valor: Number(m.valor), tipo: m.tipo };
+        const sugerencia = cartera.emparejarMovimiento(movimiento, facturasPendientes);
+        return { ...m, valor: Number(m.valor), sugerencia };
+      });
+
+    const conciliados = movimientos.filter((m) => m.estado === 'conciliado').map((m) => ({ ...m, valor: Number(m.valor) }));
+    const ignorados = movimientos.filter((m) => m.estado === 'ignorado').map((m) => ({ ...m, valor: Number(m.valor) }));
+
+    const porCobrar = facturasPendientes.filter((f) => f.tipo_movimiento === 'ingreso').map(conAging);
+    const porPagar = facturasPendientes.filter((f) => f.tipo_movimiento === 'egreso').map(conAging);
+
+    const bucket = (dias) => {
+      if (dias === null) return 'sin_fecha';
+      if (dias <= 30) return 'dias_0_30';
+      if (dias <= 60) return 'dias_31_60';
+      if (dias <= 90) return 'dias_61_90';
+      return 'dias_90_mas';
+    };
+    const resumenAging = (lista) => {
+      const r = { dias_0_30: 0, dias_31_60: 0, dias_61_90: 0, dias_90_mas: 0, sin_fecha: 0 };
+      lista.forEach((f) => { r[bucket(f.dias_transcurridos)] += f.saldo_pendiente; });
+      return r;
+    };
+
+    res.json({
+      porCobrar,
+      porPagar,
+      movimientosSinConciliar: sinConciliar,
+      movimientosConciliados: conciliados,
+      movimientosIgnorados: ignorados,
+      resumen: {
+        totalPorCobrar: porCobrar.reduce((s, f) => s + f.saldo_pendiente, 0),
+        totalPorPagar: porPagar.reduce((s, f) => s + f.saldo_pendiente, 0),
+        agingPorCobrar: resumenAging(porCobrar),
+        agingPorPagar: resumenAging(porPagar),
+        sinConciliarCount: sinConciliar.length,
+      },
+    });
+  } catch (err) {
+    console.error('Error leyendo cartera:', err);
+    res.status(500).json({ error: 'No se pudo cargar la cartera de este cliente.' });
+  }
+});
+
+// Extrae los movimientos de un extracto en PDF con la misma IA que lee
+// facturas. Antes de gastar una lectura, revisa si este mismo archivo
+// (mismos bytes) ya se procesó antes para este cliente -- evita subir
+// el mismo extracto dos veces sin darse cuenta.
+app.post('/api/extracto/leer-pdf', requireAuth, async (req, res) => {
+  const { base64, mediaType, isPdf, clienteId, forzar } = req.body;
+  if (!base64 || !mediaType || !clienteId) {
+    return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
+  }
+  if (!(await clienteEsDelContador(req.userId, clienteId))) {
+    return res.status(404).json({ error: 'Cliente no encontrado.' });
+  }
+
+  const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
+  const fileHash = calcularFileHash(base64);
+
+  if (!forzar) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT 1 FROM movimientos_banco WHERE contador_id = $1 AND cliente_id = $2 AND file_hash = $3 LIMIT 1`,
+        [req.userId, clienteId, fileHash]
+      );
+      if (rows.length > 0) return res.json({ duplicado: true, file_hash: fileHash });
+    } catch (err) {
+      console.error('No se pudo revisar duplicados de extracto:', err.message);
+    }
+  }
+
+  try {
+    const parsed = await llamarGeminiJSON(base64, effectiveMediaType, cartera.EXTRACTO_PROMPT);
+    const movimientos = Array.isArray(parsed) ? parsed : [];
+    movimientos.forEach((m) => {
+      if (m && m.valor !== undefined && !isNaN(Number(m.valor))) m.valor = Math.round(Number(m.valor));
+      if (m && m.tipo !== 'credito' && m.tipo !== 'debito') m.tipo = 'debito';
+    });
+    res.json({ movimientos, file_hash: fileHash });
+  } catch (err) {
+    console.error('Error al llamar a Gemini (extracto):', err);
+    res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
+  }
+});
+
+// Lee un extracto en CSV -- sin IA, con un parser propio (ver cartera.js).
+app.post('/api/extracto/leer-csv', requireAuth, async (req, res) => {
+  const { csvTexto, clienteId, forzar } = req.body;
+  if (!csvTexto || !clienteId) {
+    return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
+  }
+  if (!(await clienteEsDelContador(req.userId, clienteId))) {
+    return res.status(404).json({ error: 'Cliente no encontrado.' });
+  }
+
+  const fileHash = calcularFileHash(csvTexto);
+
+  if (!forzar) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT 1 FROM movimientos_banco WHERE contador_id = $1 AND cliente_id = $2 AND file_hash = $3 LIMIT 1`,
+        [req.userId, clienteId, fileHash]
+      );
+      if (rows.length > 0) return res.json({ duplicado: true, file_hash: fileHash });
+    } catch (err) {
+      console.error('No se pudo revisar duplicados de extracto:', err.message);
+    }
+  }
+
+  try {
+    const movimientos = cartera.parseCSVExtracto(csvTexto);
+    res.json({ movimientos, file_hash: fileHash });
+  } catch (err) {
+    console.error('Error leyendo CSV de extracto:', err.message);
+    res.status(err.status || 400).json({ error: err.publicMessage || 'No se pudo leer el archivo CSV.' });
+  }
+});
+
+// Guarda los movimientos ya revisados por el contador (después de leer
+// el PDF o el CSV). Todavía no marca ningún cruce -- eso pasa cuando el
+// contador confirma cada uno, uno por uno, desde el estado de cuenta.
+app.post('/api/extracto/guardar', requireAuth, async (req, res) => {
+  try {
+    const { clienteId, movimientos, file_hash, mes } = req.body;
+    if (!clienteId || !Array.isArray(movimientos) || movimientos.length === 0) {
+      return res.status(400).json({ error: 'Faltan movimientos para guardar.' });
+    }
+    // El mes contable lo elige el contador antes de subir el extracto (no
+    // se calcula solo) -- ver comentario en ensureSchema. Sin esto, la
+    // pantalla de Cartera no podría filtrar mes a mes como el resto de la
+    // app (Facturas/Ingresos/Egresos), que es como un contador la revisa.
+    if (!/^\d{4}-\d{2}$/.test(mes || '')) {
+      return res.status(400).json({ error: 'Falta indicar a qué mes contable corresponde este extracto.' });
+    }
+    if (!(await clienteEsDelContador(req.userId, clienteId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+
+    const extractoId = crypto.randomUUID();
+    let guardados = 0;
+    for (const m of movimientos) {
+      const valor = Math.round(Number(m.valor));
+      if (!valor || (m.tipo !== 'credito' && m.tipo !== 'debito')) continue;
+      const id = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO movimientos_banco (id, contador_id, cliente_id, extracto_id, fecha, descripcion, valor, tipo, estado, file_hash, mes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'sin_conciliar',$9,$10)`,
+        [id, req.userId, clienteId, extractoId, String(m.fecha || ''), String(m.descripcion || ''), String(valor), m.tipo, file_hash || '', mes]
+      );
+      guardados++;
+    }
+    res.json({ ok: true, guardados, extracto_id: extractoId });
+  } catch (err) {
+    console.error('Error guardando movimientos del extracto:', err);
+    res.status(500).json({ error: 'No se pudieron guardar los movimientos del extracto.' });
+  }
+});
+
+// El contador confirma que un movimiento del banco corresponde a una
+// factura específica -- es la única forma en que un movimiento pasa a
+// 'conciliado'. Nunca ocurre solo, ni siquiera cuando la sugerencia es
+// de confianza "alta".
+app.post('/api/movimientos/:id/confirmar', requireAuth, async (req, res) => {
+  try {
+    const { invoiceId } = req.body;
+    if (!invoiceId) return res.status(400).json({ error: 'Falta indicar a qué factura corresponde.' });
+
+    const { rows: movRows } = await pool.query(
+      'SELECT * FROM movimientos_banco WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (movRows.length === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
+    const mov = movRows[0];
+
+    const { rows: facRows } = await pool.query(
+      'SELECT * FROM invoices WHERE id = $1 AND contador_id = $2 AND cliente_id = $3',
+      [invoiceId, req.userId, mov.cliente_id]
+    );
+    if (facRows.length === 0) return res.status(404).json({ error: 'La factura indicada no existe o no es de este cliente.' });
+    const factura = facRows[0];
+
+    const tipoEsperado = mov.tipo === 'credito' ? 'ingreso' : 'egreso';
+    if (factura.tipo_movimiento !== tipoEsperado) {
+      return res.status(400).json({
+        error: `Este movimiento es un ${mov.tipo === 'credito' ? 'abono' : 'cargo'}, pero la factura elegida es de ${factura.tipo_movimiento}. No coinciden.`,
+      });
+    }
+
+    await pool.query(`UPDATE movimientos_banco SET estado = 'conciliado', invoice_id = $1 WHERE id = $2`, [invoiceId, mov.id]);
+
+    // Aviso informativo (no bloquea el guardado): si con este movimiento
+    // la factura queda sobrepagada, se lo hacemos saber por si el cruce
+    // en realidad era el equivocado.
+    const { rows: pagos } = await pool.query(
+      `SELECT COALESCE(SUM(NULLIF(valor,'')::numeric),0) AS pagado FROM movimientos_banco WHERE invoice_id = $1 AND estado = 'conciliado'`,
+      [invoiceId]
+    );
+    const totalPagado = Number(pagos[0].pagado);
+    const totalFactura = Number(factura.valor_con_iva) || 0;
+    const sobrepago = totalPagado > totalFactura + 500;
+
+    res.json({ ok: true, sobrepago, totalPagado, totalFactura });
+  } catch (err) {
+    console.error('Error confirmando movimiento:', err);
+    res.status(500).json({ error: 'No se pudo confirmar el cruce.' });
+  }
+});
+
+// Marca un movimiento como que NO corresponde a ninguna factura
+// (comisiones bancarias, traslados entre cuentas propias, etc.) -- deja
+// de aparecer como pendiente de revisar.
+app.post('/api/movimientos/:id/ignorar', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE movimientos_banco SET estado = 'ignorado', invoice_id = NULL WHERE id = $1 AND contador_id = $2`,
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error ignorando movimiento:', err);
+    res.status(500).json({ error: 'No se pudo ignorar el movimiento.' });
+  }
+});
+
+// Deshace una conciliación o un "ignorado" -- el movimiento vuelve a
+// quedar sin conciliar, por si el contador confirmó (o ignoró) algo por
+// error.
+app.post('/api/movimientos/:id/desconciliar', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE movimientos_banco SET estado = 'sin_conciliar', invoice_id = NULL WHERE id = $1 AND contador_id = $2`,
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error deshaciendo la conciliación:', err);
+    res.status(500).json({ error: 'No se pudo deshacer.' });
   }
 });
 
