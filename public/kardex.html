@@ -9,44 +9,26 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <style>
-  /* ---------- alinear con la identidad oscura de landing.html ---------- */
+  /* ---------- tokens locales de esta página -- ahora apuntan a la
+     misma paleta clara de styles.css, no a una identidad oscura aparte ---------- */
   :root{
-    --k-carbon:#0E1315;
-    --k-carbon-raised:#171E20;
-    --k-carbon-line:#2B3436;
     --k-ember:#FF5A36;
     --k-ember-soft:rgba(255,90,54,0.14);
-    --k-white:#FFFFFF;
-    --k-white-soft:rgba(255,255,255,0.62);
-    --k-white-faint:rgba(255,255,255,0.4);
   }
-  body{ background:var(--k-carbon); color:var(--k-white); font-family:'Inter',-apple-system,sans-serif; }
   h1{ font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.03em; }
   h1 span{ animation-name:letterUp; }
-  header{ border-bottom-color:var(--k-carbon-line); }
-  .tag{ color:var(--k-white-faint); }
-  .live-dot{ background:var(--k-ember); }
-  .sub{ color:var(--k-white-soft); }
 
   /* Esta página muestra una lista + una tabla lado a lado -- necesita
      más espacio horizontal que el ancho angosto pensado para páginas
      de un solo formulario. */
   .wrap{ max-width:1240px; }
 
-  nav.tabs a{
-    background:transparent; border-color:var(--k-carbon-line); color:var(--k-white-soft);
-  }
-  nav.tabs a:hover{ background:rgba(255,255,255,0.06); color:var(--k-white); border-color:var(--k-carbon-line); }
-  nav.tabs a.active{ background:var(--k-ember); border-color:var(--k-ember); color:#fff; }
-
-  footer{ border-top-color:var(--k-carbon-line); color:var(--k-white-faint); }
-
   .kardex-toolbar{ margin-bottom:18px; }
   .kardex-toolbar select{
     font-family:'JetBrains Mono',monospace;
     font-size:12.5px; letter-spacing:.5px; text-transform:uppercase;
-    padding:9px 14px; border:1px solid #DEDACD; background:#FBF9F4;
-    color:#1B2420; border-radius:6px; cursor:pointer;
+    padding:9px 14px; border:1px solid #E6DECA; background:#FFFFFF;
+    color:#241E18; border-radius:6px; cursor:pointer;
   }
 
   .kardex-layout{
@@ -58,104 +40,104 @@
   /* ---------- lista de proveedores: tarjeta clara flotando sobre el fondo oscuro,
      igual al mockup de producto en landing.html ---------- */
   .prov-list{
-    background:#FBF9F4; border-radius:12px; overflow:hidden;
-    box-shadow:0 30px 60px -20px rgba(0,0,0,0.5);
+    background:#FFFFFF; border-radius:12px; overflow:hidden;
+    box-shadow:0 30px 60px -24px rgba(46,34,20,0.16);
     max-height:680px; overflow-y:auto;
   }
   .prov-search{
-    width:100%; border:none; border-bottom:1px solid #DEDACD;
+    width:100%; border:none; border-bottom:1px solid #E6DECA;
     padding:16px 18px; font-family:'JetBrains Mono',monospace; font-size:13px;
-    background:transparent; color:#1B2420;
+    background:transparent; color:#241E18;
   }
-  .prov-search::placeholder{ color:#8A9289; }
+  .prov-search::placeholder{ color:#A79C8B; }
   .prov-item{
     display:block; width:100%; text-align:left; padding:16px 18px;
-    border-bottom:1px solid #DEDACD; background:none; cursor:pointer;
+    border-bottom:1px solid #E6DECA; background:none; cursor:pointer;
     transition:background .15s var(--ease);
   }
   .prov-item:last-child{ border-bottom:none; }
-  .prov-item:hover{ background:#F2EFE7; }
+  .prov-item:hover{ background:#F1EAD9; }
   .prov-item.active{ background:var(--k-ember-soft); }
-  .prov-item .name{ font-size:14.5px; font-weight:700; color:#1B2420; line-height:1.4; }
-  .prov-item .nit{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#8A9289; margin-top:4px; }
+  .prov-item .name{ font-size:14.5px; font-weight:700; color:#241E18; line-height:1.4; }
+  .prov-item .nit{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#A79C8B; margin-top:4px; }
   .prov-item .meta{
     display:flex; justify-content:space-between; margin-top:10px;
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#4E5A52;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#6C6152;
   }
   .prov-item .meta .total{ font-weight:700; color:var(--k-ember); }
-  #provEmpty{ padding:30px 16px; text-align:center; font-size:12.5px; color:#8A9289; }
+  #provEmpty{ padding:30px 16px; text-align:center; font-size:12.5px; color:#A79C8B; }
 
   /* ---------- tarjeta de kárdex: misma tarjeta clara flotante ---------- */
   .kardex-card{
-    background:#FBF9F4; border-radius:12px; overflow:hidden; min-height:400px;
-    box-shadow:0 30px 60px -20px rgba(0,0,0,0.5);
-    color:#1B2420;
+    background:#FFFFFF; border-radius:12px; overflow:hidden; min-height:400px;
+    box-shadow:0 30px 60px -24px rgba(46,34,20,0.16);
+    color:#241E18;
   }
   .kardex-empty{
     display:flex; flex-direction:column; align-items:center; justify-content:center;
-    min-height:400px; text-align:center; padding:40px 20px; color:#8A9289;
+    min-height:400px; text-align:center; padding:40px 20px; color:#A79C8B;
   }
   .kardex-empty svg{ margin-bottom:14px; opacity:.5; }
   .kardex-empty p{ font-size:13.5px; max-width:280px; line-height:1.5; }
 
   .kardex-head{
-    padding:26px 28px; border-bottom:2px solid #1B2420;
+    padding:26px 28px; border-bottom:2px solid #241E18;
     display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;
   }
   .kardex-head h2{ font-size:21px; margin:0; font-weight:800; font-family:'Archivo',sans-serif; letter-spacing:-0.01em; }
-  .kardex-head .nit{ font-family:'JetBrains Mono',monospace; font-size:12px; color:#4E5A52; margin-top:6px; }
+  .kardex-head .nit{ font-family:'JetBrains Mono',monospace; font-size:12px; color:#6C6152; margin-top:6px; }
   .kardex-summary{ text-align:right; }
-  .kardex-summary .label{ font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:#8A9289; }
+  .kardex-summary .label{ font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:#A79C8B; }
   .kardex-summary .value{ font-family:'JetBrains Mono',monospace; font-size:23px; font-weight:700; color:var(--k-ember); margin-top:4px; }
 
   .kardex-table{ width:100%; border-collapse:collapse; }
   .kardex-table thead th{
     font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-    color:#8A9289; text-align:left; padding:14px 28px; background:#F2EFE7; border-bottom:1px solid #DEDACD;
+    color:#A79C8B; text-align:left; padding:14px 28px; background:#F1EAD9; border-bottom:1px solid #E6DECA;
   }
-  .kardex-table tbody td{ padding:18px 28px; font-size:14px; border-bottom:1px solid #DEDACD; line-height:1.5; }
+  .kardex-table tbody td{ padding:18px 28px; font-size:14px; border-bottom:1px solid #E6DECA; line-height:1.5; }
   .kardex-table tbody tr:last-child td{ border-bottom:none; }
   .kardex-table tbody tr{ opacity:0; animation:fadeUp .4s var(--ease) forwards; }
-  .kardex-table .date{ font-family:'JetBrains Mono',monospace; color:#4E5A52; white-space:nowrap; font-size:13px; }
-  .kardex-table .concepto{ color:#4E5A52; font-size:13px; }
+  .kardex-table .date{ font-family:'JetBrains Mono',monospace; color:#6C6152; white-space:nowrap; font-size:13px; }
+  .kardex-table .concepto{ color:#6C6152; font-size:13px; }
   .mov-tag{
     display:inline-block; font-family:'JetBrains Mono',monospace; font-size:9.5px;
     text-transform:uppercase; letter-spacing:.04em; padding:3px 7px; border-radius:100px;
     margin-right:6px; vertical-align:middle;
   }
-  .mov-tag.egreso{ background:var(--k-ember-soft); color:#B5482E; }
-  .mov-tag.ingreso{ background:#DCEEE8; color:#154F41; }
+  .mov-tag.egreso{ background:var(--k-ember-soft); color:#8B5245; }
+  .mov-tag.ingreso{ background:#E9F0EB; color:#3E6053; }
   .kardex-table .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; font-size:13.5px; }
   .kardex-table .saldo{ font-weight:700; color:var(--k-ember); }
 
   #loading{
-    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--k-white-soft);
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:30px 0;
   }
-  .dot{width:7px;height:7px;background:var(--k-ember);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
+  .dot{width:7px;height:7px;background:var(--moss);border-radius:50%;animation:pulse2 1.1s infinite ease-in-out;}
   @keyframes pulse2{0%,100%{opacity:.25;}50%{opacity:1;}}
 
   .client-tabbar{
     display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
-    background:var(--k-carbon-raised); border:1px solid var(--k-carbon-line); border-radius:10px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:10px;
     padding:12px 18px; margin-bottom:20px;
   }
   .client-tabbar .ctb-back{
-    font-family:'JetBrains Mono',monospace; font-size:12px; color:#fff; text-decoration:none; white-space:nowrap;
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink); font-weight:600; text-decoration:none; white-space:nowrap;
   }
   .client-tabbar .ctb-back:hover{ color:var(--k-ember); }
   .client-tabbar .ctb-links{ display:flex; gap:6px; flex-wrap:wrap; }
   .client-tabbar .ctb-links a{
     font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
-    color:var(--k-white-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--k-carbon-line); border-radius:100px;
+    color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:100px;
     transition:all .15s ease;
   }
-  .client-tabbar .ctb-links a:hover{ color:#fff; border-color:#3D5A45; }
+  .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
   .client-tabbar .ctb-links a.active{ background:var(--k-ember); border-color:var(--k-ember); color:#fff; }
   .client-tabbar .ctb-exit{
-    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--k-white-faint); text-decoration:none; white-space:nowrap;
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
   }
-  .client-tabbar .ctb-exit:hover{ color:#fff; }
+  .client-tabbar .ctb-exit:hover{ color:var(--ink); }
 
   @media (max-width:560px){
     .kardex-table thead th:nth-child(2), .kardex-table tbody td:nth-child(2){ display:none; }
@@ -163,7 +145,22 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo-mark">K</div>
+      <span class="brand-text">K&aacute;rdex IA</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="/" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Inicio</a>
+      <a href="/clientes.html" class="sidebar-link active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15.5 14.2c2.6.4 4.5 2.7 4.5 5.8"/></svg>Clientes</a>
+      <a href="/escanear.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Escanear</a>
+      <a href="/masivo.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0-10l-3.5 3.5M12 4l3.5 3.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>Carga masiva</a>
+    </nav>
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-foot">C&oacute;lombia &middot; Kardex IA</div>
+  </aside>
+  <div class="wrap">
 
   <header class="reveal">
     <div class="brand">
@@ -179,11 +176,6 @@
 </div>
   </header>
   <div class="sub reveal">El historial completo de cada proveedor, con saldo acumulado — como el kárdex de siempre.</div>
-
-  <nav class="tabs reveal">
-    <a href="/">Inicio</a>
-    <a href="/clientes.html">Clientes</a>
-  </nav>
 
   <div class="client-tabbar reveal" id="clientTabbar" style="display:none;">
     <a href="#" class="ctb-back" id="ctbFicha">← Ficha del cliente</a>
@@ -227,6 +219,7 @@
 
   <footer>El saldo acumulado suma el valor con IVA de cada factura, en orden cronológico.</footer>
 </div>
+</div>
 
 <script>
 (function animateTitle(){
@@ -252,6 +245,15 @@ let allInvoices = [];
 let myClients = [];
 let providers = [];
 let activeNit = null;
+
+// El nombre/NIT/concepto de un proveedor viene de lo que leyó la IA en
+// cada factura y se inserta en la página con innerHTML -- sin esto, un
+// valor que trajera HTML (por accidente o a propósito en el documento
+// escaneado) se ejecutaría como código en vez de mostrarse como texto.
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 
 function populateClients(){
   clientSelect.innerHTML = '';
@@ -360,8 +362,8 @@ function renderProviderList(filter){
     const btn = document.createElement('button');
     btn.className = 'prov-item' + (p.nit === activeNit ? ' active' : '');
     btn.innerHTML = `
-      <div class="name">${p.name}</div>
-      <div class="nit">NIT ${p.nit}${p.dv ? '-' + p.dv : ''}</div>
+      <div class="name">${escapeHtml(p.name)}</div>
+      <div class="nit">NIT ${escapeHtml(p.nit)}${p.dv ? '-' + escapeHtml(p.dv) : ''}</div>
       <div class="meta"><span>${p.count} factura${p.count !== 1 ? 's' : ''}</span><span class="total">${formatCOP(p.total)}</span></div>
     `;
     btn.addEventListener('click', () => selectProvider(p.nit));
@@ -389,8 +391,8 @@ function selectProvider(nit){
       : '<span class="mov-tag egreso">Egreso</span>';
     return `
       <tr style="animation-delay:${i * 0.04}s">
-        <td class="date">${inv.fecha_factura || '—'}</td>
-        <td class="concepto">${badge} ${inv.concepto || '—'}</td>
+        <td class="date">${escapeHtml(inv.fecha_factura) || '—'}</td>
+        <td class="concepto">${badge} ${escapeHtml(inv.concepto) || '—'}</td>
         <td class="money">${formatCOP(invoiceTotal(inv))}</td>
         <td class="money saldo">${formatCOP(acumulado)}</td>
       </tr>
@@ -400,8 +402,8 @@ function selectProvider(nit){
   kardexCard.innerHTML = `
     <div class="kardex-head">
       <div>
-        <h2>${provider.name}</h2>
-        <div class="nit">NIT ${provider.nit}${provider.dv ? '-' + provider.dv : ''} · ${provider.count} factura${provider.count !== 1 ? 's' : ''}</div>
+        <h2>${escapeHtml(provider.name)}</h2>
+        <div class="nit">NIT ${escapeHtml(provider.nit)}${provider.dv ? '-' + escapeHtml(provider.dv) : ''} · ${provider.count} factura${provider.count !== 1 ? 's' : ''}</div>
       </div>
       <div class="kardex-summary">
         <div class="label">Saldo acumulado</div>

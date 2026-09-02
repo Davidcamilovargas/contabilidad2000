@@ -9,43 +9,45 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --carbon:#0E1315; --carbon-raised:#171E20; --carbon-line:#2B3436;
-    --ember:#FF5A36; --white-soft:rgba(255,255,255,0.7); --white-faint:rgba(255,255,255,0.4);
+    --paper:#FAF7F1; --paper-raised:#FFFFFF; --line:#E6DECA;
+    --ink:#241E18; --ink-soft:#6C6152; --ink-faint:#A79C8B;
+    --ember:#FF5A36; --ember-deep:#D8431F;
   }
   *{box-sizing:border-box;}
   body{
-    background:var(--carbon); color:#fff;
+    background:var(--paper); color:var(--ink);
     font-family:'Inter',-apple-system,sans-serif;
     margin:0; padding:50px 20px 90px;
     line-height:1.7;
   }
-  .wrap{ max-width:680px; margin:0 auto; }
-  a{ color:var(--ember); }
+  .wrap{ max-width:680px; margin:0 auto; background:var(--paper-raised); border:1px solid var(--line); border-radius:16px; padding:44px 46px; box-shadow:0 30px 60px -28px rgba(46,34,20,0.16); }
+  @media (max-width:560px){ .wrap{ padding:32px 24px; } }
+  a{ color:var(--ember-deep); }
   .back{
     display:inline-block; margin-bottom:28px;
     font-family:'JetBrains Mono',monospace; font-size:11.5px; letter-spacing:.05em;
-    text-transform:uppercase; text-decoration:none; color:var(--white-faint);
+    text-transform:uppercase; text-decoration:none; color:var(--ink-faint);
   }
-  .back:hover{ color:var(--ember); }
+  .back:hover{ color:var(--ember-deep); }
   h1{
     font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.02em;
-    font-size:2rem; margin:0 0 6px;
+    font-size:2rem; margin:0 0 6px; color:var(--ink);
   }
   .updated{
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--white-faint);
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint);
     margin-bottom:36px; letter-spacing:.03em;
   }
   h2{
     font-family:'Archivo',sans-serif; font-weight:800; font-size:1.15rem;
-    margin:38px 0 12px; letter-spacing:-0.01em;
+    margin:38px 0 12px; letter-spacing:-0.01em; color:var(--ink);
   }
-  h3{ font-size:1rem; margin:22px 0 8px; color:var(--white-soft); }
-  p, li{ color:var(--white-soft); font-size:14.5px; }
-  strong{ color:#fff; }
+  h3{ font-size:1rem; margin:22px 0 8px; color:var(--ink-soft); }
+  p, li{ color:var(--ink-soft); font-size:14.5px; }
+  strong{ color:var(--ink); }
   table{ width:100%; border-collapse:collapse; margin:16px 0; font-size:13.5px; }
-  th, td{ text-align:left; padding:9px 12px; border-bottom:1px solid var(--carbon-line); color:var(--white-soft); }
-  th{ color:#fff; font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
-  .fill{ color:var(--ember); font-style:italic; }
+  th, td{ text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); color:var(--ink-soft); }
+  th{ color:var(--ink); font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .fill{ color:var(--ember-deep); font-style:italic; }
 </style>
 </head>
 <body>

@@ -601,6 +601,21 @@ app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
 // Guardar una factura ya revisada por el contador
 app.post('/api/invoices', requireAuth, async (req, res) => {
   try {
+    // cliente_id viene del navegador -- si trae uno, hay que confirmar
+    // que sea un cliente de ESTE contador antes de guardarlo. Sin este
+    // chequeo, cualquiera podría mandar el id de un cliente ajeno (por
+    // ejemplo adivinando o copiando un UUID) y la factura quedaría
+    // asociada al cliente de otro contador en vez de quedar sin asignar.
+    if (req.body.cliente_id) {
+      const clienteRes = await pool.query(
+        'SELECT 1 FROM clients WHERE id = $1 AND contador_id = $2',
+        [req.body.cliente_id, req.userId]
+      );
+      if (clienteRes.rows.length === 0) {
+        return res.status(400).json({ error: 'El cliente indicado no existe o no te pertenece.' });
+      }
+    }
+
     const id = crypto.randomUUID();
     const values = SAVED_FIELDS.map((key) => {
       const val = req.body[key] ?? '';

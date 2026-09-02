@@ -1,18 +1,39 @@
 :root{
-  --paper:#0E1315;
-  --paper-raised:#171E20;
-  --ink:#FFFFFF;
-  --ink-soft:rgba(255,255,255,0.62);
-  --ink-faint:rgba(255,255,255,0.4);
-  --line:#2B3436;
-  --moss:#2E8A73;
-  --moss-deep:#1F6F5C;
-  --moss-soft:#12312A;
+  /* ---- superficie ---- */
+  --paper:#FAF7F1;
+  --paper-raised:#FFFFFF;
+  --paper-sunken:#F1EAD9;
+  --ink:#241E18;
+  --ink-soft:#6C6152;
+  --ink-faint:#A79C8B;
+  --line:#E6DECA;
+  --line-strong:#D6C6A8;
+
+  /* ---- sage / verde salvia -- secundario, positivo, ingresos ---- */
+  --moss:#5B8072;
+  --moss-deep:#3E6053;
+  --moss-soft:#4C7365;
+  --moss-tint:#E9F0EB;
+
+  /* ---- ember / naranja -- primario, acciones, egresos ---- */
   --ember:#FF5A36;
   --ember-deep:#D8431F;
   --ember-soft:rgba(255,90,54,0.14);
-  --stamp:#B5482E;
-  --stamp-soft:#F7E6E1;
+  --ember-tint:#FFF0EA;
+
+  /* ---- clay / terracota -- terciario, acentos, sellos ---- */
+  --clay:#AA6B5C;
+  --clay-deep:#8B5245;
+  --clay-soft:rgba(170,107,92,0.16);
+  --clay-tint:#F6ECE7;
+
+  --stamp:#8B5245;
+  --stamp-soft:#F6ECE7;
+
+  --shadow-sm:0 1px 2px rgba(46,34,20,0.06);
+  --shadow-md:0 14px 32px -16px rgba(46,34,20,0.18);
+  --shadow-lg:0 30px 60px -28px rgba(46,34,20,0.22);
+
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 *{box-sizing:border-box;}
@@ -20,6 +41,10 @@ html,body{margin:0;padding:0;}
 html{scroll-behavior:smooth;}
 body{
   background:var(--paper);
+  background-image:
+    radial-gradient(1100px 480px at 8% -10%, rgba(255,90,54,0.05), transparent 60%),
+    radial-gradient(900px 460px at 100% 0%, rgba(91,128,114,0.06), transparent 55%);
+  background-attachment:fixed;
   color:var(--ink);
   font-family:'Inter', -apple-system, sans-serif;
   min-height:100vh;
@@ -32,6 +57,81 @@ body{
   max-width:900px;
   margin:0 auto;
   padding:36px 20px 80px;
+}
+
+/* ---------- app shell: barra lateral fija + contenido ----------
+   La barra lateral reemplaza el nav de pestañas de arriba en todas las
+   páginas de la aplicación (no en landing/login/legales, que no la usan).
+   El menú por cliente (client-tabbar) sigue viviendo dentro de .wrap,
+   sin cambios -- la barra lateral es solo la navegación general. */
+.app-shell{
+  display:flex;
+  align-items:flex-start;
+  min-height:100vh;
+}
+.app-shell > .wrap{
+  flex:1 1 auto;
+  min-width:0;
+  margin:0;
+}
+.sidebar{
+  flex:0 0 232px;
+  width:232px;
+  min-height:100vh;
+  position:sticky;
+  top:0;
+  align-self:flex-start;
+  background:var(--paper-raised);
+  border-right:1px solid var(--line);
+  display:flex;
+  flex-direction:column;
+  padding:24px 16px;
+  gap:26px;
+}
+.sidebar-brand{
+  display:flex; align-items:center; gap:10px;
+  padding:0 8px;
+}
+.sidebar-brand .logo-mark{
+  width:32px; height:32px; border-radius:8px; flex-shrink:0;
+  background:linear-gradient(135deg, var(--ember) 0%, var(--clay) 55%, var(--moss) 100%); color:#fff;
+  display:flex; align-items:center; justify-content:center;
+  font-family:'Archivo',sans-serif; font-weight:900; font-size:16px;
+}
+.sidebar-brand .brand-text{
+  font-family:'Archivo',sans-serif; font-weight:800; font-size:15.5px; letter-spacing:-0.01em; color:var(--ink);
+}
+.sidebar-nav{ display:flex; flex-direction:column; gap:3px; }
+.sidebar-link{
+  display:flex; align-items:center; gap:11px;
+  padding:10px 12px; border-radius:8px;
+  font-family:'Inter',sans-serif; font-size:13.5px; font-weight:600;
+  color:var(--ink-soft); text-decoration:none;
+  transition:background .15s var(--ease), color .15s var(--ease);
+}
+.sidebar-link svg{ flex-shrink:0; opacity:.85; }
+.sidebar-link:hover{ background:var(--paper-sunken); color:var(--ink); }
+.sidebar-link.active{ background:var(--ember); color:#fff; box-shadow:0 8px 18px -8px rgba(255,90,54,0.5); }
+.sidebar-link.active svg{ opacity:1; }
+.sidebar-spacer{ flex:1; }
+.sidebar-foot{
+  border-top:1px solid var(--line); padding-top:16px; margin-top:auto;
+  font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-faint);
+  letter-spacing:.04em; padding-left:8px;
+}
+
+@media (max-width:900px){
+  .app-shell{ flex-direction:column; }
+  .sidebar{
+    position:static; width:100%; min-height:0; height:auto;
+    flex-direction:row; align-items:center; gap:16px;
+    padding:14px 16px; overflow-x:auto;
+    border-right:none; border-bottom:1px solid var(--line);
+  }
+  .sidebar-nav{ flex-direction:row; gap:6px; }
+  .sidebar-link{ white-space:nowrap; padding:8px 12px; }
+  .sidebar-spacer{ display:none; }
+  .sidebar-foot{ display:none; }
 }
 
 @keyframes fadeUp{
@@ -57,9 +157,11 @@ h1{
   font-family:'Archivo', sans-serif;
   font-size:26px;margin:0;font-weight:900;letter-spacing:-0.02em;
   display:flex; overflow:hidden;
+  color:var(--ink);
 }
 h1 span{
   display:inline-block;
+  white-space:pre;
   opacity:0;
   animation:letterUp .8s var(--ease) forwards;
 }
@@ -77,7 +179,7 @@ h1 span{
 }
 .tag .live-dot{
   width:6px;height:6px;border-radius:50%;
-  background:var(--ember);
+  background:var(--moss);
   animation:pulse 2s infinite ease-in-out;
 }
 @keyframes pulse{0%,100%{opacity:.35;}50%{opacity:1;}}
@@ -105,16 +207,17 @@ nav.tabs a{
   color:var(--ink-soft);
   padding:9px 16px;
   border:1px solid var(--line);
-  background:transparent;
+  background:var(--paper-raised);
   border-radius:6px;
-  transition:background .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease);
+  transition:background .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-nav.tabs a:hover{ border-color:var(--ember); color:var(--ink); background:rgba(255,90,54,0.06); }
+nav.tabs a:hover{ border-color:var(--ember); color:var(--ember-deep); background:var(--ember-tint); }
 nav.tabs a.active{
   background:var(--ember); color:#fff; border-color:var(--ember);
+  box-shadow:0 8px 18px -8px rgba(255,90,54,0.55);
 }
 
-/* ---------- buttons ---------- */
+/* ---------- botones ---------- */
 button{font-family:inherit;cursor:pointer;border:none;}
 .btn{
   position:relative;
@@ -137,13 +240,15 @@ button{font-family:inherit;cursor:pointer;border:none;}
   z-index:-1;
 }
 .btn:hover::before{ transform:translateX(0); }
-.btn:hover{ transform:translateY(-2px); box-shadow:0 10px 24px -8px rgba(255,90,54,0.5); }
+.btn:hover{ transform:translateY(-2px); box-shadow:0 10px 24px -8px rgba(255,90,54,0.45); }
 .btn:active{ transform:translateY(0) scale(.98); box-shadow:none; }
-.btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line);}
-.btn.ghost::before{ background:var(--ink); opacity:.06; }
-.btn.ghost:hover{ color:var(--ink); border-color:var(--ink); }
+.btn.ghost{background:var(--paper-raised);color:var(--ink);border:1.5px solid var(--line);}
+.btn.ghost::before{ background:var(--ink); opacity:.05; }
+.btn.ghost:hover{ color:var(--ink); border-color:var(--ink-faint); }
 .btn.primary{ background:var(--ember); border-color:var(--ember); }
 .btn.primary::before{ background:var(--ember-deep); }
+.btn.secondary{ background:var(--moss); border-color:var(--moss); }
+.btn.secondary::before{ background:var(--moss-deep); }
 .btn:disabled{opacity:.4;cursor:not-allowed; transform:none; box-shadow:none;}
 .btn:disabled::before{ display:none; }
 
@@ -155,7 +260,7 @@ footer{
 }
 
 .header-right{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-.user-badge{ display:flex; align-items:center; gap:9px; }
+.user-badge{ display:flex; align-items:center; gap:9px; background:var(--paper-raised); border:1px solid var(--line); padding:5px 12px 5px 5px; border-radius:100px; }
 .user-badge img{ width:26px; height:26px; border-radius:50%; border:1.5px solid var(--line); }
 .user-badge .user-name{
   font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft);
@@ -172,19 +277,22 @@ footer{
   h1{font-size:21px;}
 }
 
-/* ---------- modal de vista previa del documento original (factura/RUT escaneado) ---------- */
+/* ---------- modal de vista previa del documento original (factura/RUT escaneado) ----------
+   Se mantiene oscuro a propósito -- como cualquier visor de imágenes, el
+   fondo oscuro hace que el documento (casi siempre una foto o PDF claro)
+   se lea mejor, sin que el tema del sitio compita con el contenido. */
 .file-modal{
   position:fixed; inset:0; z-index:1000;
   display:none; align-items:center; justify-content:center;
   padding:28px;
 }
 .file-modal.show{ display:flex; }
-.file-modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,0.78); }
+.file-modal-backdrop{ position:absolute; inset:0; background:rgba(20,15,10,0.82); }
 .file-modal-content{
   position:relative; z-index:1; max-width:min(900px, 92vw); max-height:88vh;
-  background:#0E1315; border:1px solid var(--line); border-radius:10px;
+  background:#241E18; border:1px solid rgba(255,255,255,0.1); border-radius:10px;
   padding:14px; display:flex; align-items:center; justify-content:center;
-  box-shadow:0 40px 80px -20px rgba(0,0,0,0.7);
+  box-shadow:0 40px 80px -20px rgba(0,0,0,0.6);
 }
 .file-modal-content img{ max-width:100%; max-height:80vh; object-fit:contain; display:block; border-radius:4px; }
 .file-modal-content iframe{ width:min(820px, 86vw); height:80vh; border:none; border-radius:4px; background:#fff; }
@@ -201,18 +309,18 @@ footer{
 .factura-detalle{ font-size:13px; }
 .factura-detalle .fd-movimiento{
   display:flex; align-items:center; gap:10px; font-family:'JetBrains Mono',monospace; font-size:12.5px;
-  border:1px solid var(--moss); background:#E3F3EE; color:#154F41;
+  border:1px solid var(--moss); background:var(--moss-tint); color:var(--moss-deep);
   padding:11px 14px; border-radius:8px; margin-bottom:14px;
 }
-.factura-detalle .fd-movimiento.egreso{ border-color:var(--ember); background:var(--ember-soft); color:#B5482E; }
-.factura-detalle .fd-movimiento.alerta{ border-color:#E8B84B; background:#FBF3D9; color:#7A5C0A; }
+.factura-detalle .fd-movimiento.egreso{ border-color:var(--ember); background:var(--ember-soft); color:var(--clay-deep); }
+.factura-detalle .fd-movimiento.alerta{ border-color:#E0AD4E; background:#FBF3D9; color:#7A5C0A; }
 .factura-detalle .fd-dot{ width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
 .factura-detalle .fd-table{ border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--paper-raised); }
 .factura-detalle .fd-row{ display:grid; grid-template-columns:170px 1fr; border-bottom:1px solid var(--line); }
 .factura-detalle .fd-row:last-child{ border-bottom:none; }
 .factura-detalle .fd-label{
   font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-  color:var(--ink-soft); padding:10px 14px; background:#F2EFE7; border-right:1px solid var(--line);
+  color:var(--ink-soft); padding:10px 14px; background:var(--paper-sunken); border-right:1px solid var(--line);
   display:flex; align-items:center;
 }
 .factura-detalle .fd-value{ padding:10px 14px; display:flex; align-items:center; font-size:13.5px; color:var(--ink); word-break:break-word; }
@@ -221,6 +329,24 @@ footer{
   .factura-detalle .fd-row{ grid-template-columns:1fr; }
   .factura-detalle .fd-label{ border-right:none; border-bottom:1px solid var(--line); }
 }
+
+/* ---------- tarjeta oscura reutilizable (stat-card / client-tabbar) ----------
+   Antes cada página fijaba #171E20/#2B3436 a mano -- ahora es una clase
+   compartida, con texto claro y los tres colores de marca como acento. */
+.dark-card{
+  background:#241E18; border:1px solid rgba(255,255,255,0.08); border-radius:12px;
+  color:rgba(255,255,255,0.92);
+}
+
+/* ---------- insignia de ícono para tarjetas de estadísticas ---------- */
+.stat-icon{
+  width:38px; height:38px; border-radius:10px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  margin-bottom:12px;
+}
+.stat-icon.ember{ background:var(--ember-tint); color:var(--ember-deep); }
+.stat-icon.moss{ background:var(--moss-tint); color:var(--moss-deep); }
+.stat-icon.clay{ background:var(--clay-tint); color:var(--clay-deep); }
 
 @media (prefers-reduced-motion: reduce){
   *, *::before, *::after{

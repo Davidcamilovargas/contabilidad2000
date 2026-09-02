@@ -11,45 +11,53 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
-    --carbon:#0E1315; --carbon-raised:#171E20; --carbon-line:#2B3436;
-    --ember:#FF5A36; --white-soft:rgba(255,255,255,0.62); --white-faint:rgba(255,255,255,0.4);
+    --paper:#FAF7F1; --paper-raised:#FFFFFF; --line:#E6DECA;
+    --ink:#241E18; --ink-soft:#6C6152; --ink-faint:#A79C8B;
+    --ember:#FF5A36; --ember-deep:#D8431F; --moss:#5B8072; --clay:#AA6B5C;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;}
   body{
-    background:var(--carbon); color:#fff;
+    background:var(--paper);
+    background-image:
+      radial-gradient(900px 460px at -5% -10%, rgba(255,90,54,0.10), transparent 55%),
+      radial-gradient(800px 440px at 105% 10%, rgba(91,128,114,0.10), transparent 55%),
+      radial-gradient(700px 400px at 50% 115%, rgba(170,107,92,0.09), transparent 55%);
+    color:var(--ink);
     font-family:'Inter',-apple-system,sans-serif;
     display:flex; align-items:center; justify-content:center;
     min-height:100vh; padding:20px;
   }
   .card{
     width:100%; max-width:380px; text-align:center;
-    background:var(--carbon-raised); border:1px solid var(--carbon-line);
+    background:var(--paper-raised); border:1px solid var(--line);
     border-radius:16px; padding:44px 34px;
+    box-shadow:0 30px 60px -28px rgba(46,34,20,0.22);
   }
   .logo-mark{
-    width:44px; height:44px; border-radius:10px; margin:0 auto 20px;
-    background:var(--ember); color:var(--carbon);
+    width:48px; height:48px; border-radius:12px; margin:0 auto 20px;
+    background:linear-gradient(135deg, var(--ember) 0%, var(--clay) 55%, var(--moss) 100%); color:#fff;
     display:flex; align-items:center; justify-content:center;
-    font-family:'Archivo',sans-serif; font-weight:900; font-size:22px;
+    font-family:'Archivo',sans-serif; font-weight:900; font-size:23px;
+    box-shadow:0 10px 22px -8px rgba(255,90,54,0.45);
   }
   h1{
     font-family:'Archivo',sans-serif; font-weight:900; letter-spacing:-0.02em;
     font-size:1.7rem; margin:0 0 10px;
   }
-  p{ color:var(--white-soft); font-size:14px; line-height:1.6; margin:0 0 30px; }
+  p{ color:var(--ink-soft); font-size:14px; line-height:1.6; margin:0 0 30px; }
   #googleBtn{ display:flex; justify-content:center; }
   #errBox{
-    display:none; margin-top:18px; font-size:12.5px; color:#FFB199;
-    background:rgba(255,90,54,0.12); border:1px solid rgba(255,90,54,0.3);
+    display:none; margin-top:18px; font-size:12.5px; color:var(--clay);
+    background:rgba(255,90,54,0.08); border:1px solid rgba(255,90,54,0.25);
     padding:10px 14px; border-radius:8px;
   }
   #errBox.show{ display:block; }
   .fine{
     margin-top:26px; font-family:'JetBrains Mono',monospace; font-size:10.5px;
-    color:var(--white-faint); letter-spacing:.03em; line-height:1.6;
+    color:var(--ink-faint); letter-spacing:.03em; line-height:1.6;
   }
-  .fine a{ color:var(--white-faint); text-decoration:underline; }
+  .fine a{ color:var(--ink-faint); text-decoration:underline; }
   .fine a:hover{ color:var(--ember); }
 </style>
 </head>
@@ -98,7 +106,7 @@ window.onload = function () {
   });
   google.accounts.id.renderButton(
     document.getElementById('googleBtn'),
-    { theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'pill' }
+    { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill' }
   );
 };
 </script>
