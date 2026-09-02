@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kárdex IA — Integraciones</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .wrap{ max-width:820px; }
+
+  .integ-card{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:26px 28px; margin-bottom:18px; box-shadow:var(--shadow-sm);
+  }
+  .integ-head{ display:flex; align-items:center; gap:14px; margin-bottom:6px; }
+  .integ-head .integ-icon{
+    width:42px; height:42px; border-radius:10px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Archivo',sans-serif; font-weight:800; font-size:16px; color:#fff;
+    background:#1F9D55; /* verde de marca de Alegra -- solo aquí, para identificarla de un vistazo */
+  }
+  .integ-head h2{ font-family:'Archivo',sans-serif; font-size:17px; margin:0; color:var(--ink); }
+  .integ-head .estado{
+    margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    padding:4px 11px; border-radius:100px; white-space:nowrap;
+  }
+  .estado.conectado{ background:var(--moss-tint); color:var(--moss-deep); }
+  .estado.desconectado{ background:#F1EAD9; color:var(--ink-soft); }
+
+  .integ-desc{ font-size:13.5px; color:var(--ink-soft); line-height:1.55; margin:10px 0 18px; max-width:56ch; }
+
+  .integ-form{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:560px){ .integ-form{ grid-template-columns:1fr; } }
+  .integ-form label{
+    display:block; font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.05em; color:var(--ink-faint); margin-bottom:6px;
+  }
+  .integ-form input{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:7px;
+    font-family:'Inter',sans-serif; font-size:13.5px; color:var(--ink); background:var(--paper);
+  }
+  .integ-form input:focus{ outline:none; border-color:var(--ember); }
+  .integ-hint{
+    grid-column:1 / -1; font-size:12px; color:var(--ink-faint); line-height:1.5; margin-top:-4px;
+  }
+  .integ-hint a{ color:var(--ember-deep); }
+  .integ-actions{ grid-column:1 / -1; display:flex; align-items:center; gap:12px; margin-top:4px; }
+
+  .conectado-info{ display:flex; flex-wrap:wrap; gap:22px; margin-bottom:16px; }
+  .conectado-info .campo .k{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint);
+  }
+  .conectado-info .campo .v{ font-size:13.5px; color:var(--ink); margin-top:3px; }
+
+  .integ-msg{
+    margin-top:14px; padding:11px 13px; border-radius:8px; font-size:12.5px; line-height:1.5; display:none;
+  }
+  .integ-msg.show{ display:block; }
+  .integ-msg.err{ background:var(--stamp-soft); border:1px solid var(--stamp); color:#7A2E1B; }
+  .integ-msg.ok{ background:var(--moss-tint); border:1px solid var(--moss); color:var(--moss-deep); }
+
+  .proximamente{ opacity:.55; }
+  .proximamente .integ-icon{ background:var(--ink-faint); }
+  .proximamente .estado{ background:#F1EAD9; color:var(--ink-faint); }
+
+  /* Segundo paso de conexión (hoy, solo Siigo): el contador elige de
+     su PROPIA cuenta qué tipo de comprobante y qué forma de pago usar
+     -- son ids que Kárdex IA nunca podría adivinar. */
+  .integ-config select{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:7px;
+    font-family:'Inter',sans-serif; font-size:13.5px; color:var(--ink); background:var(--paper); cursor:pointer;
+  }
+  .integ-config select:focus{ outline:none; border-color:var(--ember); }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo-mark">K</div>
+      <span class="brand-text">K&aacute;rdex IA</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="/" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Inicio</a>
+      <a href="/clientes.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15.5 14.2c2.6.4 4.5 2.7 4.5 5.8"/></svg>Clientes</a>
+      <a href="/escanear.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Escanear</a>
+      <a href="/masivo.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0-10l-3.5 3.5M12 4l3.5 3.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>Carga masiva</a>
+      <a href="/integraciones.html" class="sidebar-link active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6M10.5 6.5l1-1a3 3 0 014.24 4.24l-1 1M13.5 17.5l-1 1a3 3 0 01-4.24-4.24l1-1"/></svg>Integraciones</a>
+    </nav>
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-foot">C&oacute;lombia &middot; Kardex IA</div>
+  </aside>
+  <div class="wrap">
+
+  <header class="reveal">
+    <div class="brand">
+      <h1 id="titleLetters"></h1>
+    </div>
+    <div class="header-right">
+      <span class="tag"><span class="live-dot"></span>en línea</span>
+      <div class="user-badge" id="userBadge" style="display:none;">
+        <img id="userAvatar" src="" alt="">
+        <span class="user-name" id="userName"></span>
+        <button id="btnLogout">Salir</button>
+      </div>
+    </div>
+  </header>
+  <div class="sub reveal">Conecta Kárdex IA con tu software contable para enviarle las facturas ya revisadas, sin volver a digitarlas.</div>
+
+  <div class="integ-card reveal" id="cardAlegra">
+    <div class="integ-head">
+      <div class="integ-icon">A</div>
+      <h2>Alegra</h2>
+      <span class="estado desconectado" id="alegraEstadoBadge">Desconectado</span>
+    </div>
+    <p class="integ-desc">Al conectar tu cuenta, cada factura que guardes en Kárdex IA puedes enviarla desde <a href="/facturas.html">Facturas</a> como factura de proveedor en Alegra — el proveedor se crea o se reconoce solo por NIT, y el IVA se intenta emparejar con los impuestos que ya tienes configurados allá.</p>
+
+    <div id="alegraDesconectado">
+      <div class="integ-form">
+        <div>
+          <label for="alegraEmail">Correo de tu cuenta Alegra</label>
+          <input type="email" id="alegraEmail" placeholder="tucorreo@ejemplo.com" autocomplete="username">
+        </div>
+        <div>
+          <label for="alegraToken">Token de la API</label>
+          <input type="password" id="alegraToken" placeholder="•••••••••••••••••••" autocomplete="off">
+        </div>
+        <div class="integ-hint">Lo generas en Alegra desde <b>Configuración → API - Integraciones con otros sistemas</b>. Kárdex IA lo guarda cifrado, nunca en texto plano.</div>
+        <div class="integ-actions">
+          <button class="btn" id="btnConectarAlegra">Probar y conectar</button>
+        </div>
+      </div>
+      <div class="integ-msg" id="alegraMsg"></div>
+    </div>
+
+    <div id="alegraConectado" style="display:none;">
+      <div class="conectado-info">
+        <div class="campo"><div class="k">Cuenta</div><div class="v" id="alegraEmailConectado">—</div></div>
+        <div class="campo"><div class="k">Conectado desde</div><div class="v" id="alegraDesde">—</div></div>
+        <div class="campo"><div class="k">Última factura enviada</div><div class="v" id="alegraUltimaSync">Ninguna todavía</div></div>
+      </div>
+      <button class="btn ghost" id="btnDesconectarAlegra">Desconectar</button>
+      <div class="integ-msg" id="alegraMsgConectado"></div>
+    </div>
+  </div>
+
+  <div class="integ-card reveal" id="cardSiigo">
+    <div class="integ-head">
+      <div class="integ-icon" style="background:#1C2452;">S</div>
+      <h2>Siigo</h2>
+      <span class="estado desconectado" id="siigoEstadoBadge">Desconectado</span>
+    </div>
+    <p class="integ-desc">Al conectar tu cuenta, cada factura que guardes en Kárdex IA puedes enviarla desde <a href="/facturas.html">Facturas</a> como factura de compra en Siigo — el proveedor se crea o se reconoce solo por NIT, y el IVA/retenciones se intentan emparejar con lo que ya tienes configurado allá.</p>
+
+    <div id="siigoDesconectado">
+      <div class="integ-form" id="siigoFormCredenciales">
+        <div>
+          <label for="siigoEmail">Usuario de tu cuenta Siigo</label>
+          <input type="email" id="siigoEmail" placeholder="tucorreo@ejemplo.com" autocomplete="username">
+        </div>
+        <div>
+          <label for="siigoToken">Clave de acceso (Access Key)</label>
+          <input type="password" id="siigoToken" placeholder="•••••••••••••••••••" autocomplete="off">
+        </div>
+        <div class="integ-hint">La generas en Siigo Nube desde <b>Alianzas → Mi Credencial API</b>. Kárdex IA la guarda cifrada, nunca en texto plano.</div>
+        <div class="integ-actions">
+          <button class="btn" id="btnConectarSiigo">Probar y conectar</button>
+        </div>
+      </div>
+
+      <!-- Segundo paso -- solo aparece si Siigo aceptó las credenciales
+           pero todavía falta elegir el tipo de comprobante y la forma
+           de pago de ESTA cuenta. Nunca se preselecciona una opción al
+           azar -- el contador elige de su propia lista real. -->
+      <div class="integ-form integ-config" id="siigoFormConfig" style="display:none;">
+        <div>
+          <label for="siigoTipoDoc">Tipo de comprobante (factura de compra)</label>
+          <select id="siigoTipoDoc"></select>
+        </div>
+        <div>
+          <label for="siigoFormaPago">Forma de pago</label>
+          <select id="siigoFormaPago"></select>
+        </div>
+        <div class="integ-hint">Esto viene directo de tu cuenta de Siigo — elige el comprobante que uses para registrar compras/gastos de proveedores, y la forma de pago que corresponda (ej. crédito / cuenta por pagar, si tus compras normalmente quedan pendientes de pago).</div>
+        <div class="integ-actions">
+          <button class="btn" id="btnGuardarConfigSiigo">Guardar y conectar</button>
+          <button class="btn ghost" id="btnCancelarConfigSiigo" type="button">Cancelar</button>
+        </div>
+      </div>
+
+      <div class="integ-msg" id="siigoMsg"></div>
+    </div>
+
+    <div id="siigoConectado" style="display:none;">
+      <div class="conectado-info">
+        <div class="campo"><div class="k">Cuenta</div><div class="v" id="siigoEmailConectado">—</div></div>
+        <div class="campo"><div class="k">Conectado desde</div><div class="v" id="siigoDesde">—</div></div>
+        <div class="campo"><div class="k">Última factura enviada</div><div class="v" id="siigoUltimaSync">Ninguna todavía</div></div>
+      </div>
+      <button class="btn ghost" id="btnDesconectarSiigo">Desconectar</button>
+      <div class="integ-msg" id="siigoMsgConectado"></div>
+    </div>
+  </div>
+
+  <footer>Enviar una factura a tu software contable es una acción que tú decides, caso por caso, desde Facturas — nunca se manda sola al guardarla.</footer>
+  </div>
+</div>
+
+<script>
+(function animateTitle(){
+  const text = "Kárdex IA";
+  const container = document.getElementById('titleLetters');
+  text.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? ' ' : ch;
+    span.style.animationDelay = (i * 0.03) + 's';
+    container.appendChild(span);
+  });
+})();
+
+const alegraEstadoBadge = document.getElementById('alegraEstadoBadge');
+const alegraDesconectadoEl = document.getElementById('alegraDesconectado');
+const alegraConectadoEl = document.getElementById('alegraConectado');
+const alegraMsgEl = document.getElementById('alegraMsg');
+const alegraMsgConectadoEl = document.getElementById('alegraMsgConectado');
+const btnConectarAlegra = document.getElementById('btnConectarAlegra');
+const btnDesconectarAlegra = document.getElementById('btnDesconectarAlegra');
+
+function mostrarMsg(el, texto, tipo){
+  el.textContent = texto;
+  el.className = 'integ-msg show ' + tipo;
+}
+
+function formatearFecha(iso){
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d)) return null;
+  return d.toLocaleDateString('es-CO', { day:'numeric', month:'long', year:'numeric' });
+}
+
+function pintarEstadoAlegra(integ){
+  if (integ && integ.activo) {
+    alegraEstadoBadge.textContent = 'Conectado';
+    alegraEstadoBadge.className = 'estado conectado';
+    alegraDesconectadoEl.style.display = 'none';
+    alegraConectadoEl.style.display = 'block';
+    document.getElementById('alegraEmailConectado').textContent = integ.email || '—';
+    document.getElementById('alegraDesde').textContent = formatearFecha(integ.conectado_at) || '—';
+    document.getElementById('alegraUltimaSync').textContent = formatearFecha(integ.ultima_sincronizacion) || 'Ninguna todavía';
+  } else {
+    alegraEstadoBadge.textContent = 'Desconectado';
+    alegraEstadoBadge.className = 'estado desconectado';
+    alegraDesconectadoEl.style.display = 'block';
+    alegraConectadoEl.style.display = 'none';
+  }
+}
+
+const siigoEstadoBadge = document.getElementById('siigoEstadoBadge');
+const siigoDesconectadoEl = document.getElementById('siigoDesconectado');
+const siigoConectadoEl = document.getElementById('siigoConectado');
+const siigoFormCredencialesEl = document.getElementById('siigoFormCredenciales');
+const siigoFormConfigEl = document.getElementById('siigoFormConfig');
+const siigoTipoDocSelect = document.getElementById('siigoTipoDoc');
+const siigoFormaPagoSelect = document.getElementById('siigoFormaPago');
+const siigoMsgEl = document.getElementById('siigoMsg');
+const siigoMsgConectadoEl = document.getElementById('siigoMsgConectado');
+const btnConectarSiigo = document.getElementById('btnConectarSiigo');
+const btnGuardarConfigSiigo = document.getElementById('btnGuardarConfigSiigo');
+const btnCancelarConfigSiigo = document.getElementById('btnCancelarConfigSiigo');
+const btnDesconectarSiigo = document.getElementById('btnDesconectarSiigo');
+
+function pintarEstadoSiigo(integ){
+  if (integ && integ.activo) {
+    siigoEstadoBadge.textContent = 'Conectado';
+    siigoEstadoBadge.className = 'estado conectado';
+    siigoDesconectadoEl.style.display = 'none';
+    siigoConectadoEl.style.display = 'block';
+    document.getElementById('siigoEmailConectado').textContent = integ.email || '—';
+    document.getElementById('siigoDesde').textContent = formatearFecha(integ.conectado_at) || '—';
+    document.getElementById('siigoUltimaSync').textContent = formatearFecha(integ.ultima_sincronizacion) || 'Ninguna todavía';
+  } else {
+    siigoEstadoBadge.textContent = 'Desconectado';
+    siigoEstadoBadge.className = 'estado desconectado';
+    siigoDesconectadoEl.style.display = 'block';
+    siigoConectadoEl.style.display = 'none';
+    siigoFormConfigEl.style.display = 'none';
+    siigoFormCredencialesEl.style.display = 'grid';
+  }
+}
+
+async function cargarIntegraciones(){
+  try {
+    const res = await fetch('/api/integraciones');
+    if (!res.ok) return;
+    const lista = await res.json();
+    const alegra = lista.find(i => i.proveedor === 'alegra');
+    pintarEstadoAlegra(alegra);
+    const siigo = lista.find(i => i.proveedor === 'siigo');
+    pintarEstadoSiigo(siigo);
+  } catch (e) { /* si falla, se queda en el estado "desconectado" por defecto */ }
+}
+
+btnConectarAlegra.addEventListener('click', async () => {
+  const email = document.getElementById('alegraEmail').value.trim();
+  const token = document.getElementById('alegraToken').value.trim();
+  alegraMsgEl.classList.remove('show');
+  if (!email || !token) {
+    mostrarMsg(alegraMsgEl, 'Completa el correo y el token antes de conectar.', 'err');
+    return;
+  }
+  btnConectarAlegra.disabled = true;
+  btnConectarAlegra.textContent = 'Probando conexión…';
+  try {
+    const res = await fetch('/api/integraciones/alegra/conectar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, token })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo conectar.');
+    mostrarMsg(alegraMsgEl, '✓ Conectado correctamente.', 'ok');
+    await cargarIntegraciones();
+  } catch (e) {
+    mostrarMsg(alegraMsgEl, e.message, 'err');
+  } finally {
+    btnConectarAlegra.disabled = false;
+    btnConectarAlegra.textContent = 'Probar y conectar';
+  }
+});
+
+btnDesconectarAlegra.addEventListener('click', async () => {
+  btnDesconectarAlegra.disabled = true;
+  try {
+    const res = await fetch('/api/integraciones/alegra', { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo desconectar.');
+    pintarEstadoAlegra(null);
+    document.getElementById('alegraEmail').value = '';
+    document.getElementById('alegraToken').value = '';
+  } catch (e) {
+    mostrarMsg(alegraMsgConectadoEl, e.message, 'err');
+  } finally {
+    btnDesconectarAlegra.disabled = false;
+  }
+});
+
+async function conectarSiigo(configuracion){
+  const email = document.getElementById('siigoEmail').value.trim();
+  const token = document.getElementById('siigoToken').value.trim();
+  const body = { email, token };
+  if (configuracion) body.configuracion = configuracion;
+
+  const res = await fetch('/api/integraciones/siigo/conectar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'No se pudo conectar.');
+  return data;
+}
+
+function poblarSelectOpciones(select, opciones){
+  select.innerHTML = '';
+  if (!opciones || opciones.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(ninguna opción disponible en tu cuenta)';
+    select.appendChild(opt);
+    return;
+  }
+  opciones.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = o.nombre;
+    select.appendChild(opt);
+  });
+}
+
+btnConectarSiigo.addEventListener('click', async () => {
+  siigoMsgEl.classList.remove('show');
+  const email = document.getElementById('siigoEmail').value.trim();
+  const token = document.getElementById('siigoToken').value.trim();
+  if (!email || !token) {
+    mostrarMsg(siigoMsgEl, 'Completa el usuario y la clave de acceso antes de conectar.', 'err');
+    return;
+  }
+  btnConectarSiigo.disabled = true;
+  btnConectarSiigo.textContent = 'Probando conexión…';
+  try {
+    const data = await conectarSiigo(null);
+    if (data.requiereConfiguracion) {
+      // Las credenciales sí sirven -- pero falta que el contador elija
+      // el tipo de comprobante y la forma de pago de SU cuenta antes de
+      // guardar nada. Se muestran las opciones reales, nunca una
+      // preseleccionada al azar.
+      poblarSelectOpciones(siigoTipoDocSelect, data.opciones.tiposDocumento);
+      poblarSelectOpciones(siigoFormaPagoSelect, data.opciones.formasPago);
+      siigoFormCredencialesEl.style.display = 'none';
+      siigoFormConfigEl.style.display = 'grid';
+      return;
+    }
+    mostrarMsg(siigoMsgEl, '✓ Conectado correctamente.', 'ok');
+    await cargarIntegraciones();
+  } catch (e) {
+    mostrarMsg(siigoMsgEl, e.message, 'err');
+  } finally {
+    btnConectarSiigo.disabled = false;
+    btnConectarSiigo.textContent = 'Probar y conectar';
+  }
+});
+
+btnGuardarConfigSiigo.addEventListener('click', async () => {
+  siigoMsgEl.classList.remove('show');
+  const tipoDocumentoId = siigoTipoDocSelect.value;
+  const formaPagoId = siigoFormaPagoSelect.value;
+  if (!tipoDocumentoId || !formaPagoId) {
+    mostrarMsg(siigoMsgEl, 'Elige un tipo de comprobante y una forma de pago -- ambos son obligatorios.', 'err');
+    return;
+  }
+  btnGuardarConfigSiigo.disabled = true;
+  btnGuardarConfigSiigo.textContent = 'Guardando…';
+  try {
+    await conectarSiigo({ tipoDocumentoId, formaPagoId });
+    mostrarMsg(siigoMsgEl, '✓ Conectado correctamente.', 'ok');
+    await cargarIntegraciones();
+  } catch (e) {
+    mostrarMsg(siigoMsgEl, e.message, 'err');
+  } finally {
+    btnGuardarConfigSiigo.disabled = false;
+    btnGuardarConfigSiigo.textContent = 'Guardar y conectar';
+  }
+});
+
+btnCancelarConfigSiigo.addEventListener('click', () => {
+  siigoFormConfigEl.style.display = 'none';
+  siigoFormCredencialesEl.style.display = 'grid';
+  siigoMsgEl.classList.remove('show');
+});
+
+btnDesconectarSiigo.addEventListener('click', async () => {
+  btnDesconectarSiigo.disabled = true;
+  try {
+    const res = await fetch('/api/integraciones/siigo', { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo desconectar.');
+    pintarEstadoSiigo(null);
+    document.getElementById('siigoEmail').value = '';
+    document.getElementById('siigoToken').value = '';
+  } catch (e) {
+    mostrarMsg(siigoMsgConectadoEl, e.message, 'err');
+  } finally {
+    btnDesconectarSiigo.disabled = false;
+  }
+});
+
+async function requireAuthAndInit(){
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const user = await res.json();
+    document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('userAvatar').src = user.avatarUrl || '';
+    document.getElementById('userName').textContent = user.nombre || user.email;
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.href = '/login.html';
+    });
+    cargarIntegraciones();
+  } catch (e) {
+    window.location.href = '/login.html';
+  }
+}
+requireAuthAndInit();
+</script>
+</body>
+</html>

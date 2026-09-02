@@ -89,6 +89,33 @@
     #modalDatos{ max-height:none; }
   }
 
+  /* Rete Fuente/IVA/ICA, dentro de la ficha del modal, ahora son
+     campos editables (antes eran texto de solo lectura) -- mismo
+     tratamiento que Escanear: un input, y debajo (si está en $0) un
+     estimado con un botón para llenarlo de un clic. */
+  .fd-value input{
+    width:100%; border:1px solid transparent; background:transparent;
+    font-family:inherit; font-size:13.5px; color:var(--ink); padding:6px 8px; border-radius:4px;
+    transition:background .15s var(--ease), border-color .15s var(--ease);
+  }
+  .fd-value input:focus{ outline:none; border-color:var(--ember); background:var(--ember-soft); }
+  .fd-value.money input{ font-weight:600; font-family:'JetBrains Mono',monospace; }
+  .rete-estimado{
+    display:none; grid-column:1 / -1; padding:0 14px 10px;
+    font-size:11.5px; color:var(--ink-soft); font-family:'JetBrains Mono',monospace;
+    align-items:center; gap:8px; flex-wrap:wrap; background:var(--paper-raised);
+  }
+  .rete-estimado.show{ display:flex; }
+  .rete-estimado b{ color:var(--ink); }
+  .rete-estimado .fine{ color:var(--ink-faint); font-style:italic; }
+  .rete-estimado button{
+    font-family:'Inter',sans-serif; font-size:11px; font-weight:600;
+    padding:3px 10px; border-radius:5px; cursor:pointer;
+    border:1px solid var(--moss); background:#fff; color:var(--moss);
+    transition:background .15s ease;
+  }
+  .rete-estimado button:hover{ background:var(--moss-soft); }
+
   .status-badge{
     display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:11px;
     padding:4px 9px; border-radius:100px; white-space:nowrap;
@@ -145,6 +172,7 @@
       <a href="/clientes.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15.5 14.2c2.6.4 4.5 2.7 4.5 5.8"/></svg>Clientes</a>
       <a href="/escanear.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Escanear</a>
       <a href="/masivo.html" class="sidebar-link active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0-10l-3.5 3.5M12 4l3.5 3.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>Carga masiva</a>
+      <a href="/integraciones.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6M10.5 6.5l1-1a3 3 0 014.24 4.24l-1 1M13.5 17.5l-1 1a3 3 0 01-4.24-4.24l1-1"/></svg>Integraciones</a>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-foot">C&oacute;lombia &middot; Kardex IA</div>
@@ -341,6 +369,16 @@ function aplicarClientePreseleccionado(){
 // liviano y funciona igual para imagen o PDF.
 let urlModalActual = null;
 
+// Qué item del lote está abierto ahora mismo en el modal -- las 3
+// retenciones ahora son editables ahí (antes eran de solo lectura), y
+// necesitan saber a qué item del lote escribirle de vuelta.
+let itemAbierto = null;
+
+function parseMoneyValue(str){
+  const cleaned = String(str || '').replace(/\./g, '').replace(/[^\d-]/g, '');
+  return cleaned === '' ? 0 : Number(cleaned);
+}
+
 // Dibuja el mismo aviso de "✓ Ingreso/Egreso" que se ve en Escanear --
 // así, de un vistazo, se sabe si la IA identificó bien al cliente, sin
 // tener que ir a comparar la fila contra la factura original.
@@ -367,10 +405,18 @@ function renderFichaMovimiento(item){
 }
 
 // Ficha completa de una factura del lote -- todos los campos que leyó
-// la IA, de solo lectura (la edición real sigue pasando en la fila de
-// la tabla). Esto es solo para comprobar de un vistazo si acertó.
+// la IA. La mayoría son de solo lectura (la edición de categoría y
+// subcuenta sigue pasando en la fila de la tabla), PERO Rete Fuente,
+// Rete IVA y Rete ICA sí son editables aquí -- mismo motivo que en
+// Escanear: casi nunca vienen impresos en la factura del proveedor, así
+// que hay que poder llenarlos a mano (con ayuda del estimado de abajo)
+// en vez de dejarlos siempre en $0.
+const RETE_KEYS_EDITABLES = ['rete_fuente', 'rete_iva', 'rete_ica'];
+const RETE_ESTIMADO_ID = { rete_fuente: 'masivoEstimadoFuente', rete_iva: 'masivoEstimadoIva', rete_ica: 'masivoEstimadoIca' };
+
 function renderFichaCompleta(item){
   const modalDatos = document.getElementById('modalDatos');
+  itemAbierto = item;
 
   if (item.estado === 'error' || !item.data) {
     modalDatos.innerHTML = `<div class="factura-detalle">${renderFichaMovimiento(item)}</div>`;
@@ -379,6 +425,16 @@ function renderFichaCompleta(item){
 
   const d = item.data;
   const filasCampos = FICHA_CAMPOS.map((f) => {
+    if (RETE_KEYS_EDITABLES.includes(f.key)) {
+      const valorActual = Number(d[f.key]) || 0;
+      return `
+        <div class="fd-row">
+          <div class="fd-label">${escapeHtml(f.label)}</div>
+          <div class="fd-value money"><input type="text" data-rete-key="${f.key}" value="${valorActual.toLocaleString('es-CO')}"></div>
+        </div>
+        <div class="rete-estimado" id="${RETE_ESTIMADO_ID[f.key]}"></div>
+      `;
+    }
     let valor = d[f.key];
     if (f.money) {
       valor = '$' + (Number(valor) || 0).toLocaleString('es-CO');
@@ -453,7 +509,77 @@ function renderFichaCompleta(item){
     </div>
     <div style="font-size:11px;color:var(--ink-faint);margin-top:10px;">Retención estimada, no leída del documento -- no es asesoría tributaria, verifica la norma vigente.</div>
   `;
+  actualizarEstimadosRetencionMasivo();
 }
+
+// Estimado inline, debajo de cada campo editable de retención -- misma
+// idea y misma fuente de cálculo (retenciones.js) que ya tiene
+// Escanear: si el campo está en $0, se ofrece un valor sugerido con un
+// botón "Usar" que lo llena de un clic; nunca se llena solo. Rete ICA
+// nunca se estima en pesos (depende del municipio y la actividad
+// económica) -- como mucho se avisa que toca revisarlo aparte.
+function actualizarEstimadosRetencionMasivo(){
+  if (!itemAbierto || !itemAbierto.data) return;
+  const modalDatos = document.getElementById('modalDatos');
+  const d = itemAbierto.data;
+
+  const fuenteInput = modalDatos.querySelector('input[data-rete-key="rete_fuente"]');
+  const ivaRInput = modalDatos.querySelector('input[data-rete-key="rete_iva"]');
+  const icaInput = modalDatos.querySelector('input[data-rete-key="rete_ica"]');
+  const estFuenteEl = document.getElementById('masivoEstimadoFuente');
+  const estIvaEl = document.getElementById('masivoEstimadoIva');
+  const estIcaEl = document.getElementById('masivoEstimadoIca');
+  if (!fuenteInput || !ivaRInput || !icaInput || !estFuenteEl || !estIvaEl || !estIcaEl) return;
+
+  const cliente = myClients.find(c => c.id === itemAbierto.clienteId);
+
+  estFuenteEl.classList.remove('show');
+  estFuenteEl.innerHTML = '';
+  if (parseMoneyValue(fuenteInput.value) === 0 && typeof calcularRetencionSugerida === 'function') {
+    const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas);
+    if (sugerido) {
+      const texto = sugerido.mismaTarifa
+        ? `$${sugerido.bajo.toLocaleString('es-CO')}`
+        : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
+      estFuenteEl.innerHTML = `≈ Estimado: <b>${texto}</b> <button type="button" data-usar-rete="rete_fuente" data-valor="${sugerido.bajo}">Usar $${sugerido.bajo.toLocaleString('es-CO')}</button>`;
+      estFuenteEl.classList.add('show');
+    }
+  }
+
+  estIvaEl.classList.remove('show');
+  estIvaEl.innerHTML = '';
+  if (parseMoneyValue(ivaRInput.value) === 0 && typeof calcularReteIvaSugerido === 'function') {
+    const reteIva = calcularReteIvaSugerido(d, cliente);
+    if (reteIva) {
+      estIvaEl.innerHTML = `≈ Estimado: <b>$${reteIva.toLocaleString('es-CO')}</b> (15% del IVA) <button type="button" data-usar-rete="rete_iva" data-valor="${reteIva}">Usar $${reteIva.toLocaleString('es-CO')}</button>`;
+      estIvaEl.classList.add('show');
+    }
+  }
+
+  estIcaEl.classList.remove('show');
+  estIcaEl.innerHTML = '';
+  if (parseMoneyValue(icaInput.value) === 0 && cliente && cliente.agente_retenedor) {
+    estIcaEl.innerHTML = `<span class="fine">No se puede estimar en pesos -- depende del municipio y la actividad económica. Verifica si tu empresa es agente retenedor de ICA ahí.</span>`;
+    estIcaEl.classList.add('show');
+  }
+}
+
+// Delegado sobre modalDatos -- se re-crea cada vez que se abre un
+// item (innerHTML nuevo), así que en vez de re-enganchar listeners en
+// cada render, se escucha una sola vez aquí arriba.
+document.getElementById('modalDatos').addEventListener('input', (e) => {
+  if (!e.target.dataset || !e.target.dataset.reteKey || !itemAbierto) return;
+  itemAbierto.data[e.target.dataset.reteKey] = parseMoneyValue(e.target.value);
+  actualizarEstimadosRetencionMasivo();
+});
+document.getElementById('modalDatos').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-usar-rete]');
+  if (!btn) return;
+  const input = document.getElementById('modalDatos').querySelector(`input[data-rete-key="${btn.dataset.usarRete}"]`);
+  if (!input) return;
+  input.value = Number(btn.dataset.valor).toLocaleString('es-CO');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+});
 
 function abrirVistaCompleta(item){
   if (!item || !item.file) return;
@@ -477,6 +603,7 @@ function cerrarVistaCompleta(){
   fileModal.classList.remove('show');
   modalPdf.src = '';
   if (urlModalActual) { URL.revokeObjectURL(urlModalActual); urlModalActual = null; }
+  itemAbierto = null;
 }
 btnCloseModal.addEventListener('click', cerrarVistaCompleta);
 fileModalBackdrop.addEventListener('click', cerrarVistaCompleta);

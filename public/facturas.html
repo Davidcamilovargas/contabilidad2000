@@ -95,6 +95,18 @@
     cursor:pointer; padding:4px 6px; transition:color .15s ease;
   }
   .del-btn:hover{ color:var(--stamp); }
+  .row-actions{ display:flex; align-items:center; gap:4px; justify-content:flex-end; white-space:nowrap; }
+  .alegra-btn{
+    background:none; border:1px solid var(--line); color:var(--ink-soft);
+    font-family:'JetBrains Mono',monospace; font-size:10.5px;
+    cursor:pointer; padding:4px 8px; border-radius:6px; transition:all .15s ease;
+  }
+  .alegra-btn:hover{ border-color:var(--moss); color:var(--moss-deep); }
+  .alegra-btn:disabled{ opacity:.5; cursor:default; }
+  .alegra-sent{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--moss-deep);
+    background:var(--moss-tint); padding:4px 8px; border-radius:6px; white-space:nowrap;
+  }
 
   tfoot td{
     padding:16px 20px; font-family:'JetBrains Mono',monospace; font-size:13px;
@@ -161,6 +173,7 @@
       <a href="/clientes.html" class="sidebar-link active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15.5 14.2c2.6.4 4.5 2.7 4.5 5.8"/></svg>Clientes</a>
       <a href="/escanear.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Escanear</a>
       <a href="/masivo.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0-10l-3.5 3.5M12 4l3.5 3.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>Carga masiva</a>
+      <a href="/integraciones.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6M10.5 6.5l1-1a3 3 0 014.24 4.24l-1 1M13.5 17.5l-1 1a3 3 0 01-4.24-4.24l1-1"/></svg>Integraciones</a>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-foot">C&oacute;lombia &middot; Kardex IA</div>
@@ -306,6 +319,33 @@ const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','A
 let allInvoices = [];
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida
+let proveedoresConectados = []; // ej. ['alegra', 'siigo'] -- los que tienen integración activa
+
+// Un solo lugar con los proveedores que soporta esta pantalla -- agregar
+// uno nuevo (ver integraciones.js) es sumar una fila aquí, no reescribir
+// el resto de esta página. `billField` es la columna donde server.js
+// guarda el id de la factura ya enviada a ESE proveedor en concreto.
+const PROVEEDORES_UI = [
+  { key: 'alegra', label: 'Alegra', billField: 'alegra_bill_id' },
+  { key: 'siigo', label: 'Siigo', billField: 'siigo_bill_id' },
+];
+
+// El botón/estado de "enviar a <proveedor>" solo aparece por cada
+// proveedor que esté conectado (ver Integraciones) -- si no hay ninguno
+// conectado, esta celda queda vacía en vez de mostrar una acción que de
+// todas formas fallaría. Si hay más de uno conectado, se muestra un
+// botón/insignia por cada uno -- una factura se puede enviar a varios.
+function accionesIntegracionHtml(inv){
+  return PROVEEDORES_UI
+    .filter(p => proveedoresConectados.includes(p.key))
+    .map(p => {
+      if (inv[p.billField]) {
+        return `<span class="alegra-sent" title="Ya se envió a ${escapeHtml(p.label)}">✓ ${escapeHtml(p.label)}</span>`;
+      }
+      return `<button class="alegra-btn" data-role="enviar-integracion" data-proveedor="${escapeHtml(p.key)}" data-id="${escapeHtml(inv.id)}">Enviar a ${escapeHtml(p.label)}</button>`;
+    })
+    .join('');
+}
 
 function populateClients(){
   clientSelect.innerHTML = '';
@@ -435,7 +475,12 @@ function renderTable(){
       <td class="money">${formatCOP(iva)}</td>
       <td class="money">${formatCOP(conIva)}</td>
       <td class="money" title="${escapeHtml(retencionTitle)}">${totalRetenciones > 0 ? formatCOP(totalRetenciones) : '—'}</td>
-      <td><button class="del-btn" data-id="${escapeHtml(inv.id)}">eliminar</button></td>
+      <td>
+        <div class="row-actions">
+          ${accionesIntegracionHtml(inv)}
+          <button class="del-btn" data-id="${escapeHtml(inv.id)}">eliminar</button>
+        </div>
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -471,10 +516,11 @@ function renderTable(){
 async function loadInvoices(){
   loadingEl.style.display = 'flex';
   try {
-    const [invRes, clientsRes, tarifasRes] = await Promise.all([
+    const [invRes, clientsRes, tarifasRes, integracionesRes] = await Promise.all([
       fetch('/api/invoices'),
       fetch('/api/clients'),
-      fetch('/api/tarifas-aprendidas')
+      fetch('/api/tarifas-aprendidas'),
+      fetch('/api/integraciones')
     ]);
     const contentType = invRes.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
@@ -482,6 +528,11 @@ async function loadInvoices(){
     }
     allInvoices = await invRes.json();
     myClients = clientsRes.ok ? await clientsRes.json() : [];
+
+    if (integracionesRes.ok) {
+      const listaIntegraciones = await integracionesRes.json();
+      proveedoresConectados = listaIntegraciones.filter(i => i.activo).map(i => i.proveedor);
+    }
 
     tarifasAprendidas = {};
     if (tarifasRes.ok) {
@@ -737,17 +788,46 @@ btnExport.addEventListener('click', async () => {
 });
 
 tbody.addEventListener('click', async (e) => {
-  if (!e.target.classList.contains('del-btn')) return;
-  const id = e.target.dataset.id;
-  if (!confirm('¿Eliminar esta factura del kárdex?')) return;
+  if (e.target.classList.contains('del-btn')) {
+    const id = e.target.dataset.id;
+    if (!confirm('¿Eliminar esta factura del kárdex?')) return;
 
-  try {
-    const res = await fetch('/api/invoices/' + id, { method: 'DELETE' });
-    if (!res.ok) throw new Error('No se pudo eliminar.');
-    allInvoices = allInvoices.filter(inv => inv.id !== id);
-    renderTable();
-  } catch (err) {
-    alert('No se pudo eliminar: ' + err.message);
+    try {
+      const res = await fetch('/api/invoices/' + id, { method: 'DELETE' });
+      if (!res.ok) throw new Error('No se pudo eliminar.');
+      allInvoices = allInvoices.filter(inv => inv.id !== id);
+      renderTable();
+    } catch (err) {
+      alert('No se pudo eliminar: ' + err.message);
+    }
+    return;
+  }
+
+  if (e.target.dataset.role === 'enviar-integracion') {
+    const id = e.target.dataset.id;
+    const proveedorKey = e.target.dataset.proveedor;
+    const proveedor = PROVEEDORES_UI.find(p => p.key === proveedorKey);
+    const label = proveedor ? proveedor.label : proveedorKey;
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+    try {
+      const res = await fetch(`/api/invoices/${id}/enviar/${proveedorKey}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo enviar.');
+
+      const inv = allInvoices.find(i => i.id === id);
+      if (inv && proveedor) inv[proveedor.billField] = data.billId || 'ok';
+      renderTable();
+
+      if (data.avisos && data.avisos.length > 0) {
+        alert(`Se envió a ${label}, pero revisa esto manualmente allá:\n\n` + data.avisos.join('\n'));
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = `Enviar a ${label}`;
+      alert(`No se pudo enviar a ${label}: ` + err.message);
+    }
   }
 });
 

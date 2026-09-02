@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { Pool } = require('pg');
+const integraciones = require('./integraciones');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -213,7 +214,49 @@ async function ensureSchema() {
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'solo';`);
+
+  // Integraciones con software contable externo (Alegra, y a futuro
+  // Siigo u otros) -- una fila por contador+proveedor conectado. El
+  // token nunca se guarda en texto plano, siempre pasa por
+  // integraciones.cifrar() antes de llegar aquí.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integraciones_contables (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      proveedor TEXT NOT NULL,
+      email TEXT DEFAULT '',
+      token_cifrado TEXT NOT NULL,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      conectado_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ultima_sincronizacion TIMESTAMPTZ,
+      configuracion TEXT NOT NULL DEFAULT '{}',
+      UNIQUE (contador_id, proveedor)
+    );
+  `);
+  // Configuración específica del proveedor que no se puede adivinar
+  // (ej. en Siigo: qué tipo de comprobante y qué forma de pago usar --
+  // son ids que solo existen en LA cuenta de ese contador). Se agrega
+  // aparte por si la tabla ya existía de antes de este campo.
+  await pool.query(`ALTER TABLE integraciones_contables ADD COLUMN IF NOT EXISTS configuracion TEXT NOT NULL DEFAULT '{}';`);
+  // A qué factura de Alegra/Siigo (u otro proveedor) corresponde cada
+  // factura guardada en Kárdex IA, para no volver a crearla si se manda
+  // "Enviar" dos veces, y para mostrar el estado en Facturas. Cada
+  // proveedor tiene sus propias columnas porque una misma factura se
+  // podría enviar a más de uno.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS alegra_bill_id TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS alegra_enviada_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS siigo_bill_id TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS siigo_enviada_at TIMESTAMPTZ;`);
 }
+
+// Nombres de columna (whitelisteados, nunca vienen del usuario) donde
+// cada proveedor guarda el id de la factura ya enviada -- así la ruta
+// de envío no queda pegada a Alegra, y sumar un proveedor nuevo es
+// agregar una entrada aquí + sus 2 columnas ALTER TABLE de arriba.
+const COLUMNAS_ENVIO_PROVEEDOR = {
+  alegra: { billId: 'alegra_bill_id', enviadaAt: 'alegra_enviada_at' },
+  siigo: { billId: 'siigo_bill_id', enviadaAt: 'siigo_enviada_at' },
+};
 
 // ---------- Middlewares globales (deben ir ANTES que cualquier ruta
 // que los necesite -- express procesa todo en orden de registro) ----------
@@ -740,6 +783,159 @@ app.delete('/api/invoices/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error eliminando factura:', err);
     res.status(500).json({ error: 'No se pudo eliminar la factura.' });
+  }
+});
+
+// ---------- Integraciones con software contable ----------
+
+// Lista las integraciones conectadas de este contador -- NUNCA incluye
+// el token, ni siquiera cifrado (no hay razón para que el navegador lo
+// vea de vuelta).
+app.get('/api/integraciones', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT proveedor, email, activo, conectado_at, ultima_sincronizacion FROM integraciones_contables WHERE contador_id = $1',
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error leyendo integraciones:', err);
+    res.status(500).json({ error: 'No se pudieron leer las integraciones.' });
+  }
+});
+
+// Conecta (o reemplaza) las credenciales de un proveedor contable.
+// Antes de guardar nada, se prueba la conexión de verdad contra la API
+// del proveedor -- si el correo/token no sirven, no se guarda basura.
+//
+// Algunos proveedores (hoy, Siigo) además exigen que el contador elija
+// de su PROPIA cuenta algo que Kárdex IA no puede adivinar (ej. qué
+// tipo de comprobante y qué forma de pago usar). Si el adaptador
+// declara `obtenerOpcionesConfiguracion` y todavía no llegó una
+// `configuracion` válida en el body, esta ruta responde con las
+// opciones reales de esa cuenta SIN guardar nada -- el frontend las
+// muestra, el contador elige, y se vuelve a llamar esta misma ruta ya
+// con `configuracion` incluida para guardar todo junto.
+app.post('/api/integraciones/:proveedor/conectar', requireAuth, async (req, res) => {
+  const { proveedor } = req.params;
+  const adaptador = integraciones.PROVEEDORES[proveedor];
+  if (!adaptador) {
+    return res.status(400).json({ error: `"${proveedor}" no es un proveedor soportado todavía.` });
+  }
+
+  const { email, token, configuracion } = req.body;
+  if (!email || !token) {
+    return res.status(400).json({ error: 'Faltan el correo y/o el token de la cuenta.' });
+  }
+
+  try {
+    await adaptador.probarConexion({ email, token });
+  } catch (err) {
+    console.error(`Error probando conexión con ${proveedor}:`, err.message);
+    return res.status(err.status || 502).json({ error: err.publicMessage || `No se pudo conectar con ${adaptador.nombre}.` });
+  }
+
+  if (adaptador.obtenerOpcionesConfiguracion && !adaptador.validarConfiguracion(configuracion)) {
+    try {
+      const opciones = await adaptador.obtenerOpcionesConfiguracion({ email, token });
+      return res.status(200).json({ requiereConfiguracion: true, opciones });
+    } catch (err) {
+      console.error(`Error leyendo catálogos de ${proveedor}:`, err.message);
+      return res.status(err.status || 502).json({ error: err.publicMessage || `No se pudieron leer las opciones de configuración de ${adaptador.nombre}.` });
+    }
+  }
+
+  try {
+    const tokenCifrado = integraciones.cifrar(token);
+    const configuracionTexto = JSON.stringify(configuracion || {});
+    const id = crypto.randomUUID();
+    const { rows } = await pool.query(
+      `INSERT INTO integraciones_contables (id, contador_id, proveedor, email, token_cifrado, activo, conectado_at, configuracion)
+       VALUES ($1, $2, $3, $4, $5, true, now(), $6)
+       ON CONFLICT (contador_id, proveedor)
+       DO UPDATE SET email = $4, token_cifrado = $5, activo = true, conectado_at = now(), configuracion = $6
+       RETURNING proveedor, email, activo, conectado_at`,
+      [id, req.userId, proveedor, email, tokenCifrado, configuracionTexto]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(`Error guardando integración con ${proveedor}:`, err.message);
+    const status = err.status || 500;
+    res.status(status).json({ error: err.publicMessage || 'No se pudo guardar la conexión.' });
+  }
+});
+
+// Desconecta un proveedor -- borra el token guardado, no solo lo marca
+// inactivo, para no dejar una credencial sin uso dando vueltas.
+app.delete('/api/integraciones/:proveedor', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      'DELETE FROM integraciones_contables WHERE contador_id = $1 AND proveedor = $2',
+      [req.userId, req.params.proveedor]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'No tenías esa integración conectada.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error desconectando integración:', err.message);
+    res.status(500).json({ error: 'No se pudo desconectar.' });
+  }
+});
+
+// Envía una factura YA guardada en Kárdex IA hacia el software contable
+// conectado (por ahora, Alegra) como factura de proveedor. El contador
+// decide cuándo mandarla -- nunca es automático al guardar, para que
+// siempre haya una revisión humana antes de tocar su contabilidad real.
+app.post('/api/invoices/:id/enviar/:proveedor', requireAuth, async (req, res) => {
+  const { id, proveedor } = req.params;
+  const adaptador = integraciones.PROVEEDORES[proveedor];
+  if (!adaptador) {
+    return res.status(400).json({ error: `"${proveedor}" no es un proveedor soportado todavía.` });
+  }
+  const columnas = COLUMNAS_ENVIO_PROVEEDOR[proveedor];
+  if (!columnas) {
+    // No debería pasar (todo proveedor en PROVEEDORES tiene sus 2
+    // columnas arriba) -- pero si alguien agrega un proveedor nuevo sin
+    // agregar sus columnas, es mejor un 400 claro que un SQL roto.
+    return res.status(500).json({ error: `Falta configurar las columnas de envío para "${proveedor}" en el servidor.` });
+  }
+
+  try {
+    const facturaRes = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [id, req.userId]);
+    if (facturaRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Factura no encontrada.' });
+    }
+    const factura = facturaRes.rows[0];
+
+    const integracionRes = await pool.query(
+      'SELECT email, token_cifrado, configuracion FROM integraciones_contables WHERE contador_id = $1 AND proveedor = $2 AND activo = true',
+      [req.userId, proveedor]
+    );
+    if (integracionRes.rows.length === 0) {
+      return res.status(400).json({ error: `No tienes ${adaptador.nombre} conectado. Ve a Integraciones para conectarlo primero.` });
+    }
+
+    const cred = {
+      email: integracionRes.rows[0].email,
+      token: integraciones.descifrar(integracionRes.rows[0].token_cifrado),
+    };
+    let configuracion = {};
+    try { configuracion = JSON.parse(integracionRes.rows[0].configuracion || '{}'); } catch (e) { configuracion = {}; }
+
+    const resultado = await adaptador.enviarFactura(cred, factura, configuracion);
+
+    await pool.query(
+      `UPDATE invoices SET ${columnas.billId} = $1, ${columnas.enviadaAt} = now() WHERE id = $2`,
+      [resultado.billId || '', id]
+    );
+    await pool.query(
+      'UPDATE integraciones_contables SET ultima_sincronizacion = now() WHERE contador_id = $1 AND proveedor = $2',
+      [req.userId, proveedor]
+    );
+
+    res.json({ ok: true, billId: resultado.billId, avisos: resultado.avisos || [] });
+  } catch (err) {
+    console.error(`Error enviando factura a ${proveedor}:`, err.message);
+    res.status(err.status || 500).json({ error: err.publicMessage || `No se pudo enviar la factura a ${adaptador.nombre}.` });
   }
 });
 
