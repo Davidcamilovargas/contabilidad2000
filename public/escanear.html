@@ -151,6 +151,25 @@
   }
   #savedMsg.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
 
+  /* Aviso de documento duplicado -- ni error (el archivo se leyó bien
+     antes) ni "guardado" (todavía no se guardó nada en esta subida), así
+     que usa el tono terracota (clay) para distinguirse de ambos. */
+  #dupWarn{
+    margin-top:18px;border:1px solid #AA6B5C;background:#F6ECE7;
+    color:#8B5245;padding:14px 16px;font-size:13px;display:none;
+    border-radius:8px; line-height:1.55;
+  }
+  #dupWarn.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
+  #dupWarn b{display:block;font-size:14px;margin-bottom:4px;color:#7A2E1B;}
+  #dupWarn .dup-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}
+  #dupWarn .dup-actions button{
+    font-family:'Inter',sans-serif; font-size:12.5px; font-weight:600;
+    padding:8px 14px; border-radius:7px; cursor:pointer;
+    border:1px solid #AA6B5C; background:#fff; color:#8B5245;
+    transition:background .15s ease;
+  }
+  #dupWarn .dup-actions button:hover{ background:#F1E3DC; }
+
   #retencionHint{
     margin-top:14px; border:1px solid #C9A227; background:#FBF3D9;
     color:#7A5C0A; padding:12px 14px; font-size:12.5px; line-height:1.5;
@@ -363,6 +382,7 @@
 
   <div id="err"></div>
   <div id="savedMsg"></div>
+  <div id="dupWarn"></div>
 
   <div id="result">
     <div class="result-head">
@@ -494,6 +514,7 @@ const statusEl = document.getElementById('status');
 const statusText = document.getElementById('statusText');
 const errEl = document.getElementById('err');
 const savedMsg = document.getElementById('savedMsg');
+const dupWarnEl = document.getElementById('dupWarn');
 const resultEl = document.getElementById('result');
 const ledger = document.getElementById('ledger');
 const btnAgain = document.getElementById('btnAgain');
@@ -514,6 +535,7 @@ let currentRegimenSimple = false;
 let currentCategoriaConceptoIA = '';
 let currentDesgloseCategorias = {};
 let currentSubcuentaGasto = '';
+let currentFileHash = ''; // huella del archivo actual -- para detectar y guardar el estado de duplicado
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida)
 
@@ -772,9 +794,11 @@ function handleFile(file){
   if(!file) return;
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
+  dupWarnEl.classList.remove('show');
   resultEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');
+  currentFileHash = ''; // es un archivo distinto -- se recalcula al leerlo
   btnExtract.textContent = 'Leer factura'; // es un archivo distinto, no un reintento
 
   currentIsPdf = (file.type === 'application/pdf') || /\.pdf$/i.test(file.name || '');
@@ -837,6 +861,7 @@ function resetAll(){
   resultEl.classList.remove('show');
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
+  dupWarnEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');
   fileCamera.value = '';
@@ -847,6 +872,7 @@ function resetAll(){
   currentRegimenSimple = false;
   currentDesgloseCategorias = {};
   currentSubcuentaGasto = '';
+  currentFileHash = '';
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   btnExtract.textContent = 'Leer factura';
@@ -874,10 +900,11 @@ function detenerContadorLectura(){
   if (contadorLecturaInterval) { clearInterval(contadorLecturaInterval); contadorLecturaInterval = null; }
 }
 
-async function extractInvoice(){
+async function extractInvoice(forzar){
   if(!currentBase64) return;
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
+  dupWarnEl.classList.remove('show');
   resultEl.classList.remove('show');
   document.getElementById('retencionHint').classList.remove('show');
   statusEl.classList.add('show');
@@ -892,7 +919,8 @@ async function extractInvoice(){
       body: JSON.stringify({
         base64: currentBase64,
         mediaType: currentMediaType,
-        isPdf: currentIsPdf
+        isPdf: currentIsPdf,
+        forzar: !!forzar
       })
     });
 
@@ -907,6 +935,13 @@ async function extractInvoice(){
       throw new Error(data.error || ('Error del servidor (' + response.status + ')'));
     }
 
+    if (data.duplicado) {
+      currentFileHash = data.file_hash || '';
+      renderDuplicado(data.factura_existente);
+      return;
+    }
+
+    currentFileHash = data.file_hash || '';
     renderResult(data);
 
   }catch(e){
@@ -922,6 +957,36 @@ async function extractInvoice(){
     scanBeam.classList.remove('active');
     btnExtract.disabled = false;
   }
+}
+
+// Se muestra en vez del formulario de resultado cuando este archivo
+// (mismos bytes exactos) ya se había leído y guardado antes -- no se
+// gastó una lectura de IA de nuevo. "existente" trae los datos mínimos
+// de esa factura ya guardada, para que el contador reconozca cuál es
+// sin tener que ir a buscarla a Facturas.
+function renderDuplicado(existente){
+  const nombre = existente?.nombre_razon_social || '(sin nombre)';
+  const numero = [existente?.letras_fe, existente?.numeros_fe].filter(Boolean).join('-');
+  const fecha = existente?.fecha_factura || '—';
+  const valor = existente?.valor_con_iva ? `$${Number(existente.valor_con_iva).toLocaleString('es-CO')}` : '—';
+  const tipoTxt = existente?.tipo_movimiento === 'ingreso' ? 'Ingreso' : 'Egreso';
+  const guardadaEl = existente?.saved_at ? new Date(existente.saved_at) : null;
+  const guardadaTxt = guardadaEl && !isNaN(guardadaEl) ? guardadaEl.toLocaleDateString('es-CO', { day:'numeric', month:'long', year:'numeric' }) : '';
+
+  dupWarnEl.innerHTML = `
+    <b>📋 Este documento ya está guardado en tu kárdex</b>
+    No se volvió a leer con IA para no duplicarlo. Es el mismo archivo que guardaste
+    ${guardadaTxt ? `el ${guardadaTxt}` : 'antes'} como <b style="display:inline;color:inherit;">${escapeHtml(nombre)}</b>
+    ${numero ? ` (factura ${escapeHtml(numero)})` : ''} — ${tipoTxt} por ${valor}, fecha ${escapeHtml(fecha)}.
+    <div class="dup-actions">
+      <button type="button" id="btnLeerDeTodasFormas">Leer de todas formas</button>
+      <button type="button" id="btnOtroArchivo">Subir otro archivo</button>
+    </div>
+  `;
+  dupWarnEl.classList.add('show');
+
+  document.getElementById('btnLeerDeTodasFormas').addEventListener('click', () => extractInvoice(true));
+  document.getElementById('btnOtroArchivo').addEventListener('click', resetAll);
 }
 
 function renderResult(data){
@@ -1266,19 +1331,35 @@ function currentFieldValues(){
   out.categoria_concepto_ia = currentCategoriaConceptoIA;
   out.desglose_categorias = JSON.stringify(currentDesgloseCategorias || {});
   out.subcuenta_gasto = currentSubcuentaGasto || '';
+  out.file_hash = currentFileHash || '';
   return out;
 }
 
-btnSave.addEventListener('click', async () => {
+async function guardarFactura(forzar){
   btnSave.disabled = true;
   errEl.classList.remove('show');
   try {
+    const payload = currentFieldValues();
+    if (forzar) payload.forzar_duplicado = true;
     const response = await fetch('/api/invoices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(currentFieldValues())
+      body: JSON.stringify(payload)
     });
     const data = await response.json();
+
+    // El servidor rechazó el guardado porque este mismo archivo ya
+    // estaba guardado -- se ofrece la opción de guardarlo de todas
+    // formas (ej. porque el contador confirmó que no era el mismo caso).
+    if (response.status === 409 && data.duplicado) {
+      errEl.innerHTML = `${escapeHtml(data.error || 'Esta factura ya estaba guardada.')} ` +
+        `<button type="button" id="btnGuardarDeTodasFormas" style="margin-left:8px;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;border:1px solid #B0402D;background:#fff;color:#7A2E1B;cursor:pointer;">Guardar de todas formas</button>`;
+      errEl.classList.add('show');
+      document.getElementById('btnGuardarDeTodasFormas').addEventListener('click', () => guardarFactura(true));
+      btnSave.disabled = false;
+      return;
+    }
+
     if (!response.ok) throw new Error(data.error || 'No se pudo guardar.');
 
     savedMsg.textContent = '✓ Guardada en el kárdex — puedes verla en la pestaña Facturas.';
@@ -1289,7 +1370,9 @@ btnSave.addEventListener('click', async () => {
     errEl.classList.add('show');
     btnSave.disabled = false;
   }
-});
+}
+
+btnSave.addEventListener('click', () => guardarFactura(false));
 </script>
 </body>
 </html>

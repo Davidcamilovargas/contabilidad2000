@@ -97,6 +97,14 @@
   .status-badge.revisar{ background:#FBF3D9; color:#7A5C0A; }
   .status-badge.error{ background:#FBE4DE; color:#B0402D; }
   .status-badge.procesando{ background:#F1EAD9; color:var(--ink-soft); }
+  .status-badge.duplicado{ background:#F6ECE7; color:#8B5245; }
+
+  .btn-forzar-lectura{
+    font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600;
+    padding:5px 10px; border-radius:6px; cursor:pointer; margin-left:8px;
+    border:1px solid #AA6B5C; background:#fff; color:#8B5245;
+  }
+  .btn-forzar-lectura:hover{ background:#F6ECE7; }
 
   #saveAllBar{
     display:flex; align-items:center; justify-content:space-between; margin-top:18px;
@@ -202,7 +210,7 @@
     </table>
 
     <div id="saveAllBar">
-      <span class="info"><b id="countListas">0</b> listas para guardar · <b id="countRevisar">0</b> necesitan revisión</span>
+      <span class="info"><b id="countListas">0</b> listas para guardar · <b id="countRevisar">0</b> necesitan revisión · <b id="countDuplicadas">0</b> ya existían (no se leyeron de nuevo)</span>
       <button class="btn" id="btnGuardarTodas">Guardar facturas listas</button>
     </div>
   </div>
@@ -289,6 +297,7 @@ const summaryBody = document.getElementById('summaryBody');
 const btnGuardarTodas = document.getElementById('btnGuardarTodas');
 const countListasEl = document.getElementById('countListas');
 const countRevisarEl = document.getElementById('countRevisar');
+const countDuplicadasEl = document.getElementById('countDuplicadas');
 const fileModal = document.getElementById('fileModal');
 const fileModalBackdrop = document.getElementById('fileModalBackdrop');
 const btnCloseModal = document.getElementById('btnCloseModal');
@@ -596,13 +605,13 @@ function detenerContadorLote(){
 // actualizado). La usan tanto el procesamiento inicial del lote como el
 // botón de "Reintentar" de una factura que dio error, para no duplicar
 // esta lógica en dos partes.
-async function extraerFactura(file){
+async function extraerFactura(file, forzar){
   const base64 = await fileToBase64(file);
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
   const res = await fetch('/api/extract', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base64, mediaType: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'), isPdf })
+    body: JSON.stringify({ base64, mediaType: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'), isPdf, forzar: !!forzar })
   });
 
   const contentType = res.headers.get('content-type') || '';
@@ -657,6 +666,15 @@ async function procesarLote(files){
       const data = await extraerFactura(item.file);
       item.data = data;
 
+      // Este mismo archivo ya se había leído y guardado antes -- no se
+      // gastó una lectura de IA de nuevo. Se marca aparte, no cuenta
+      // como "lista" ni como "revisar" (no hay datos de factura que
+      // revisar, solo el aviso de cuál es la que ya existe).
+      if (data.duplicado) {
+        item.estado = 'duplicado';
+        continue;
+      }
+
       const deteccion = detectarClienteYMovimiento(data);
       item.clienteId = deteccion.clienteId;
       item.tipoMovimiento = deteccion.tipoMovimiento;
@@ -674,9 +692,12 @@ async function procesarLote(files){
   summaryWrap.classList.add('show');
 }
 
-// Reintenta la lectura de UNA sola factura del lote (la que dio error),
-// sin tener que volver a subir ni reprocesar las demás.
-async function reintentarItem(idx){
+// Reintenta la lectura de UNA sola factura del lote (la que dio error,
+// o la que se marcó como duplicada y el contador quiere leer de todas
+// formas), sin tener que volver a subir ni reprocesar las demás.
+// "forzar" se manda tal cual a /api/extract -- si es true, se salta el
+// aviso de duplicado y lee con IA aunque el archivo ya exista.
+async function reintentarItem(idx, forzar){
   const item = lote[idx];
   if (!item) return;
 
@@ -685,8 +706,15 @@ async function reintentarItem(idx){
   renderSummary();
 
   try {
-    const data = await extraerFactura(item.file);
+    const data = await extraerFactura(item.file, forzar);
     item.data = data;
+
+    if (data.duplicado) {
+      item.estado = 'duplicado';
+      renderSummary();
+      return;
+    }
+
     const deteccion = detectarClienteYMovimiento(data);
     item.clienteId = deteccion.clienteId;
     item.tipoMovimiento = deteccion.tipoMovimiento;
@@ -725,6 +753,24 @@ function renderSummary(){
           <button type="button" class="btn-reintentar" data-role="reintentar" data-idx="${idx}">🔄 Reintentar</button>
         </td>
         <td><span class="status-badge error">✕ Error</span></td>
+      `;
+      summaryBody.appendChild(tr);
+      return;
+    }
+
+    if (item.estado === 'duplicado') {
+      const existente = item.data?.factura_existente || {};
+      const nombre = existente.nombre_razon_social || '(sin nombre)';
+      const numero = [existente.letras_fe, existente.numeros_fe].filter(Boolean).join('-');
+      const valor = existente.valor_con_iva ? `$${Number(existente.valor_con_iva).toLocaleString('es-CO')}` : '—';
+      tr.innerHTML = `
+        <td>${escapeHtml(item.nombre)}</td>
+        <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
+        <td colspan="5" style="color:#8B5245;">
+          Ya está guardado como <b>${escapeHtml(nombre)}</b>${numero ? ` (factura ${escapeHtml(numero)})` : ''} — ${valor}. No se volvió a leer con IA.
+          <button type="button" class="btn-forzar-lectura" data-role="forzar-lectura" data-idx="${idx}">Leer de todas formas</button>
+        </td>
+        <td><span class="status-badge duplicado">📋 Ya existe</span></td>
       `;
       summaryBody.appendChild(tr);
       return;
@@ -839,14 +885,23 @@ summaryBody.addEventListener('click', (e) => {
   if (btnReintentar) {
     const idx = Number(btnReintentar.dataset.idx);
     if (!isNaN(idx)) reintentarItem(idx);
+    return;
+  }
+
+  const btnForzar = e.target.closest('[data-role="forzar-lectura"]');
+  if (btnForzar) {
+    const idx = Number(btnForzar.dataset.idx);
+    if (!isNaN(idx)) reintentarItem(idx, true);
   }
 });
 
 function actualizarContadores(){
   const listas = lote.filter(i => i.estado === 'listo').length;
   const revisar = lote.filter(i => i.estado === 'revisar').length;
+  const duplicadas = lote.filter(i => i.estado === 'duplicado').length;
   countListasEl.textContent = listas;
   countRevisarEl.textContent = revisar;
+  countDuplicadasEl.textContent = duplicadas;
   btnGuardarTodas.disabled = listas === 0;
 }
 
@@ -873,11 +928,21 @@ btnGuardarTodas.addEventListener('click', async () => {
         regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
         desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
         subcuenta_gasto: d.subcuenta_gasto || '',
+        file_hash: d.file_hash || '',
       };
       const res = await fetch('/api/invoices', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
-      if (res.ok) { item.estado = 'guardada'; guardadas++; }
+      if (res.ok) {
+        item.estado = 'guardada'; guardadas++;
+      } else if (res.status === 409) {
+        // Se coló como "lista" pero justo antes de guardarla resultó que
+        // ya existía (ej. dos archivos idénticos en el mismo lote) --
+        // se reclasifica como duplicada en vez de fallar en silencio.
+        const errData = await res.json().catch(() => null);
+        item.estado = 'duplicado';
+        item.data = { ...item.data, factura_existente: errData?.factura_existente || {} };
+      }
     } catch (e) { /* se deja como estaba, no bloquea el resto del lote */ }
   }
 

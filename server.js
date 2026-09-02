@@ -137,6 +137,16 @@ async function ensureSchema() {
   // Nullable a propósito -- los datos guardados ANTES del login existían
   // sin dueño, y no se borran ni se le asignan a nadie a la fuerza.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS contador_id UUID;`);
+  // Huella (SHA-256) del archivo original de cada factura -- permite
+  // reconocer que un documento YA se leyó y se guardó antes, sin tener
+  // que volver a mandarlo a la IA. Vacía para facturas guardadas antes
+  // de este cambio (no se puede recalcular retroactivamente sin el
+  // archivo original).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_hash TEXT DEFAULT '';`);
+  // Índice parcial (ignora las filas con file_hash vacío) para que la
+  // búsqueda de duplicados por contador sea instantánea incluso con
+  // miles de facturas guardadas.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_contador_filehash ON invoices (contador_id, file_hash) WHERE file_hash <> '';`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contador_id UUID;`);
   // Si el cliente es agente retenedor -- sin esto no tiene sentido
   // calcular ninguna retención sugerida (si no es agente retenedor,
@@ -423,11 +433,38 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple', 'desglose_categorias', 'subcuenta_gasto',
+  'regimen_simple', 'desglose_categorias', 'subcuenta_gasto', 'file_hash',
 ];
 
 function rowToInvoice(row) {
   return { ...row, savedAt: row.saved_at, saved_at: undefined };
+}
+
+// ---------- Detección de documentos duplicados ----------
+
+// Huella determinística del archivo: mismo archivo (mismos bytes) ==
+// mismo hash, sin importar el nombre con el que se subió ni cuándo.
+// Se calcula sobre el base64 tal cual lo manda el navegador (no hace
+// falta decodificarlo a binario primero -- es una correspondencia 1 a 1).
+function calcularFileHash(base64) {
+  return crypto.createHash('sha256').update(base64, 'utf8').digest('hex');
+}
+
+// Datos mínimos y seguros para mostrarle al contador cuál factura ya
+// existe -- nunca el registro completo (no hace falta, y evita mandar
+// de más).
+const CAMPOS_FACTURA_EXISTENTE = `
+  id, nombre_razon_social, numeros_fe, letras_fe, fecha_factura,
+  valor_con_iva, tipo_movimiento, cliente_id, saved_at
+`;
+
+async function buscarFacturaPorHash(contadorId, fileHash) {
+  if (!fileHash) return null;
+  const { rows } = await pool.query(
+    `SELECT ${CAMPOS_FACTURA_EXISTENTE} FROM invoices WHERE contador_id = $1 AND file_hash = $2 LIMIT 1`,
+    [contadorId, fileHash]
+  );
+  return rows.length > 0 ? rows[0] : null;
 }
 
 // ---------- Clientes ----------
@@ -613,6 +650,23 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       );
       if (clienteRes.rows.length === 0) {
         return res.status(400).json({ error: 'El cliente indicado no existe o no te pertenece.' });
+      }
+    }
+
+    // Red de seguridad contra duplicados -- /api/extract ya avisa ANTES
+    // de leer con IA si el archivo coincide con una factura guardada,
+    // pero esto cubre el caso de que se llegue aquí sin pasar por ahí
+    // (ej. una pestaña vieja, o dos subidas casi al mismo tiempo). Si el
+    // contador ya confirmó que quiere guardarla de todas formas, manda
+    // forzar_duplicado y se salta este chequeo.
+    if (req.body.file_hash && !req.body.forzar_duplicado) {
+      const existente = await buscarFacturaPorHash(req.userId, req.body.file_hash);
+      if (existente) {
+        return res.status(409).json({
+          error: 'Este documento ya se había guardado antes -- no se guardó de nuevo para evitar un duplicado.',
+          duplicado: true,
+          factura_existente: existente,
+        });
       }
     }
 
@@ -825,16 +879,37 @@ Si documento_valido es false (el documento no es factura de venta ni cuenta de c
 
 // Endpoint que recibe el archivo (imagen o PDF) de una factura y llama a la API gratuita de Gemini
 app.post('/api/extract', requireAuth, async (req, res) => {
-  const { base64, mediaType, isPdf } = req.body;
+  const { base64, mediaType, isPdf, forzar } = req.body;
 
   if (!base64 || !mediaType) {
     return res.status(400).json({ error: 'Faltan datos del archivo (base64 o mediaType).' });
   }
 
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
+  const fileHash = calcularFileHash(base64);
+
+  // Antes de gastar una lectura de IA, revisamos si este mismo archivo
+  // (mismos bytes exactos) ya se leyó y se guardó antes para este
+  // contador. Si es así, no se vuelve a mandar a Gemini -- se avisa de
+  // una vez con los datos de la factura ya guardada. "forzar" permite
+  // saltarse este aviso si el contador de verdad quiere volver a leerlo
+  // (ej. sospecha que el duplicado es un falso positivo).
+  if (!forzar) {
+    try {
+      const existente = await buscarFacturaPorHash(req.userId, fileHash);
+      if (existente) {
+        return res.json({ duplicado: true, file_hash: fileHash, factura_existente: existente });
+      }
+    } catch (err) {
+      console.error('No se pudo revisar duplicados antes de leer con IA:', err.message);
+      // Si falla la búsqueda, seguimos con la lectura normal -- mejor
+      // gastar una lectura de más que bloquear el flujo por esto.
+    }
+  }
 
   try {
     const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
+    parsed.file_hash = fileHash;
 
     // Kárdex IA solo causa dos tipos de documento: factura de venta y
     // cuenta de cobro -- son los únicos con validez legal para registrar
