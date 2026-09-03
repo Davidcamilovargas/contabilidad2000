@@ -150,6 +150,43 @@ async function ensureSchema() {
   // miles de facturas guardadas.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoices_contador_filehash ON invoices (contador_id, file_hash) WHERE file_hash <> '';`);
 
+  // ---------- Ítems de factura (Fase 4 -- desglose línea por línea) ----------
+  // Antes solo se guardaba `desglose_categorias`, un resumen agregado
+  // ("compras: 442000, servicios: 140000") -- suficiente para calcular la
+  // retención total, pero sin rastro de CUÁLES líneas reales de la
+  // factura formaban cada categoría. Esta tabla guarda cada ítem tal
+  // cual viene en el documento (o el ítem único que representa toda la
+  // factura, si no trae tabla de líneas), con su propia categoría y
+  // subcuenta PUC -- así una factura que mezcla productos y mano de obra
+  // ya no se trata como un solo bloque, sino línea por línea, igual que
+  // el contador la vería en el papel.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS factura_items (
+      id UUID PRIMARY KEY,
+      invoice_id UUID NOT NULL,
+      contador_id UUID,
+      orden INTEGER NOT NULL DEFAULT 0,
+      descripcion TEXT DEFAULT '',
+      cantidad TEXT DEFAULT '',
+      valor_unitario TEXT DEFAULT '',
+      subtotal TEXT DEFAULT '',
+      categoria_concepto TEXT DEFAULT '',
+      subcuenta_gasto TEXT DEFAULT '',
+      valor_iva TEXT DEFAULT '',
+      iva_mayor_valor BOOLEAN NOT NULL DEFAULT false
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_factura_items_invoice ON factura_items (invoice_id);`);
+  // Si la factura que los contenía se borra, sus ítems quedarían
+  // huérfanos (basura que nadie vuelve a leer) -- se borran con ella.
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE factura_items ADD CONSTRAINT factura_items_invoice_fk
+        FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+
   // ---------- Cartera / conciliación bancaria ----------
   // Cada fila es UN movimiento de un extracto bancario (un cargo o un
   // abono). "estado" empieza en 'sin_conciliar'; cuando el contador
@@ -307,6 +344,40 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_terceros_fiscales_contador ON terceros_fiscales (contador_id);`);
+
+  // Tarifas de ReteICA -- a diferencia de Rete Fuente/Rete IVA (que son
+  // nacionales, una sola tabla vale para todo el país), el ICA lo fija
+  // CADA municipio (hay más de 1.100 en Colombia) y la tarifa además
+  // cambia según la actividad económica -- no existe una tabla
+  // nacional confiable que esta app pueda traer ya puesta sin
+  // arriesgarse a inventar un número con plata de por medio. Por eso
+  // el contador arma su propia tabla: municipio + actividad + tarifa
+  // por mil + base mínima (en UVT, porque también varía por municipio)
+  // + la cuenta PUC auxiliar donde se contabiliza (ej. 23680101 para
+  // Bogotá, 23680102 para Medellín -- cada contador nombra la suya).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarifas_ica (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      municipio TEXT NOT NULL,
+      actividad TEXT NOT NULL DEFAULT '',
+      tarifa_por_mil NUMERIC NOT NULL,
+      base_uvt NUMERIC NOT NULL DEFAULT 0,
+      cuenta_puc TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (contador_id, municipio, actividad)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tarifas_ica_contador ON tarifas_ica (contador_id);`);
+
+  // Qué tarifa de ICA (de la tabla de arriba) se usó al calcular el
+  // Rete ICA sugerido de esta factura -- queda guardado junto con la
+  // factura para que quede trazable después (ej. al exportar o
+  // auditar) de dónde salió el número, sin tener que adivinar cuál
+  // municipio se usó.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tarifa_ica_id UUID;`);
   // Plan del contador -- define cuántos clientes puede registrar.
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
@@ -574,6 +645,7 @@ const SAVED_FIELDS = [
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
   'regimen_simple', 'desglose_categorias', 'subcuenta_gasto', 'file_hash',
+  'tarifa_ica_id',
 ];
 
 function rowToInvoice(row) {
@@ -792,6 +864,15 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'El cliente indicado no existe o no te pertenece.' });
       }
     }
+    if (req.body.tarifa_ica_id) {
+      const tarifaRes = await pool.query(
+        'SELECT 1 FROM tarifas_ica WHERE id = $1 AND contador_id = $2',
+        [req.body.tarifa_ica_id, req.userId]
+      );
+      if (tarifaRes.rows.length === 0) {
+        return res.status(400).json({ error: 'La tarifa de ICA indicada no existe o no te pertenece.' });
+      }
+    }
 
     // Red de seguridad contra duplicados -- /api/extract ya avisa ANTES
     // de leer con IA si el archivo coincide con una factura guardada,
@@ -816,6 +897,8 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       // cliente_id es de tipo UUID en la base de datos -- una cadena vacía
       // rompería la inserción, así que se convierte a NULL cuando no hay cliente.
       if (key === 'cliente_id') return val === '' ? null : val;
+      // tarifa_ica_id es de tipo UUID igual que cliente_id -- mismo tratamiento.
+      if (key === 'tarifa_ica_id') return val === '' ? null : val;
       // regimen_simple es de tipo BOOLEAN -- convertir explícitamente.
       if (key === 'regimen_simple') return val === true || val === 'true';
       return val;
@@ -862,6 +945,35 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       console.error('No se pudo guardar la tarifa aprendida del proveedor:', err.message);
     }
 
+    // Ítems línea por línea (Fase 4) -- opcional a propósito: una factura
+    // guardada antes de este cambio, o guardada desde un flujo que no
+    // manda `items`, simplemente no tiene filas en factura_items, y el
+    // resto de la app sigue funcionando con el desglose agregado de
+    // siempre. Si algo falla guardando los ítems, NO se revierte la
+    // factura ya guardada -- se guarda igual, solo sin el detalle línea
+    // por línea (mismo criterio que las correcciones aprendidas arriba).
+    if (Array.isArray(req.body.items) && req.body.items.length > 0) {
+      try {
+        let orden = 0;
+        for (const item of req.body.items) {
+          await pool.query(
+            `INSERT INTO factura_items
+              (id, invoice_id, contador_id, orden, descripcion, cantidad, valor_unitario, subtotal, categoria_concepto, subcuenta_gasto, valor_iva, iva_mayor_valor)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [
+              crypto.randomUUID(), id, req.userId, orden++,
+              String(item.descripcion ?? ''), String(item.cantidad ?? ''), String(item.valor_unitario ?? ''),
+              String(item.subtotal ?? ''), String(item.categoria_concepto ?? '').toLowerCase(),
+              String(item.subcuenta_gasto ?? ''), String(item.valor_iva ?? ''),
+              item.iva_mayor_valor === true || item.iva_mayor_valor === 'true',
+            ]
+          );
+        }
+      } catch (err) {
+        console.error('No se pudieron guardar los ítems de la factura:', err.message);
+      }
+    }
+
     res.status(201).json(rowToInvoice(rows[0]));
   } catch (err) {
     console.error('Error guardando factura:', err);
@@ -880,6 +992,59 @@ app.delete('/api/invoices/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error eliminando factura:', err);
     res.status(500).json({ error: 'No se pudo eliminar la factura.' });
+  }
+});
+
+// Ajustar los 3 valores de retención de una factura YA guardada -- pensado
+// para el panel de validación antes de exportar/enviar (Fase 3): el
+// contador revisa el resumen consolidado justo antes de exportar a Excel o
+// enviar a Alegra/Siigo, y puede corregir o eximir (poner en 0) la
+// retención de esa factura puntual sin tener que borrarla y registrarla de
+// nuevo. A propósito solo acepta estos 3 campos -- no es un endpoint
+// general de edición de factura, es específico para este checkpoint.
+const CAMPOS_EDITABLES_RETENCION = ['rete_fuente', 'rete_iva', 'rete_ica'];
+app.put('/api/invoices/:id', requireAuth, async (req, res) => {
+  try {
+    const sets = [];
+    const values = [];
+    let i = 1;
+    for (const campo of CAMPOS_EDITABLES_RETENCION) {
+      if (Object.prototype.hasOwnProperty.call(req.body, campo)) {
+        sets.push(`${campo} = $${i}`);
+        values.push(String(req.body[campo] ?? ''));
+        i++;
+      }
+    }
+    if (sets.length === 0) {
+      return res.status(400).json({ error: 'No se envió ningún campo válido para actualizar.' });
+    }
+    values.push(req.params.id, req.userId);
+    const { rows } = await pool.query(
+      `UPDATE invoices SET ${sets.join(', ')} WHERE id = $${i} AND contador_id = $${i + 1} RETURNING *`,
+      values
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
+    }
+    res.json(rowToInvoice(rows[0]));
+  } catch (err) {
+    console.error('Error actualizando retención de factura:', err);
+    res.status(500).json({ error: 'No se pudo actualizar la factura.' });
+  }
+});
+
+// Ítems línea por línea de una factura (Fase 4) -- ownership por el
+// contador_id guardado en cada ítem, no hace falta el join con invoices.
+app.get('/api/invoices/:id/items', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM factura_items WHERE invoice_id = $1 AND contador_id = $2 ORDER BY orden ASC',
+      [req.params.id, req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error listando ítems de factura:', err);
+    res.status(500).json({ error: 'No se pudieron cargar los ítems de la factura.' });
   }
 });
 
@@ -1154,10 +1319,11 @@ Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO 
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
   "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'hoteles_restaurantes' (alojamiento o alimentación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
-  "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás."
+  "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás.",
+  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba. Nunca inventes ítems que no estén realmente en el documento."
 }
 
-REGLA DE FORMATO PARA LOS 3 CAMPOS DE VALOR (muy importante, es el error más común):
+REGLA DE FORMATO PARA LOS CAMPOS DE VALOR (los 3 de arriba, y también valor_unitario/subtotal de cada ítem del arreglo "items" -- muy importante, es el error más común):
 Los documentos colombianos escriben los montos con PUNTO como separador de miles y COMA para los centavos (ej: "39.915,96" significa treinta y nueve mil novecientos quince pesos con noventa y seis centavos). Debes devolver el valor como un ENTERO en pesos, redondeando los centavos, SIN puntos, SIN comas, SIN concatenar los dígitos tal cual aparecen escritos.
 
 Ejemplo correcto: si el documento muestra "39.915,96", el JSON debe llevar 39916 (no 3991596, no 39915.96, no 39915).
@@ -1776,6 +1942,91 @@ app.delete('/api/terceros-fiscales/:nit', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error eliminando perfil fiscal del tercero:', err);
     res.status(500).json({ error: 'No se pudo eliminar el perfil fiscal.' });
+  }
+});
+
+// ---------- Tarifas de ReteICA (por municipio, configurables por el contador) ----------
+app.get('/api/tarifas-ica', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas, updated_at
+       FROM tarifas_ica WHERE contador_id = $1 ORDER BY municipio ASC, actividad ASC`,
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error leyendo tarifas de ICA:', err);
+    res.status(500).json({ error: 'No se pudieron cargar las tarifas de ICA.' });
+  }
+});
+
+app.post('/api/tarifas-ica', requireAuth, async (req, res) => {
+  try {
+    const municipio = String(req.body.municipio || '').trim();
+    const actividad = String(req.body.actividad || '').trim();
+    const tarifaPorMil = Number(req.body.tarifa_por_mil);
+    const baseUvt = Number(req.body.base_uvt) || 0;
+    const cuentaPuc = String(req.body.cuenta_puc || '').trim();
+    const notas = String(req.body.notas || '').trim();
+
+    if (!municipio) return res.status(400).json({ error: 'Falta el municipio.' });
+    if (!tarifaPorMil || tarifaPorMil <= 0) return res.status(400).json({ error: 'La tarifa por mil debe ser un número mayor a 0.' });
+    if (baseUvt < 0) return res.status(400).json({ error: 'La base mínima en UVT no puede ser negativa.' });
+
+    const id = crypto.randomUUID();
+    const { rows } = await pool.query(
+      `INSERT INTO tarifas_ica (id, contador_id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (contador_id, municipio, actividad) DO UPDATE SET
+         tarifa_por_mil = EXCLUDED.tarifa_por_mil, base_uvt = EXCLUDED.base_uvt,
+         cuenta_puc = EXCLUDED.cuenta_puc, notas = EXCLUDED.notas, updated_at = now()
+       RETURNING id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas, updated_at`,
+      [id, req.userId, municipio, actividad, tarifaPorMil, baseUvt, cuentaPuc, notas]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error guardando tarifa de ICA:', err);
+    res.status(500).json({ error: 'No se pudo guardar la tarifa de ICA.' });
+  }
+});
+
+app.put('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
+  try {
+    const municipio = String(req.body.municipio || '').trim();
+    const actividad = String(req.body.actividad || '').trim();
+    const tarifaPorMil = Number(req.body.tarifa_por_mil);
+    const baseUvt = Number(req.body.base_uvt) || 0;
+    const cuentaPuc = String(req.body.cuenta_puc || '').trim();
+    const notas = String(req.body.notas || '').trim();
+
+    if (!municipio) return res.status(400).json({ error: 'Falta el municipio.' });
+    if (!tarifaPorMil || tarifaPorMil <= 0) return res.status(400).json({ error: 'La tarifa por mil debe ser un número mayor a 0.' });
+
+    const { rows } = await pool.query(
+      `UPDATE tarifas_ica SET municipio=$1, actividad=$2, tarifa_por_mil=$3, base_uvt=$4, cuenta_puc=$5, notas=$6, updated_at=now()
+       WHERE id=$7 AND contador_id=$8
+       RETURNING id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas, updated_at`,
+      [municipio, actividad, tarifaPorMil, baseUvt, cuentaPuc, notas, req.params.id, req.userId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Tarifa de ICA no encontrada.' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error actualizando tarifa de ICA:', err);
+    res.status(500).json({ error: 'No se pudo actualizar la tarifa de ICA.' });
+  }
+});
+
+app.delete('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      'DELETE FROM tarifas_ica WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Tarifa de ICA no encontrada.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando tarifa de ICA:', err);
+    res.status(500).json({ error: 'No se pudo eliminar la tarifa de ICA.' });
   }
 });
 

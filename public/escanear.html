@@ -205,6 +205,50 @@
   .pft-actions .pft-guardar{ border-color:var(--moss); background:var(--moss); color:#fff; }
   .pft-saved{ font-size:11.5px; color:var(--moss-deep, #3E6053); }
 
+  /* ---------- Ítems de la factura, línea por línea (Fase 4) ---------- */
+  #itemsPanel{ margin-top:14px; }
+  .items-box{
+    border:1px solid var(--line); background:var(--paper-raised);
+    border-radius:10px; padding:14px 16px;
+  }
+  .items-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:4px; }
+  .items-head b{ font-size:13px; }
+  .items-sub{ font-size:11.5px; color:var(--ink-faint); margin-bottom:10px; }
+  .items-table-wrap{ overflow-x:auto; }
+  table.items-table{ width:100%; border-collapse:collapse; min-width:760px; }
+  table.items-table th{
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--ink-faint); text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
+  }
+  table.items-table td{ padding:6px 8px; vertical-align:top; border-bottom:1px solid var(--line); }
+  table.items-table tr:last-child td{ border-bottom:none; }
+  table.items-table input, table.items-table select{
+    width:100%; box-sizing:border-box; font-family:'Inter',sans-serif; font-size:12.5px;
+    padding:6px 7px; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:#fff;
+  }
+  table.items-table input.money{ font-family:'JetBrains Mono',monospace; text-align:right; }
+  table.items-table input:focus, table.items-table select:focus{ outline:none; border-color:var(--ember); }
+  .item-estimado{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
+  .item-del-btn{
+    background:none; border:1px solid var(--line); color:var(--ink-faint); border-radius:6px;
+    width:26px; height:26px; cursor:pointer; font-size:12px;
+  }
+  .item-del-btn:hover{ border-color:#B0402D; color:#B0402D; }
+  .item-iva-mv{ display:flex; align-items:center; gap:5px; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
+  .items-foot{
+    display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+    margin-top:10px; padding-top:10px; border-top:1px solid var(--line);
+  }
+  .items-add-btn{
+    font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600; color:var(--moss-deep, #3E6053);
+    background:none; border:1px dashed var(--moss); border-radius:7px; padding:6px 12px; cursor:pointer;
+  }
+  .items-add-btn:hover{ background:var(--moss-soft); }
+  .items-total{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); }
+  .items-total b{ color:var(--ink); }
+  .items-total.mismatch{ color:#B0402D; }
+  .items-total.mismatch b{ color:#B0402D; }
+
   #result{margin-top:34px;display:none;}
   #result.show{display:block;}
   .result-head{
@@ -326,6 +370,35 @@
     transition:background .15s ease;
   }
   .rete-estimado button:hover{ background:var(--moss-soft); }
+
+  /* Selector de municipio/tarifa de ICA -- vive dentro del mismo
+     .rete-estimado que las otras retenciones, pero necesita su propio
+     <select> y un botón para agregar una tarifa nueva sin salir de acá. */
+  .ica-select{
+    font-family:'JetBrains Mono',monospace; font-size:11px;
+    padding:4px 8px; border:1px solid var(--line); border-radius:5px;
+    background:#fff; color:var(--ink); max-width:100%;
+  }
+  .ica-add-link{
+    font-family:'Inter',sans-serif; font-size:11px; font-weight:600;
+    color:var(--moss); background:none; border:none; cursor:pointer; padding:0; text-decoration:underline;
+  }
+  .ica-nueva-form{
+    grid-column:1 / -1; margin:0 16px 10px; padding:10px 12px;
+    border:1px dashed var(--line); border-radius:8px; background:#FAF8F2;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .ica-nueva-form .ica-row{ display:flex; gap:6px; flex-wrap:wrap; }
+  .ica-nueva-form input{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px;
+    padding:5px 8px; border:1px solid var(--line); border-radius:5px; flex:1; min-width:120px;
+  }
+  .ica-nueva-form .ica-actions{ display:flex; gap:8px; justify-content:flex-end; }
+  .ica-nueva-form .ica-actions button{
+    font-family:'Inter',sans-serif; font-size:11px; font-weight:600;
+    padding:5px 11px; border-radius:6px; cursor:pointer; border:1px solid var(--line); background:#fff;
+  }
+  .ica-nueva-form .ica-actions .ica-guardar{ border-color:var(--moss); background:var(--moss); color:#fff; }
   .field-value.money input{font-weight:600; font-family:'JetBrains Mono',monospace;}
   .result-actions{margin-top:18px;display:flex;gap:10px;justify-content:flex-end;}
 
@@ -444,6 +517,7 @@
     <div id="movStatus"></div>
 
     <div class="ledger" id="ledger"></div>
+    <div id="itemsPanel"></div>
     <div id="retencionHint"></div>
     <div id="perfilTerceroPanel"></div>
     <div class="result-actions">
@@ -583,8 +657,11 @@ let currentClienteId = '';
 let currentRegimenSimple = false;
 let currentCategoriaConceptoIA = '';
 let currentDesgloseCategorias = {};
+let currentItems = []; // ítems línea por línea de la factura actual (Fase 4) -- ver normalizarItemsDesdeIA()
+let currentInvoiceData = null; // el objeto que devolvió la IA (o vacío) para la factura en pantalla -- ver renderResult()
 let currentSubcuentaGasto = '';
 let currentFileHash = ''; // huella del archivo actual -- para detectar y guardar el estado de duplicado
+let currentTarifaIcaId = ''; // id de la tarifa de ICA (tabla del contador) elegida para esta factura, si aplica
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida)
 
@@ -676,6 +753,20 @@ function soloDigitos(nit){
 }
 function perfilFiscalDelNit(nit){ return terceroFiscalPorNit[soloDigitos(nit)] || null; }
 
+// Tarifas de ReteICA que el contador ya configuró (municipio +
+// actividad + tarifa por mil + base UVT + cuenta PUC) -- se cargan una
+// vez y se ofrecen como opciones al revisar cada factura. Nunca se
+// elige un municipio solo -- el contador siempre confirma cuál aplica.
+let tarifasIca = [];
+async function loadTarifasIca(){
+  try {
+    const res = await fetch('/api/tarifas-ica');
+    if (res.ok) tarifasIca = await res.json();
+  } catch (e) {
+    console.warn('No se pudieron cargar las tarifas de ICA:', e.message);
+  }
+}
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
@@ -692,6 +783,7 @@ async function requireAuthAndInit(){
     aplicarClientePreseleccionado();
     loadTarifasAprendidas();
     loadTercerosFiscales();
+    loadTarifasIca();
   } catch (e) {
     window.location.href = '/login.html';
   }
@@ -952,8 +1044,12 @@ function resetAll(){
   currentClienteId = '';
   currentRegimenSimple = false;
   currentDesgloseCategorias = {};
+  currentItems = [];
+  currentInvoiceData = null;
+  document.getElementById('itemsPanel').innerHTML = '';
   currentSubcuentaGasto = '';
   currentFileHash = '';
+  currentTarifaIcaId = '';
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   btnExtract.textContent = 'Leer factura';
@@ -1071,9 +1167,11 @@ function renderDuplicado(existente){
 }
 
 function renderResult(data){
+  currentInvoiceData = data;
   detectClient(data);
   currentRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
   currentCategoriaConceptoIA = data.categoria_concepto_ia || data.categoria_concepto || '';
+  currentTarifaIcaId = ''; // factura nueva -- no arrastrar el municipio de ICA elegido en la anterior
 
   // El desglose puede venir como objeto (normal) o como texto JSON
   // (si la IA lo mandó ya serializado) -- se maneja de forma
@@ -1088,6 +1186,18 @@ function renderResult(data){
   } catch (e) {
     currentDesgloseCategorias = {};
   }
+
+  // Ítems línea por línea (Fase 4) -- si la IA devolvió la tabla de
+  // ítems real, se usa esa; si no (ej. una cuenta de cobro con un solo
+  // concepto), se arma un ítem único con el total. De acá en adelante,
+  // currentDesgloseCategorias queda DERIVADO de currentItems (nunca al
+  // revés) -- así el desglose agregado nunca se desincroniza de las
+  // líneas reales que el contador está viendo y editando.
+  currentItems = normalizarItemsDesdeIA(data, CATEGORIAS_VALIDAS_ITEM);
+  if (typeof desgloseDesdeItems === 'function' && currentItems.length > 0) {
+    currentDesgloseCategorias = desgloseDesdeItems(currentItems);
+  }
+
   ledger.innerHTML = '';
   FIELDS.forEach((f, i) => {
     const row = document.createElement('div');
@@ -1251,6 +1361,7 @@ function renderResult(data){
   resultEl.classList.add('show');
   resultEl.scrollIntoView({behavior:'smooth', block:'start'});
 
+  renderItemsPanel();
   showRetencionHint(data);
   actualizarEstimadosRetencion();
   renderPerfilTerceroPanel(data.nit_cc, data.nombre_razon_social);
@@ -1417,14 +1528,141 @@ function actualizarEstimadosRetencion(){
     }
   }
 
-  // Rete ICA -- nunca un monto adivinado, solo un aviso de que toca
-  // revisarlo aparte cuando el cliente sí es agente retenedor.
+  // Rete ICA -- varía por municipio y actividad, así que nunca se
+  // adivina solo: el contador elige de SU PROPIA tabla de tarifas
+  // (municipio + actividad + tarifa por mil + base) cuál aplica a esta
+  // factura, y ahí sí se calcula el monto -- igual de "sugerido, nunca
+  // automático" que Rete Fuente y Rete IVA arriba.
   estIcaEl.classList.remove('show');
   estIcaEl.innerHTML = '';
   if (parseMoneyValue(icaInput.value) === 0 && cliente && cliente.agente_retenedor) {
-    estIcaEl.innerHTML = `<span class="fine">No se puede estimar en pesos -- depende del municipio y la actividad económica. Verifica si tu empresa es agente retenedor de ICA ahí.</span>`;
-    estIcaEl.classList.add('show');
+    renderEstimadoIca(estIcaEl, invParaCalculo);
   }
+}
+
+// ---------- Widget de ICA: elegir municipio y calcular ----------
+function renderEstimadoIca(estIcaEl, invParaCalculo){
+  estIcaEl.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.alignItems = 'center';
+  wrap.style.gap = '8px';
+  wrap.style.flexWrap = 'wrap';
+
+  const select = document.createElement('select');
+  select.className = 'ica-select';
+  select.innerHTML = '<option value="">— Elegir municipio / actividad —</option>' +
+    tarifasIca.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.municipio)}${t.actividad ? ' — ' + escapeHtml(t.actividad) : ''} (${t.tarifa_por_mil}‰)</option>`).join('') +
+    '<option value="__nueva__">+ Agregar tarifa nueva…</option>';
+  select.value = currentTarifaIcaId || '';
+  wrap.appendChild(select);
+
+  const resultSpan = document.createElement('span');
+  resultSpan.style.display = 'flex';
+  resultSpan.style.alignItems = 'center';
+  resultSpan.style.gap = '6px';
+  wrap.appendChild(resultSpan);
+
+  function actualizarResultado(){
+    resultSpan.innerHTML = '';
+    if (!currentTarifaIcaId) {
+      if (tarifasIca.length === 0) {
+        resultSpan.innerHTML = '<span class="fine">Todavía no tienes ninguna tarifa de ICA configurada -- usa "+ Agregar tarifa nueva".</span>';
+      }
+      return;
+    }
+    const tarifa = tarifasIca.find(t => t.id === currentTarifaIcaId);
+    if (!tarifa) return;
+    const sugerido = (typeof calcularReteIcaSugerido === 'function') ? calcularReteIcaSugerido(invParaCalculo, tarifa) : null;
+    if (sugerido) {
+      const b = document.createElement('b');
+      b.textContent = `≈ $${sugerido.monto.toLocaleString('es-CO')}`;
+      resultSpan.appendChild(b);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = `Usar $${sugerido.monto.toLocaleString('es-CO')}`;
+      btn.addEventListener('click', () => {
+        const icaInput = ledger.querySelector('input[data-key="rete_ica"]');
+        icaInput.value = sugerido.monto.toLocaleString('es-CO');
+        icaInput.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      resultSpan.appendChild(btn);
+    } else {
+      const span = document.createElement('span');
+      span.className = 'fine';
+      span.textContent = 'Bajo la base mínima configurada para este municipio -- normalmente no aplica.';
+      resultSpan.appendChild(span);
+    }
+  }
+
+  select.addEventListener('change', () => {
+    if (select.value === '__nueva__') {
+      mostrarFormNuevaTarifaIca(estIcaEl, invParaCalculo);
+      return;
+    }
+    currentTarifaIcaId = select.value;
+    actualizarResultado();
+  });
+
+  estIcaEl.appendChild(wrap);
+  actualizarResultado();
+  estIcaEl.classList.add('show');
+}
+
+// Formulario mínimo para agregar una tarifa de ICA nueva sin salir de
+// Escanear -- municipio y actividad son texto libre (el contador
+// decide cómo nombrarlos), tarifa y base son los únicos campos que de
+// verdad hacen falta para calcular; cuenta PUC y notas son opcionales.
+function mostrarFormNuevaTarifaIca(estIcaEl, invParaCalculo){
+  estIcaEl.innerHTML = `
+    <div class="ica-nueva-form">
+      <div class="ica-row">
+        <input type="text" id="icaNuevoMunicipio" placeholder="Municipio (ej. Bogotá)">
+        <input type="text" id="icaNuevoActividad" placeholder="Actividad (ej. Comercial) -- opcional">
+      </div>
+      <div class="ica-row">
+        <input type="text" id="icaNuevaTarifa" placeholder="Tarifa por mil (ej. 6.9)">
+        <input type="text" id="icaNuevaBaseUvt" placeholder="Base mínima en UVT (ej. 0)">
+        <input type="text" id="icaNuevaCuentaPuc" placeholder="Cuenta PUC auxiliar -- opcional">
+      </div>
+      <div class="ica-actions">
+        <button type="button" id="icaCancelar">Cancelar</button>
+        <button type="button" class="ica-guardar" id="icaGuardar">Guardar tarifa</button>
+      </div>
+    </div>
+  `;
+  estIcaEl.classList.add('show');
+
+  document.getElementById('icaCancelar').addEventListener('click', () => renderEstimadoIca(estIcaEl, invParaCalculo));
+
+  document.getElementById('icaGuardar').addEventListener('click', async () => {
+    const municipio = document.getElementById('icaNuevoMunicipio').value.trim();
+    const actividad = document.getElementById('icaNuevoActividad').value.trim();
+    const tarifaPorMil = parseFloat((document.getElementById('icaNuevaTarifa').value || '').replace(',', '.'));
+    const baseUvt = parseFloat((document.getElementById('icaNuevaBaseUvt').value || '0').replace(',', '.')) || 0;
+    const cuentaPuc = document.getElementById('icaNuevaCuentaPuc').value.trim();
+
+    if (!municipio) { alert('Ponle un municipio.'); return; }
+    if (!tarifaPorMil || tarifaPorMil <= 0) { alert('La tarifa por mil debe ser un número mayor a 0 (ej. 6.9 para 6.9 por mil).'); return; }
+
+    const btn = document.getElementById('icaGuardar');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/tarifas-ica', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ municipio, actividad, tarifa_por_mil: tarifaPorMil, base_uvt: baseUvt, cuenta_puc: cuentaPuc }),
+      });
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.error || 'No se pudo guardar.');
+      const idx = tarifasIca.findIndex(t => t.id === saved.id);
+      if (idx >= 0) tarifasIca[idx] = saved; else tarifasIca.push(saved);
+      currentTarifaIcaId = saved.id;
+      renderEstimadoIca(estIcaEl, invParaCalculo);
+    } catch (e) {
+      alert('No se pudo guardar la tarifa de ICA: ' + e.message);
+      btn.disabled = false;
+    }
+  });
 }
 
 function parseMoneyValue(str){
@@ -1614,6 +1852,148 @@ function showRetencionHint(data){
   retencionHintEl.classList.add('show');
 }
 
+// ---------- Ítems de la factura, línea por línea (Fase 4) ----------
+// Antes solo existía `categoria_concepto` (una sola categoría para TODA
+// la factura) y, cuando mezclaba naturalezas distintas, un desglose
+// agregado de solo lectura. Ahora se editan las líneas reales -- cada
+// una con su propia descripción, subtotal y categoría -- y el desglose
+// agregado (currentDesgloseCategorias, que alimenta el estimado de
+// retención de arriba) se deriva SIEMPRE de estas líneas.
+const CATEGORIA_OPCIONES_ITEM = FIELDS.find(f => f.key === 'categoria_concepto').select;
+const CATEGORIAS_VALIDAS_ITEM = CATEGORIA_OPCIONES_ITEM.map(([val]) => val);
+
+// normalizarItemsDesdeIA() e itemsParaGuardar() ahora viven en
+// /public/retenciones.js -- la misma normalización de ítems (y el mismo
+// prorrateo de IVA por línea) que usa Carga masiva, para que ambas
+// pantallas editen la tabla de ítems con exactamente la misma forma.
+
+// Tras CUALQUIER edición de los ítems (descripción, subtotal, categoría,
+// subcuenta, IVA como mayor valor, agregar/quitar línea), se re-deriva
+// el desglose agregado y se refresca todo lo que depende de él -- el
+// aviso de arriba y los 3 estimados de retención -- para que nunca
+// queden mostrando un número calculado con la versión anterior de los
+// ítems.
+function onItemsChanged(){
+  currentDesgloseCategorias = (typeof desgloseDesdeItems === 'function') ? desgloseDesdeItems(currentItems) : {};
+  renderItemsPanel();
+  const catSelect = ledger.querySelector('select[data-key="categoria_concepto"]');
+  const sinIvaInput = ledger.querySelector('input[data-key="valor_sin_iva"]');
+  const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
+  if (catSelect && currentInvoiceData) {
+    // Mismo patrón que el <select> de categoría de arriba: se parte del
+    // objeto original (para no perder rete_fuente/rete_iva/rete_ica ya
+    // leídos del documento) y solo se pisan los campos que de verdad
+    // pudieron cambiar al editar los ítems.
+    showRetencionHint({
+      ...currentInvoiceData,
+      categoria_concepto: catSelect.value,
+      valor_sin_iva: sinIvaInput ? parseMoneyValue(sinIvaInput.value) : currentInvoiceData.valor_sin_iva,
+      valor_iva: ivaInput ? parseMoneyValue(ivaInput.value) : currentInvoiceData.valor_iva,
+    });
+  }
+  actualizarEstimadosRetencion();
+}
+
+function renderItemsPanel(){
+  const panel = document.getElementById('itemsPanel');
+  if (!panel || currentItems.length === 0) { if (panel) panel.innerHTML = ''; return; }
+
+  const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
+  const fechaInput = ledger.querySelector('input[data-key="fecha_factura"]');
+  const sinIvaInput = ledger.querySelector('input[data-key="valor_sin_iva"]');
+  const invParaCalculo = {
+    nit_cc: nitInput ? nitInput.value : '',
+    fecha_factura: fechaInput ? fechaInput.value : '',
+    regimen_simple: currentRegimenSimple,
+  };
+  const cliente = myClients.find(c => c.id === currentClienteId);
+  const perfilTercero = perfilFiscalDelNit(invParaCalculo.nit_cc);
+  const estimadoPorItem = (cliente && typeof calcularRetencionSugeridaPorItems === 'function')
+    ? calcularRetencionSugeridaPorItems(currentItems, invParaCalculo, cliente, tarifasAprendidas, perfilTercero)
+    : null;
+
+  const totalItems = currentItems.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+  const totalFactura = sinIvaInput ? parseMoneyValue(sinIvaInput.value) : 0;
+  const diferencia = totalFactura - totalItems;
+  const coincide = Math.abs(diferencia) <= 1; // tolerancia de redondeo de 1 peso
+
+  const filas = currentItems.map((item, idx) => {
+    const opciones = CATEGORIA_OPCIONES_ITEM.map(([val, label]) =>
+      `<option value="${val}"${item.categoria_concepto === val ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    const est = estimadoPorItem ? estimadoPorItem.porItem[idx] : null;
+    const estTexto = est
+      ? (est.mismaTarifa ? `≈ $${est.bajo.toLocaleString('es-CO')}` : `≈ $${est.bajo.toLocaleString('es-CO')}–$${est.alto.toLocaleString('es-CO')}`)
+      : '—';
+    return `<tr data-idx="${idx}">
+      <td><input type="text" class="it-descripcion" value="${escapeHtml(item.descripcion)}" placeholder="Descripción del ítem"></td>
+      <td><input type="text" inputmode="numeric" class="money it-subtotal" value="${(Number(item.subtotal) || 0).toLocaleString('es-CO')}"></td>
+      <td><select class="it-categoria">${opciones}</select></td>
+      <td class="item-estimado" title="Retención en la fuente estimada para esta línea, informativa -- el valor real se registra una sola vez en Rete Fuente arriba.">${estTexto}</td>
+      <td><label class="item-iva-mv"><input type="checkbox" class="it-iva-mv" ${item.iva_mayor_valor ? 'checked' : ''}> IVA no descontable</label></td>
+      <td><button type="button" class="item-del-btn" title="Quitar este ítem" ${currentItems.length <= 1 ? 'disabled' : ''}>✕</button></td>
+    </tr>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="items-box">
+      <div class="items-head"><b>Ítems de la factura (${currentItems.length})</b></div>
+      <div class="items-sub">Revisa y corrige línea por línea si la factura mezcla productos y servicios -- de acá sale el desglose que usa el estimado de retención de arriba.</div>
+      <div class="items-table-wrap">
+        <table class="items-table">
+          <thead><tr>
+            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>Rete Fuente est.</th><th>IVA mayor valor</th><th></th>
+          </tr></thead>
+          <tbody id="itemsTbody">${filas}</tbody>
+        </table>
+      </div>
+      <div class="items-foot">
+        <button type="button" class="items-add-btn" id="btnAgregarItem">+ Agregar ítem</button>
+        <span class="items-total${coincide ? '' : ' mismatch'}">
+          Total ítems: <b>$${totalItems.toLocaleString('es-CO')}</b> · Subtotal factura: <b>$${totalFactura.toLocaleString('es-CO')}</b>
+          ${coincide ? '' : ` · ⚠ no coinciden (diferencia $${Math.abs(diferencia).toLocaleString('es-CO')})`}
+        </span>
+      </div>
+    </div>
+  `;
+
+  const tbody = document.getElementById('itemsTbody');
+  tbody.addEventListener('input', (e) => {
+    const idx = Number(e.target.closest('tr').dataset.idx);
+    if (e.target.classList.contains('it-descripcion')) {
+      currentItems[idx].descripcion = e.target.value;
+    } else if (e.target.classList.contains('it-subtotal')) {
+      currentItems[idx].subtotal = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '') || '0';
+      onItemsChanged();
+    }
+  });
+  tbody.addEventListener('change', (e) => {
+    const idx = Number(e.target.closest('tr').dataset.idx);
+    if (e.target.classList.contains('it-categoria')) {
+      currentItems[idx].categoria_concepto = e.target.value;
+      const opciones = (typeof SUBCUENTAS_GASTO !== 'undefined') ? (SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro']) : null;
+      currentItems[idx].subcuenta_gasto = opciones ? opciones[0][0] : '';
+      onItemsChanged();
+    } else if (e.target.classList.contains('it-iva-mv')) {
+      currentItems[idx].iva_mayor_valor = e.target.checked;
+    }
+  });
+  tbody.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('item-del-btn') || e.target.disabled) return;
+    const idx = Number(e.target.closest('tr').dataset.idx);
+    currentItems.splice(idx, 1);
+    onItemsChanged();
+  });
+
+  document.getElementById('btnAgregarItem').addEventListener('click', () => {
+    currentItems.push({
+      descripcion: '', cantidad: '', valor_unitario: '', subtotal: '0',
+      categoria_concepto: 'otro', subcuenta_gasto: (SUBCUENTAS_GASTO['otro'] || [['', '']])[0][0],
+      iva_mayor_valor: false,
+    });
+    onItemsChanged();
+  });
+}
+
 function currentFieldValues(){
   const out = {};
   FIELDS.forEach(f => {
@@ -1632,6 +2012,9 @@ function currentFieldValues(){
   out.desglose_categorias = JSON.stringify(currentDesgloseCategorias || {});
   out.subcuenta_gasto = currentSubcuentaGasto || '';
   out.file_hash = currentFileHash || '';
+  out.tarifa_ica_id = currentTarifaIcaId || '';
+  const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
+  out.items = itemsParaGuardar(currentItems, ivaInput ? parseMoneyValue(ivaInput.value) : 0);
   return out;
 }
 

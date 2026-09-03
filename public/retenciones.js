@@ -231,6 +231,38 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
 //
 // Devuelve null cuando no se puede/debe calcular nada, o
 // { bajo, alto, mismaTarifa } en pesos colombianos (COP).
+// Pieza compartida: calcula la retención en la fuente de UNA porción con
+// su propia categoría y subtotal -- una parte de un desglose agregado, o
+// un ítem real de la Fase 4. Antes esta lógica vivía pegada dentro del
+// bucle del desglose de calcularRetencionSugerida(); se extrajo aparte
+// para que el cálculo línea por línea (calcularRetencionSugeridaPorItems,
+// más abajo) use EXACTAMENTE la misma tarifa/umbral/cuenta, en vez de una
+// segunda copia que se puede desincronizar.
+//
+// Devuelve null si la categoría no tiene tarifa confirmada en la tabla, o
+// si el subtotal no supera su umbral. Si no, { bajo, alto, mismaTarifa,
+// cuentaPUC, nombrePUC } en pesos.
+function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas) {
+  tarifasAprendidas = tarifasAprendidas || {};
+  const categoriaKey = String(categoria || '').toLowerCase();
+  const configBase = TARIFAS_RETENCION[categoriaKey];
+  if (!configBase) return null; // "otro" -- tarifa no confirmada, no adivinamos
+
+  const subtotalNum = Number(subtotal) || 0;
+  if (subtotalNum < umbralPesos(configBase, fechaFactura)) return null; // bajo el umbral, no aplica
+
+  const aprendida = tarifasAprendidas[`${nitProveedor || ''}|${categoriaKey}`];
+  const config = aprendida !== undefined ? { tarifaBaja: aprendida, tarifaAlta: aprendida } : configBase;
+
+  return {
+    bajo: Math.round(subtotalNum * config.tarifaBaja),
+    alto: Math.round(subtotalNum * config.tarifaAlta),
+    mismaTarifa: config.tarifaBaja === config.tarifaAlta,
+    cuentaPUC: configBase.cuentaPUC,
+    nombrePUC: configBase.nombrePUC,
+  };
+}
+
 function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero){
   tarifasAprendidas = tarifasAprendidas || {};
   if (!cliente || !cliente.agente_retenedor) return null; // nunca le corresponde retener
@@ -238,12 +270,6 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
   if (perfil.regimenSimple) return null; // Régimen Simple -- Rete Fuente no aplica
   if (perfil.autorretenedor) return null; // el proveedor se autorretiene -- el comprador no debe practicar retención ordinaria
-
-  function tarifaParaProveedor(categoria, nitProveedor, config) {
-    const aprendida = tarifasAprendidas[`${nitProveedor}|${categoria}`];
-    if (aprendida !== undefined) return { tarifaBaja: aprendida, tarifaAlta: aprendida, aprendida: true };
-    return config;
-  }
 
   let desglose = null;
   try {
@@ -258,15 +284,13 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     let bajoTotal = 0, altoTotal = 0, huboAlguno = false, mismaTarifaEnTodas = true;
     const cuentasInvolucradas = new Map(); // cuentaPUC -> nombrePUC, sin duplicados
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
-      const configBase = TARIFAS_RETENCION[String(categoriaParte).toLowerCase()];
-      const subtotalParte = Number(montoParte) || 0;
-      if (!configBase || subtotalParte < umbralPesos(configBase, inv.fecha_factura)) continue; // esta parte no aplica, se omite
-      const config = tarifaParaProveedor(categoriaParte, inv.nit_cc || '', configBase);
-      bajoTotal += Math.round(subtotalParte * config.tarifaBaja);
-      altoTotal += Math.round(subtotalParte * config.tarifaAlta);
+      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas);
+      if (!r) continue; // esta parte no aplica (categoría sin tarifa, o bajo su umbral), se omite
+      bajoTotal += r.bajo;
+      altoTotal += r.alto;
       huboAlguno = true;
-      if (config.tarifaBaja !== config.tarifaAlta) mismaTarifaEnTodas = false;
-      cuentasInvolucradas.set(configBase.cuentaPUC, configBase.nombrePUC);
+      if (!r.mismaTarifa) mismaTarifaEnTodas = false;
+      cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
     }
     if (!huboAlguno) return null; // ninguna de las partes superó su umbral
     return {
@@ -276,20 +300,149 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
   }
 
   // Sin desglose -- factura de una sola categoría, comportamiento normal.
-  const categoria = (inv.categoria_concepto || '').toLowerCase();
-  const configBase = TARIFAS_RETENCION[categoria];
-  if (!configBase) return null; // "otro" -- tarifa no confirmada, no adivinamos
-
-  const subtotal = Number(inv.valor_sin_iva) || 0;
-  if (subtotal < umbralPesos(configBase, inv.fecha_factura)) return null; // bajo el umbral, no aplica
-
-  const config = tarifaParaProveedor(categoria, inv.nit_cc || '', configBase);
-  const bajo = Math.round(subtotal * config.tarifaBaja);
-  const alto = Math.round(subtotal * config.tarifaAlta);
+  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas);
+  if (!r) return null;
   return {
-    bajo, alto, mismaTarifa: config.tarifaBaja === config.tarifaAlta,
-    cuentasPUC: [{ cuenta: configBase.cuentaPUC, nombre: configBase.nombrePUC }],
+    bajo: r.bajo, alto: r.alto, mismaTarifa: r.mismaTarifa,
+    cuentasPUC: [{ cuenta: r.cuentaPUC, nombre: r.nombrePUC }],
   };
+}
+
+// ---------- Retención sugerida LÍNEA POR LÍNEA (Fase 4) ----------
+//
+// A diferencia de `desglose_categorias` (un resumen agregado: "compras:
+// 442000, servicios: 140000"), aquí `items` es el arreglo REAL de líneas
+// de la factura (factura_items) -- cada una con su propia descripción y
+// categoría. Se usa la misma pieza compartida (calcularRetencionCategoriaLinea)
+// que el cálculo agregado, así que el total nunca puede quedar
+// desincronizado entre ambas vistas.
+//
+// Devuelve null si el cliente no es agente retenedor, si no hay ítems, o
+// si el proveedor está exento por su perfil fiscal (Régimen Simple /
+// Autorretenedor) -- en ese último caso NO se calcula nada por línea
+// (todas quedan en null), porque la exención aplica a la factura completa,
+// no a una parte de ella.
+//
+// Si aplica, devuelve:
+//   { porItem: [ {bajo,alto,mismaTarifa,cuentaPUC,nombrePUC} | null, ... ],
+//     bajo, alto, mismaTarifa, cuentasPUC }
+// `porItem` tiene el mismo largo y orden que `items` -- porItem[i] es el
+// resultado (o null) para items[i], para poder mostrar el estimado al
+// lado de cada línea en la interfaz.
+function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendidas, perfilTercero) {
+  if (!cliente || !cliente.agente_retenedor) return null;
+  if (!Array.isArray(items) || items.length === 0) return null;
+
+  const perfil = perfilFiscalEfectivo(inv, perfilTercero);
+  if (perfil.regimenSimple || perfil.autorretenedor) {
+    return { porItem: items.map(() => null), bajo: 0, alto: 0, mismaTarifa: true, cuentasPUC: [] };
+  }
+
+  let bajoTotal = 0, altoTotal = 0, mismaTarifaEnTodas = true;
+  const cuentasInvolucradas = new Map();
+  const porItem = items.map((item) => {
+    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas);
+    if (!r) return null;
+    bajoTotal += r.bajo;
+    altoTotal += r.alto;
+    if (!r.mismaTarifa) mismaTarifaEnTodas = false;
+    cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
+    return r;
+  });
+
+  return {
+    porItem, bajo: bajoTotal, alto: altoTotal, mismaTarifa: mismaTarifaEnTodas,
+    cuentasPUC: [...cuentasInvolucradas.entries()].map(([cuenta, nombre]) => ({ cuenta, nombre })),
+  };
+}
+
+// ---------- Normalización de ítems leídos por la IA (Fase 4) ----------
+//
+// La IA devuelve `items` como un arreglo crudo (a veces como texto JSON
+// en vez de un arreglo real) -- esta función lo deja siempre en la misma
+// forma interna que usa la interfaz de edición línea por línea, tanto en
+// Escanear como en Carga masiva, con un default sensato de subcuenta PUC
+// por categoría (misma tabla SUBCUENTAS_GASTO de arriba). Es la ÚNICA
+// función que arma esta forma -- así ambas pantallas leen y editan
+// ítems con exactamente la misma estructura.
+//
+// Si el documento no trae una tabla de ítems detallada (ej. una cuenta
+// de cobro con un solo concepto global), arma UN ítem único con el total
+// de la factura, usando lo mismo que ya se extrajo a nivel de factura.
+//
+// `categoriasValidas` es opcional -- un arreglo de claves válidas (ej.
+// las mismas del <select> de categoría de esa pantalla). Si se pasa y la
+// categoría que trajo la IA no está en la lista, el ítem cae a 'otro' en
+// vez de quedar con un valor que ningún <select> podría mostrar.
+function normalizarItemsDesdeIA(data, categoriasValidas) {
+  let raw = data.items;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw || '[]'); } catch (e) { raw = []; }
+  }
+  const subcuentaPorDefecto = (categoria) => {
+    const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
+    return opciones ? opciones[0][0] : '';
+  };
+  const validarCategoria = (categoria) => {
+    const cat = categoria || 'otro';
+    if (!categoriasValidas) return cat;
+    return categoriasValidas.includes(cat) ? cat : 'otro';
+  };
+
+  if (!Array.isArray(raw) || raw.length === 0) {
+    const categoria = validarCategoria((data.categoria_concepto || 'otro').toLowerCase());
+    return [{
+      descripcion: data.concepto || '',
+      cantidad: '', valor_unitario: '',
+      subtotal: String(data.valor_sin_iva ?? '0'),
+      categoria_concepto: categoria,
+      subcuenta_gasto: subcuentaPorDefecto(categoria),
+      iva_mayor_valor: false,
+    }];
+  }
+  return raw.map((it) => {
+    const categoria = validarCategoria(String(it.categoria_concepto || 'otro').toLowerCase());
+    return {
+      descripcion: it.descripcion || '',
+      cantidad: it.cantidad !== undefined && it.cantidad !== null ? String(it.cantidad) : '',
+      valor_unitario: it.valor_unitario !== undefined && it.valor_unitario !== null ? String(it.valor_unitario) : '',
+      subtotal: it.subtotal !== undefined && it.subtotal !== null ? String(it.subtotal) : '0',
+      categoria_concepto: categoria,
+      subcuenta_gasto: subcuentaPorDefecto(categoria),
+      iva_mayor_valor: false,
+    };
+  });
+}
+
+// Ítems ya editados -> listos para mandar en el POST /api/invoices, con
+// el IVA de cada línea prorrateado a partir del IVA total de la factura
+// según la participación de cada ítem en el subtotal. Mismo cálculo en
+// Escanear y en Carga masiva -- de ahí que viva aquí y no en cada página.
+function itemsParaGuardar(items, ivaTotalFactura) {
+  const totalSubtotalItems = (items || []).reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+  const ivaHeader = Number(ivaTotalFactura) || 0;
+  return (items || []).map((it) => {
+    const subtotal = Number(it.subtotal) || 0;
+    const ivaProrrateado = totalSubtotalItems > 0 ? Math.round(ivaHeader * subtotal / totalSubtotalItems) : 0;
+    return { ...it, valor_iva: String(ivaProrrateado) };
+  });
+}
+
+// Agrupa un arreglo de ítems (Fase 4) en el mismo formato de
+// `desglose_categorias` que ya usa el resto de la app -- { categoria:
+// sumaDeSubtotales }. Así, apenas el contador edita los ítems línea por
+// línea, el desglose agregado (y por lo tanto calcularRetencionSugerida,
+// el Excel de Facturas, etc.) queda SIEMPRE derivado de los ítems reales,
+// nunca de una copia separada que se pueda desactualizar.
+function desgloseDesdeItems(items) {
+  const desglose = {};
+  (items || []).forEach((item) => {
+    const categoria = String(item.categoria_concepto || '').toLowerCase();
+    const subtotal = Number(item.subtotal) || 0;
+    if (!categoria || subtotal === 0) return;
+    desglose[categoria] = (desglose[categoria] || 0) + subtotal;
+  });
+  return desglose;
 }
 
 // ---------- Retención de IVA (ReteIVA) ----------
@@ -335,4 +488,40 @@ function calcularReteIvaSugerido(inv, cliente){
   if (subtotal < umbralPesos(config, inv.fecha_factura)) return null;
 
   return Math.round(ivaValor * RETEIVA_TARIFA_GENERAL);
+}
+
+// ---------- Retención de ICA (ReteICA) por municipio ----------
+//
+// A diferencia de Rete Fuente y Rete IVA (que son nacionales, con una
+// tabla y una tarifa que valen para todo el país), el ICA es municipal
+// -- cada municipio fija su propia tarifa (y hay más de 1.100
+// municipios en Colombia), y encima la tarifa cambia según la
+// actividad económica (industrial/comercial/servicios, o hasta más
+// fino por CIIU). No existe una tabla nacional confiable que esta app
+// pueda traer ya puesta sin arriesgarse a inventar un número -- por
+// eso el contador arma SU PROPIA tabla de tarifas de ICA (municipio +
+// actividad + tarifa + base mínima + cuenta PUC auxiliar), una vez por
+// cliente/municipio que de verdad maneje, y la reusa cada vez.
+//
+// `tarifaIca` es UNA fila de esa tabla que el contador ya eligió para
+// esta factura: { municipio, actividad, tarifa_por_mil, base_uvt,
+// cuenta_puc }. Si no ha elegido ninguna (porque no la ha configurado
+// todavía), esta función no calcula nada -- nunca asume un municipio
+// ni una tarifa por su cuenta.
+function calcularReteIcaSugerido(inv, tarifaIca){
+  if (!tarifaIca) return null; // el contador no ha elegido/configurado una tarifa de ICA para este municipio todavía
+
+  const tarifaPorMil = Number(tarifaIca.tarifa_por_mil);
+  if (!tarifaPorMil || tarifaPorMil <= 0) return null;
+
+  const subtotal = Number(inv.valor_sin_iva) || 0;
+  const baseUvt = Number(tarifaIca.base_uvt) || 0;
+  const umbral = Math.round(baseUvt * valorUvt(anioDeFechaFactura(inv.fecha_factura)));
+  if (subtotal < umbral) return null; // bajo la base mínima que el contador configuró para este municipio
+
+  return {
+    monto: Math.round(subtotal * (tarifaPorMil / 1000)),
+    cuentaPUC: tarifaIca.cuenta_puc || CUENTAS_PUC_FIJAS.rete_ica.cuentaPUC,
+    nombrePUC: tarifaIca.cuenta_puc ? `ICA retenido -- ${tarifaIca.municipio}` : CUENTAS_PUC_FIJAS.rete_ica.nombrePUC,
+  };
 }

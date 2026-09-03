@@ -170,6 +170,50 @@
   #btnAgregarColumna{ margin-top:12px; }
   .modal-plantilla-actions{ display:flex; align-items:center; gap:10px; margin-top:22px; }
 
+  /* ---------- Panel de validación antes de exportar/enviar (Fase 3) ---------- */
+  .modal-validacion{ display:none; position:fixed; inset:0; z-index:100; align-items:flex-start; justify-content:center; padding:5vh 16px; overflow-y:auto; }
+  .modal-validacion.show{ display:flex; }
+  .modal-validacion-backdrop{ position:fixed; inset:0; background:rgba(20,26,24,0.55); }
+  .modal-validacion-card{
+    position:relative; background:#FFFFFF; color:#241E18; border-radius:14px; width:100%; max-width:980px;
+    padding:26px 28px; box-shadow:0 24px 60px -12px rgba(0,0,0,0.4);
+  }
+  .modal-validacion-card h3{ font-family:'Newsreader',serif; font-size:21px; margin:0 0 6px; }
+  .modal-validacion-card .panel-sub{ color:#6C6152; margin-bottom:16px; }
+  .val-table-wrap{ overflow-x:auto; border:1px solid #E6DECA; border-radius:10px; }
+  table.val-table{ width:100%; border-collapse:collapse; min-width:820px; }
+  table.val-table thead th{
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase;
+    color:#A79C8B; text-align:right; padding:9px 10px; background:#F1EAD9; border-bottom:1px solid #E6DECA; white-space:nowrap;
+  }
+  table.val-table thead th:first-child, table.val-table thead th:nth-child(2){ text-align:left; }
+  table.val-table tbody td{ padding:8px 10px; border-bottom:1px solid #F1EAD9; vertical-align:middle; }
+  table.val-table tbody tr:last-child td{ border-bottom:none; }
+  .val-proveedor{ font-size:12.5px; font-weight:600; white-space:nowrap; }
+  .val-proveedor-nit{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A79C8B; }
+  .val-money-ro{ font-family:'JetBrains Mono',monospace; font-size:12px; text-align:right; white-space:nowrap; }
+  .val-input{
+    width:92px; font-family:'JetBrains Mono',monospace; font-size:12px; text-align:right;
+    padding:5px 7px; border:1px solid #E6DECA; border-radius:6px; color:#241E18; box-sizing:border-box;
+  }
+  .val-input:focus{ outline:none; border-color:#3D5A45; }
+  .val-input.val-changed{ border-color:#B8622F; background:#FBF1E9; }
+  .val-total-cell{ font-family:'JetBrains Mono',monospace; font-size:12.5px; font-weight:600; text-align:right; white-space:nowrap; }
+  .val-eximir-btn{
+    background:none; border:1px solid #E6DECA; color:#6C6152; font-family:'JetBrains Mono',monospace;
+    font-size:10px; padding:4px 7px; border-radius:6px; cursor:pointer; white-space:nowrap;
+  }
+  .val-eximir-btn:hover{ border-color:#B8452F; color:#B8452F; }
+  table.val-table tfoot td{
+    padding:11px 10px; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600;
+    border-top:2px solid #241E18; background:#F1EAD9; text-align:right; white-space:nowrap;
+  }
+  table.val-table tfoot td:first-child{ text-align:left; }
+  .modal-validacion-actions{ display:flex; align-items:center; gap:10px; margin-top:20px; }
+  .modal-validacion-note{
+    font-size:11.5px; color:#8A9289; margin-top:10px; line-height:1.5;
+  }
+
   tfoot td{
     padding:16px 20px; font-family:'JetBrains Mono',monospace; font-size:13px;
     border-top:2px solid var(--ink); background:#F1EAD9;
@@ -361,6 +405,50 @@
       <div style="flex:1"></div>
       <button class="btn ghost" id="btnCancelarPlantilla">Cancelar</button>
       <button class="btn secondary" id="btnGuardarPlantilla">Guardar plantilla</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-validacion" id="modalValidacion">
+  <div class="modal-validacion-backdrop" id="modalValidacionBackdrop"></div>
+  <div class="modal-validacion-card">
+    <h3 id="valTitulo">Revisar antes de exportar</h3>
+    <div class="panel-sub" id="valSubtitulo">Último vistazo a subtotal, IVA y retenciones antes de continuar -- ajusta o exime lo que haga falta.</div>
+    <div class="val-table-wrap">
+      <table class="val-table">
+        <thead>
+          <tr>
+            <th>Proveedor</th>
+            <th>Fecha</th>
+            <th>Subtotal</th>
+            <th>IVA</th>
+            <th>Rete Fuente</th>
+            <th>Rete IVA</th>
+            <th>Rete ICA</th>
+            <th>Total a girar</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="valTbody"></tbody>
+        <tfoot>
+          <tr>
+            <td colspan="2">Consolidado (<span id="valCount">0</span> factura(s))</td>
+            <td id="valFootSubtotal">$0</td>
+            <td id="valFootIva">$0</td>
+            <td id="valFootReteFuente">$0</td>
+            <td id="valFootReteIva">$0</td>
+            <td id="valFootReteIca">$0</td>
+            <td id="valFootTotal">$0</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div class="modal-validacion-note">Los cambios que hagas aquí (o "Eximir") se guardan en la factura antes de continuar -- no solo afectan este archivo o este envío.</div>
+    <div class="modal-validacion-actions">
+      <div style="flex:1"></div>
+      <button class="btn ghost" id="btnCancelarValidacion">Cancelar</button>
+      <button class="btn secondary" id="btnConfirmarValidacion">Confirmar</button>
     </div>
   </div>
 </div>
@@ -673,19 +761,7 @@ clientSelect.addEventListener('change', () => {
 monthSelect.addEventListener('change', renderTable);
 tipoFilter.addEventListener('change', renderTable);
 
-btnExport.addEventListener('click', async () => {
-  cerrarExportMenu();
-  const month = monthSelect.value;
-  const tipo = tipoFilter.value;
-  const clientInvoices = invoicesForSelectedClient();
-  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
-  const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
-
-  if (filtered.length === 0) {
-    alert('No hay facturas en este mes para exportar.');
-    return;
-  }
-
+async function generarYDescargarExcelDefault(filtered, month){
   btnExport.disabled = true;
   btnExport.textContent = 'Generando…';
 
@@ -887,6 +963,30 @@ btnExport.addEventListener('click', async () => {
     btnExport.disabled = false;
     btnExport.textContent = 'Formato Kárdex IA (el de siempre)';
   }
+}
+
+btnExport.addEventListener('click', () => {
+  cerrarExportMenu();
+  const month = monthSelect.value;
+  const tipo = tipoFilter.value;
+  const clientInvoices = invoicesForSelectedClient();
+  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
+
+  if (filtered.length === 0) {
+    alert('No hay facturas en este mes para exportar.');
+    return;
+  }
+
+  // Checkpoint de la Fase 3: antes de generar el Excel, el contador ve el
+  // resumen consolidado (subtotal/IVA/retenciones/total) de exactamente
+  // las facturas que se van a exportar, y puede ajustar o eximir la
+  // retención de cualquiera de ellas antes de continuar.
+  abrirPanelValidacion(filtered, {
+    titulo: 'Revisar antes de exportar',
+    textoBoton: 'Confirmar y exportar',
+    onConfirm: (facturasFinal) => generarYDescargarExcelDefault(facturasFinal, month),
+  });
 });
 
 // ---------- Menú de exportar + plantillas personalizadas ----------
@@ -1025,7 +1125,7 @@ document.addEventListener('click', (e) => {
   if (!document.getElementById('exportMenu').contains(e.target) && e.target.id !== 'btnExportMenuToggle') cerrarExportMenu();
 });
 
-async function exportarConPlantilla(plantilla) {
+function exportarConPlantilla(plantilla) {
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
   const clientInvoices = invoicesForSelectedClient();
@@ -1033,6 +1133,14 @@ async function exportarConPlantilla(plantilla) {
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
   if (filtered.length === 0) { alert('No hay facturas en este mes para exportar.'); return; }
 
+  abrirPanelValidacion(filtered, {
+    titulo: `Revisar antes de exportar -- ${plantilla.nombre}`,
+    textoBoton: 'Confirmar y exportar',
+    onConfirm: (facturasFinal) => generarYDescargarExcelPlantilla(plantilla, facturasFinal, month),
+  });
+}
+
+async function generarYDescargarExcelPlantilla(plantilla, filtered, month) {
   try {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Kárdex IA';
@@ -1226,6 +1334,145 @@ document.getElementById('btnEliminarPlantilla').addEventListener('click', () => 
   borrarPlantillaActual(plantilla ? plantilla.nombre : 'esta plantilla');
 });
 
+// ---------- Panel de validación antes de exportar/enviar (Fase 3) ----------
+// Último checkpoint antes de que un dato salga de la app: un resumen
+// consolidado (subtotal/IVA/Rete Fuente/Rete IVA/Rete ICA/total a girar)
+// de las facturas que están a punto de exportarse o enviarse a un software
+// contable, con la opción de ajustar o eximir (poner en 0) la retención de
+// cualquiera de ellas ahí mismo, factura por factura. Lo que se confirme
+// aquí se guarda de una vez (PUT /api/invoices/:id) antes de seguir con la
+// acción original -- no es solo una vista previa, es la última corrección.
+
+let valFacturas = [];      // copias de trabajo (editables) de las facturas mostradas en el panel
+let valOriginales = {};    // id -> { rete_fuente, rete_iva, rete_ica } tal como estaban al abrir el panel
+let valOnConfirm = null;   // función a ejecutar con las facturas ya confirmadas y guardadas
+
+function valTotalAGirar(inv){
+  const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null
+    ? Number(inv.valor_con_iva) || 0
+    : (Number(inv.valor_sin_iva) || 0) + (Number(inv.valor_iva) || 0);
+  const retenciones = (Number(inv.rete_fuente) || 0) + (Number(inv.rete_iva) || 0) + (Number(inv.rete_ica) || 0);
+  return conIva - retenciones;
+}
+
+function renderValTable(){
+  const cuerpo = document.getElementById('valTbody');
+  cuerpo.innerHTML = valFacturas.map((inv, idx) => {
+    const sinIva = Number(inv.valor_sin_iva) || 0;
+    const iva = Number(inv.valor_iva) || 0;
+    const original = valOriginales[inv.id] || {};
+    const cambiado = (campo) => String(inv[campo] ?? '') !== String(original[campo] ?? '');
+    return `<tr data-idx="${idx}">
+      <td>
+        <div class="val-proveedor">${escapeHtml(inv.nombre_razon_social) || '—'}</div>
+        <div class="val-proveedor-nit">NIT ${escapeHtml(inv.nit_cc) || '—'}</div>
+      </td>
+      <td class="val-money-ro">${escapeHtml(inv.fecha_factura) || '—'}</td>
+      <td class="val-money-ro">${formatCOP(sinIva)}</td>
+      <td class="val-money-ro">${formatCOP(iva)}</td>
+      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_fuente') ? 'val-changed' : ''}" data-campo="rete_fuente" value="${inv.rete_fuente || 0}"></td>
+      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_iva') ? 'val-changed' : ''}" data-campo="rete_iva" value="${inv.rete_iva || 0}"></td>
+      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_ica') ? 'val-changed' : ''}" data-campo="rete_ica" value="${inv.rete_ica || 0}"></td>
+      <td class="val-total-cell" data-role="val-total">${formatCOP(valTotalAGirar(inv))}</td>
+      <td><button type="button" class="val-eximir-btn" data-role="val-eximir" title="Poner Rete Fuente, Rete IVA y Rete ICA de esta factura en 0">Eximir</button></td>
+    </tr>`;
+  }).join('');
+  renderValFooter();
+}
+
+function renderValFooter(){
+  const suma = (campo) => valFacturas.reduce((s, inv) => s + (Number(inv[campo]) || 0), 0);
+  document.getElementById('valCount').textContent = valFacturas.length;
+  document.getElementById('valFootSubtotal').textContent = formatCOP(suma('valor_sin_iva'));
+  document.getElementById('valFootIva').textContent = formatCOP(suma('valor_iva'));
+  document.getElementById('valFootReteFuente').textContent = formatCOP(suma('rete_fuente'));
+  document.getElementById('valFootReteIva').textContent = formatCOP(suma('rete_iva'));
+  document.getElementById('valFootReteIca').textContent = formatCOP(suma('rete_ica'));
+  document.getElementById('valFootTotal').textContent = formatCOP(valFacturas.reduce((s, inv) => s + valTotalAGirar(inv), 0));
+}
+
+function abrirPanelValidacion(invoices, opts){
+  valFacturas = invoices.map(inv => ({ ...inv }));
+  valOriginales = {};
+  invoices.forEach(inv => {
+    valOriginales[inv.id] = { rete_fuente: inv.rete_fuente, rete_iva: inv.rete_iva, rete_ica: inv.rete_ica };
+  });
+  valOnConfirm = opts.onConfirm;
+  document.getElementById('valTitulo').textContent = opts.titulo || 'Revisar antes de continuar';
+  document.getElementById('valSubtitulo').textContent = opts.subtitulo
+    || 'Último vistazo a subtotal, IVA y retenciones antes de continuar -- ajusta o exime lo que haga falta.';
+  document.getElementById('btnConfirmarValidacion').textContent = opts.textoBoton || 'Confirmar';
+  document.getElementById('btnConfirmarValidacion').disabled = false;
+  renderValTable();
+  document.getElementById('modalValidacion').classList.add('show');
+}
+function cerrarPanelValidacion(){
+  document.getElementById('modalValidacion').classList.remove('show');
+  valOnConfirm = null;
+}
+document.getElementById('btnCancelarValidacion').addEventListener('click', cerrarPanelValidacion);
+document.getElementById('modalValidacionBackdrop').addEventListener('click', cerrarPanelValidacion);
+
+document.getElementById('valTbody').addEventListener('input', (e) => {
+  if (!e.target.classList.contains('val-input')) return;
+  const tr = e.target.closest('tr');
+  const idx = Number(tr.dataset.idx);
+  const campo = e.target.dataset.campo;
+  valFacturas[idx][campo] = e.target.value.replace(/[^0-9]/g, '') || '0';
+  const original = valOriginales[valFacturas[idx].id] || {};
+  e.target.classList.toggle('val-changed', String(valFacturas[idx][campo]) !== String(original[campo] ?? ''));
+  tr.querySelector('[data-role="val-total"]').textContent = formatCOP(valTotalAGirar(valFacturas[idx]));
+  renderValFooter();
+});
+
+document.getElementById('valTbody').addEventListener('click', (e) => {
+  if (e.target.dataset.role !== 'val-eximir') return;
+  const idx = Number(e.target.closest('tr').dataset.idx);
+  valFacturas[idx].rete_fuente = '0';
+  valFacturas[idx].rete_iva = '0';
+  valFacturas[idx].rete_ica = '0';
+  renderValTable();
+});
+
+document.getElementById('btnConfirmarValidacion').addEventListener('click', async () => {
+  const btn = document.getElementById('btnConfirmarValidacion');
+  const textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Guardando…';
+  try {
+    // Solo se manda al servidor lo que de verdad cambió -- si el contador
+    // no tocó nada en el panel, no se dispara ningún PUT.
+    const cambios = valFacturas.filter((inv) => {
+      const original = valOriginales[inv.id] || {};
+      return String(inv.rete_fuente ?? '') !== String(original.rete_fuente ?? '')
+        || String(inv.rete_iva ?? '') !== String(original.rete_iva ?? '')
+        || String(inv.rete_ica ?? '') !== String(original.rete_ica ?? '');
+    });
+    for (const inv of cambios) {
+      const res = await fetch('/api/invoices/' + inv.id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rete_fuente: inv.rete_fuente, rete_iva: inv.rete_iva, rete_ica: inv.rete_ica }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `No se pudo guardar el ajuste de ${inv.nombre_razon_social || 'una factura'}.`);
+      const enLista = allInvoices.find(i => i.id === inv.id);
+      if (enLista) { enLista.rete_fuente = data.rete_fuente; enLista.rete_iva = data.rete_iva; enLista.rete_ica = data.rete_ica; }
+    }
+    if (cambios.length > 0) renderTable();
+
+    const facturasFinal = valFacturas.slice();
+    const seguir = valOnConfirm;
+    cerrarPanelValidacion();
+    if (seguir) await seguir(facturasFinal);
+  } catch (err) {
+    alert('No se pudo continuar: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+});
+
 tbody.addEventListener('click', async (e) => {
   if (e.target.classList.contains('del-btn')) {
     const id = e.target.dataset.id;
@@ -1247,26 +1494,33 @@ tbody.addEventListener('click', async (e) => {
     const proveedorKey = e.target.dataset.proveedor;
     const proveedor = PROVEEDORES_UI.find(p => p.key === proveedorKey);
     const label = proveedor ? proveedor.label : proveedorKey;
-    const btn = e.target;
-    btn.disabled = true;
-    btn.textContent = 'Enviando…';
-    try {
-      const res = await fetch(`/api/invoices/${id}/enviar/${proveedorKey}`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'No se pudo enviar.');
+    const inv = allInvoices.find(i => i.id === id);
+    if (!inv) return;
 
-      const inv = allInvoices.find(i => i.id === id);
-      if (inv && proveedor) inv[proveedor.billField] = data.billId || 'ok';
-      renderTable();
+    // Fase 3: antes de enviar UNA factura puntual a Alegra/Siigo, el mismo
+    // checkpoint de validación -- así el contador ve subtotal/IVA/retenciones
+    // de esa factura y puede corregirlas ahí mismo antes de que salgan de la app.
+    abrirPanelValidacion([inv], {
+      titulo: `Revisar antes de enviar a ${label}`,
+      subtitulo: `Esto es lo que se va a enviar a ${label} para esta factura.`,
+      textoBoton: `Confirmar y enviar a ${label}`,
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/invoices/${id}/enviar/${proveedorKey}`, { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'No se pudo enviar.');
 
-      if (data.avisos && data.avisos.length > 0) {
-        alert(`Se envió a ${label}, pero revisa esto manualmente allá:\n\n` + data.avisos.join('\n'));
-      }
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = `Enviar a ${label}`;
-      alert(`No se pudo enviar a ${label}: ` + err.message);
-    }
+          if (proveedor) inv[proveedor.billField] = data.billId || 'ok';
+          renderTable();
+
+          if (data.avisos && data.avisos.length > 0) {
+            alert(`Se envió a ${label}, pero revisa esto manualmente allá:\n\n` + data.avisos.join('\n'));
+          }
+        } catch (err) {
+          alert(`No se pudo enviar a ${label}: ` + err.message);
+        }
+      },
+    });
   }
 });
 
