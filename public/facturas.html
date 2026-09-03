@@ -108,6 +108,68 @@
     background:var(--moss-tint); padding:4px 8px; border-radius:6px; white-space:nowrap;
   }
 
+  /* ---------- Menú de exportar con plantillas ---------- */
+  .export-menu-wrap{ position:relative; }
+  .export-menu{
+    display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:40;
+    background:#FFFFFF; border:1px solid #E6DECA; border-radius:10px;
+    box-shadow:0 12px 32px -10px rgba(20,26,24,0.25); min-width:260px; padding:6px;
+  }
+  .export-menu.show{ display:block; }
+  .export-menu-item{
+    display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
+    text-align:left; background:none; border:none; padding:9px 10px; border-radius:6px;
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:#241E18; cursor:pointer;
+  }
+  .export-menu-item:hover{ background:#F1EAD9; }
+  .export-menu-item .emi-edit, .export-menu-item .emi-del{
+    font-size:11px; color:#A79C8B; padding:2px 5px; border-radius:4px;
+  }
+  .export-menu-item .emi-edit:hover{ color:#3D5A45; }
+  .export-menu-item .emi-del:hover{ color:#B8452F; }
+  .export-menu-sep{ height:1px; background:#E6DECA; margin:6px 4px; }
+  .export-menu-label{
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase;
+    color:#A79C8B; padding:6px 10px 2px;
+  }
+  .export-menu-empty{ padding:8px 10px; font-size:11.5px; color:#A79C8B; font-style:italic; }
+
+  /* ---------- Modal de plantilla de exportación ---------- */
+  .modal-plantilla{ display:none; position:fixed; inset:0; z-index:100; align-items:flex-start; justify-content:center; padding:5vh 16px; overflow-y:auto; }
+  .modal-plantilla.show{ display:flex; }
+  .modal-plantilla-backdrop{ position:fixed; inset:0; background:rgba(20,26,24,0.55); }
+  .modal-plantilla-card{
+    position:relative; background:#FFFFFF; color:#241E18; border-radius:14px; width:100%; max-width:640px;
+    padding:26px 28px; box-shadow:0 24px 60px -12px rgba(0,0,0,0.4);
+  }
+  .modal-plantilla-card h3{ font-family:'Newsreader',serif; font-size:21px; margin:0 0 6px; }
+  .modal-plantilla-card label{ display:block; font-size:12px; color:#6C6152; margin:14px 0 5px; }
+  .modal-plantilla-card input[type="text"]{
+    width:100%; padding:9px 12px; border:1px solid #E6DECA; border-radius:7px; font-size:13.5px; color:#241E18;
+    font-family:'Inter',sans-serif; box-sizing:border-box;
+  }
+  .modal-plantilla-note{
+    font-size:12px; color:#6C6152; background:#F1EAD9; border-radius:8px; padding:10px 12px; margin:14px 0 4px; line-height:1.5;
+  }
+  .plantilla-columnas-head{
+    display:grid; grid-template-columns:1fr 1fr auto auto auto; gap:6px; padding:0 4px;
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A79C8B;
+    margin-top:16px;
+  }
+  .plantilla-col-row{
+    display:grid; grid-template-columns:1fr 1fr auto auto auto; gap:6px; align-items:center; margin-top:6px;
+  }
+  .plantilla-col-row select, .plantilla-col-row input{
+    font-family:'Inter',sans-serif; font-size:12.5px; padding:7px 9px; border:1px solid #E6DECA; border-radius:6px; color:#241E18; width:100%; box-sizing:border-box;
+  }
+  .plantilla-col-row .pc-move, .plantilla-col-row .pc-del{
+    background:none; border:1px solid #E6DECA; border-radius:6px; width:28px; height:30px; cursor:pointer; color:#6C6152;
+  }
+  .plantilla-col-row .pc-move:hover{ border-color:#3D5A45; color:#3D5A45; }
+  .plantilla-col-row .pc-del:hover{ border-color:#B8452F; color:#B8452F; }
+  #btnAgregarColumna{ margin-top:12px; }
+  .modal-plantilla-actions{ display:flex; align-items:center; gap:10px; margin-top:22px; }
+
   tfoot td{
     padding:16px 20px; font-family:'JetBrains Mono',monospace; font-size:13px;
     border-top:2px solid var(--ink); background:#F1EAD9;
@@ -224,7 +286,18 @@
       <span class="total-chip egreso">Egresos: <b id="totalEgresos">$0</b></span>
       <span class="total-chip ingreso">Ingresos: <b id="totalIngresos">$0</b></span>
       <span class="total-chip balance">Balance: <b id="totalBalance">$0</b></span>
-      <button class="btn ghost" id="btnExport">Exportar a Excel</button>
+      <div class="export-menu-wrap">
+        <button class="btn ghost" id="btnExportMenuToggle">Exportar ▾</button>
+        <div class="export-menu" id="exportMenu">
+          <button class="export-menu-item" id="btnExportarDefault" type="button"><span>Formato Kárdex IA (el de siempre)</span></button>
+          <div class="export-menu-sep"></div>
+          <div class="export-menu-label">Tus plantillas</div>
+          <div id="exportMenuPlantillas"><div class="export-menu-empty">Todavía no tienes ninguna.</div></div>
+          <div class="export-menu-sep"></div>
+          <button class="export-menu-item" id="btnNuevaPlantilla" type="button"><span>+ Nueva plantilla personalizada</span></button>
+          <button class="export-menu-item" id="btnPlantillaSiigo" type="button"><span>+ Empezar desde plantilla Siigo</span></button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -265,6 +338,31 @@
 
   <footer>Los datos mostrados aquí son los que confirmaste al guardar cada factura.</footer>
 </div>
+</div>
+
+<div class="modal-plantilla" id="modalPlantilla">
+  <div class="modal-plantilla-backdrop" id="modalPlantillaBackdrop"></div>
+  <div class="modal-plantilla-card">
+    <h3 id="modalPlantillaTitulo">Nueva plantilla</h3>
+    <div class="panel-sub" style="color:#6C6152;">Ni Helisa ni World Office (ni la mayoría de sistemas contables) tienen un solo formato fijo de importación -- cada contador configura sus propias columnas. Arma aquí la tuya: qué dato va en cada columna, en qué orden, y con qué encabezado. Se guarda para que la reuses cada mes.</div>
+    <div id="modalPlantillaNota"></div>
+
+    <label for="plantillaNombre">Nombre de la plantilla</label>
+    <input type="text" id="plantillaNombre" placeholder="ej. Helisa - Industrias Codcol">
+
+    <div class="plantilla-columnas-head">
+      <div>Campo</div><div>Encabezado</div><div></div><div></div><div></div>
+    </div>
+    <div id="plantillaColumnas"></div>
+    <button class="btn ghost" id="btnAgregarColumna" type="button">+ Agregar columna</button>
+
+    <div class="modal-plantilla-actions">
+      <button class="btn ghost" id="btnEliminarPlantilla" style="display:none; color:#B8452F; border-color:#B8452F;">Eliminar plantilla</button>
+      <div style="flex:1"></div>
+      <button class="btn ghost" id="btnCancelarPlantilla">Cancelar</button>
+      <button class="btn secondary" id="btnGuardarPlantilla">Guardar plantilla</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -308,7 +406,7 @@ const footIva = document.getElementById('footIva');
 const footTotal = document.getElementById('footTotal');
 const footRetenciones = document.getElementById('footRetenciones');
 const countValue = document.getElementById('countValue');
-const btnExport = document.getElementById('btnExport');
+const btnExport = document.getElementById('btnExportarDefault');
 
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
@@ -459,6 +557,7 @@ function renderTable(){
 
     const tr = document.createElement('tr');
     tr.style.animationDelay = (i * 0.04) + 's';
+    tr.addEventListener('animationend', () => { tr.style.animation = 'none'; tr.style.opacity = '1'; }, { once: true });
     const retencionTitle = totalRetenciones > 0
       ? `Fuente: ${formatCOP(reteFuente)} · IVA: ${formatCOP(reteIva)} · ICA: ${formatCOP(reteIca)}`
       : 'Sin retenciones registradas';
@@ -575,6 +674,7 @@ monthSelect.addEventListener('change', renderTable);
 tipoFilter.addEventListener('change', renderTable);
 
 btnExport.addEventListener('click', async () => {
+  cerrarExportMenu();
   const month = monthSelect.value;
   const tipo = tipoFilter.value;
   const clientInvoices = invoicesForSelectedClient();
@@ -785,8 +885,345 @@ btnExport.addEventListener('click', async () => {
     alert('No se pudo generar el Excel: ' + err.message);
   } finally {
     btnExport.disabled = false;
-    btnExport.textContent = 'Exportar a Excel';
+    btnExport.textContent = 'Formato Kárdex IA (el de siempre)';
   }
+});
+
+// ---------- Menú de exportar + plantillas personalizadas ----------
+// El archivo .xlsx de una plantilla se arma igual que el de arriba (con
+// ExcelJS, en el navegador) pero la lista y el orden de columnas viene
+// de lo que el contador configuró -- ver CAMPOS_DISPONIBLES más abajo.
+// Ni Helisa ni World Office tienen un formato fijo de importación (cada
+// contador configura las columnas dentro de su propio software), así que
+// esto no es "elige tu plataforma", es "arma tu propia plantilla, una
+// vez, y reúsala".
+
+const CAMPOS_DISPONIBLES = [
+  { key: 'vacio', label: '(columna vacía -- la llenas tú después)', tipo: 'vacio' },
+  { key: 'constante', label: 'Valor fijo (el mismo texto en todas las filas)', tipo: 'constante' },
+  { key: 'fecha_factura', label: 'Fecha de la factura', tipo: 'fecha' },
+  { key: 'tipo_doc', label: 'Tipo de documento (13=cédula, 31=NIT)', tipo: 'texto' },
+  { key: 'contraparte_nit', label: 'NIT/CC del tercero (proveedor si es egreso, cliente si es ingreso)', tipo: 'texto' },
+  { key: 'contraparte_nombre', label: 'Nombre del tercero (proveedor si es egreso, cliente si es ingreso)', tipo: 'texto' },
+  { key: 'nit_cc', label: 'NIT/CC de quien emite la factura', tipo: 'texto' },
+  { key: 'nombre_razon_social', label: 'Nombre de quien emite la factura', tipo: 'texto' },
+  { key: 'numero_factura', label: 'Número de factura (prefijo + consecutivo)', tipo: 'texto' },
+  { key: 'concepto', label: 'Concepto / descripción', tipo: 'texto' },
+  { key: 'categoria_concepto', label: 'Categoría de retención', tipo: 'texto' },
+  { key: 'subcuenta_gasto', label: 'Subcuenta PUC del gasto', tipo: 'texto' },
+  { key: 'tipo_movimiento', label: 'Tipo de movimiento (Ingreso/Egreso)', tipo: 'texto' },
+  { key: 'valor_sin_iva', label: 'Valor sin IVA', tipo: 'valor' },
+  { key: 'valor_iva', label: 'Valor del IVA', tipo: 'valor' },
+  { key: 'valor_con_iva', label: 'Valor total (con IVA)', tipo: 'valor' },
+  { key: 'rete_fuente', label: 'Retención en la fuente', tipo: 'valor' },
+  { key: 'rete_iva', label: 'Retención de IVA', tipo: 'valor' },
+  { key: 'rete_ica', label: 'Retención de ICA', tipo: 'valor' },
+  { key: 'debito', label: 'Valor en Débito (solo egresos, vacío si es ingreso)', tipo: 'valor' },
+  { key: 'credito', label: 'Valor en Crédito (solo ingresos, vacío si es egreso)', tipo: 'valor' },
+];
+const CAMPO_POR_KEY = Object.fromEntries(CAMPOS_DISPONIBLES.map(c => [c.key, c]));
+
+// Estructura de columnas que Siigo documenta para su plantilla oficial de
+// "Subir desde Excel -- Comprobantes contables" (verificado en su portal
+// de ayuda). "Tipo de comprobante" y "Cuenta Contable" dependen del plan
+// de cuentas de CADA empresa -- eso no se puede adivinar, así que quedan
+// como valor fijo en blanco para que el contador lo complete él mismo
+// antes de guardar su copia de esta plantilla.
+const PRESET_SIIGO = {
+  nombre: 'Siigo (comprobantes contables)',
+  columnas: [
+    { campo: 'constante', encabezado: 'Tipo de comprobante', valorConstante: '' },
+    { campo: 'vacio', encabezado: 'Consecutivo', valorConstante: '' },
+    { campo: 'fecha_factura', encabezado: 'Fecha', formatoFecha: 'DD/MM/AAAA' },
+    { campo: 'constante', encabezado: 'Cuenta Contable', valorConstante: '' },
+    { campo: 'contraparte_nit', encabezado: 'Tercero' },
+    { campo: 'contraparte_nombre', encabezado: 'Nombre Tercero' },
+    { campo: 'concepto', encabezado: 'Concepto' },
+    { campo: 'debito', encabezado: 'Débito' },
+    { campo: 'credito', encabezado: 'Crédito' },
+  ],
+};
+
+let misPlantillas = [];
+let plantillaEnEdicionId = null; // null = se está creando una nueva
+
+function valorDeCampo(inv, columna) {
+  const tipoMov = inv.tipo_movimiento || 'egreso';
+  switch (columna.campo) {
+    case 'vacio': return '';
+    case 'constante': return columna.valorConstante || '';
+    case 'fecha_factura': return formatearFechaPlantilla(inv.fecha_factura, columna.formatoFecha || 'DD/MM/AAAA');
+    case 'tipo_doc': return inv.tipo_doc || '';
+    case 'contraparte_nit': return tipoMov === 'ingreso' ? (inv.adquiriente_nit || '') : (inv.nit_cc || '');
+    case 'contraparte_nombre': return tipoMov === 'ingreso' ? (inv.adquiriente_nombre || '') : (inv.nombre_razon_social || '');
+    case 'nit_cc': return inv.nit_cc || '';
+    case 'nombre_razon_social': return inv.nombre_razon_social || '';
+    case 'numero_factura': return [inv.letras_fe, inv.numeros_fe].filter(Boolean).join('-');
+    case 'concepto': return inv.concepto || '';
+    case 'categoria_concepto': return inv.categoria_concepto || '';
+    case 'subcuenta_gasto': return inv.subcuenta_gasto || '';
+    case 'tipo_movimiento': return tipoMov === 'ingreso' ? 'Ingreso' : 'Egreso';
+    case 'valor_sin_iva': return Number(inv.valor_sin_iva) || 0;
+    case 'valor_iva': return Number(inv.valor_iva) || 0;
+    case 'valor_con_iva': return Number(inv.valor_con_iva) || 0;
+    case 'rete_fuente': return Number(inv.rete_fuente) || 0;
+    case 'rete_iva': return Number(inv.rete_iva) || 0;
+    case 'rete_ica': return Number(inv.rete_ica) || 0;
+    case 'debito': return tipoMov === 'egreso' ? (Number(inv.valor_con_iva) || 0) : '';
+    case 'credito': return tipoMov === 'ingreso' ? (Number(inv.valor_con_iva) || 0) : '';
+    default: return '';
+  }
+}
+function formatearFechaPlantilla(fecha, formato) {
+  const [d, m, y] = String(fecha || '').split('/');
+  if (!d || !m || !y) return fecha || '';
+  const dd = d.padStart(2, '0'), mm = m.padStart(2, '0');
+  if (formato === 'AAAA-MM-DD') return `${y}-${mm}-${dd}`;
+  if (formato === 'DDMMAAAA') return `${dd}${mm}${y}`;
+  return `${dd}/${mm}/${y}`;
+}
+function slugify(str) {
+  return String(str || 'plantilla').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'plantilla';
+}
+
+async function cargarPlantillas() {
+  try {
+    const res = await fetch('/api/plantillas-exportacion');
+    misPlantillas = res.ok ? await res.json() : [];
+  } catch (e) {
+    misPlantillas = [];
+  }
+  renderMenuPlantillas();
+}
+
+function renderMenuPlantillas() {
+  const el = document.getElementById('exportMenuPlantillas');
+  if (misPlantillas.length === 0) {
+    el.innerHTML = '<div class="export-menu-empty">Todavía no tienes ninguna.</div>';
+    return;
+  }
+  el.innerHTML = misPlantillas.map(p => `
+    <div class="export-menu-item" data-role="exportar-plantilla" data-id="${escapeHtml(p.id)}">
+      <span>${escapeHtml(p.nombre)}</span>
+      <span>
+        <button type="button" class="emi-edit" data-role="editar-plantilla" data-id="${escapeHtml(p.id)}" title="Editar">✎</button>
+        <button type="button" class="emi-del" data-role="borrar-plantilla" data-id="${escapeHtml(p.id)}" title="Eliminar">✕</button>
+      </span>
+    </div>
+  `).join('');
+}
+
+function abrirExportMenu() { document.getElementById('exportMenu').classList.add('show'); }
+function cerrarExportMenu() { document.getElementById('exportMenu').classList.remove('show'); }
+document.getElementById('btnExportMenuToggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('exportMenu').classList.toggle('show');
+});
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('exportMenu').contains(e.target) && e.target.id !== 'btnExportMenuToggle') cerrarExportMenu();
+});
+
+async function exportarConPlantilla(plantilla) {
+  const month = monthSelect.value;
+  const tipo = tipoFilter.value;
+  const clientInvoices = invoicesForSelectedClient();
+  const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
+  const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
+  if (filtered.length === 0) { alert('No hay facturas en este mes para exportar.'); return; }
+
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Kárdex IA';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Datos', { views: [{ state: 'frozen', ySplit: 1 }] });
+    sheet.columns = plantilla.columnas.map(c => ({ header: c.encabezado, width: Math.max(12, c.encabezado.length + 4) }));
+    sheet.getRow(1).font = { bold: true };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE7DC' } };
+
+    filtered.forEach(inv => {
+      sheet.addRow(plantilla.columnas.map(c => valorDeCampo(inv, c)));
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slugify(plantilla.nombre)}-${month}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('No se pudo generar el archivo: ' + err.message);
+  }
+}
+
+document.getElementById('exportMenuPlantillas').addEventListener('click', (e) => {
+  const rol = e.target.dataset.role;
+  if (rol === 'editar-plantilla' || rol === 'borrar-plantilla') return; // se manejan abajo
+  const fila = e.target.closest('[data-role="exportar-plantilla"]');
+  if (!fila) return;
+  const plantilla = misPlantillas.find(p => p.id === fila.dataset.id);
+  if (plantilla) exportarConPlantilla(plantilla);
+  cerrarExportMenu();
+});
+document.getElementById('exportMenuPlantillas').addEventListener('click', (e) => {
+  if (e.target.dataset.role === 'editar-plantilla') {
+    e.stopPropagation();
+    const plantilla = misPlantillas.find(p => p.id === e.target.dataset.id);
+    if (plantilla) abrirModalPlantilla(plantilla);
+    cerrarExportMenu();
+  }
+  if (e.target.dataset.role === 'borrar-plantilla') {
+    e.stopPropagation();
+    const plantilla = misPlantillas.find(p => p.id === e.target.dataset.id);
+    if (plantilla) { plantillaEnEdicionId = plantilla.id; borrarPlantillaActual(plantilla.nombre); }
+    cerrarExportMenu();
+  }
+});
+
+document.getElementById('btnNuevaPlantilla').addEventListener('click', () => { cerrarExportMenu(); abrirModalPlantilla(null); });
+document.getElementById('btnPlantillaSiigo').addEventListener('click', () => {
+  cerrarExportMenu();
+  abrirModalPlantilla({ id: null, nombre: PRESET_SIIGO.nombre, columnas: PRESET_SIIGO.columnas.map(c => ({ ...c })) }, true);
+});
+
+// ---------- Modal: armar/editar una plantilla ----------
+
+let columnasEnEdicion = [];
+
+function abrirModalPlantilla(plantilla, esPresetSiigo) {
+  plantillaEnEdicionId = plantilla ? plantilla.id : null;
+  document.getElementById('modalPlantillaTitulo').textContent = plantilla ? `Editar "${plantilla.nombre}"` : 'Nueva plantilla';
+  document.getElementById('plantillaNombre').value = plantilla ? plantilla.nombre : '';
+  columnasEnEdicion = plantilla ? plantilla.columnas.map(c => ({ ...c })) : [
+    { campo: 'fecha_factura', encabezado: 'Fecha', formatoFecha: 'DD/MM/AAAA' },
+    { campo: 'contraparte_nombre', encabezado: 'Tercero' },
+    { campo: 'concepto', encabezado: 'Concepto' },
+    { campo: 'valor_con_iva', encabezado: 'Valor' },
+  ];
+  document.getElementById('btnEliminarPlantilla').style.display = (plantilla && plantilla.id) ? 'inline-flex' : 'none';
+  document.getElementById('modalPlantillaNota').innerHTML = esPresetSiigo
+    ? '<div class="modal-plantilla-note">Esta es la estructura de columnas que Siigo documenta para importar comprobantes contables. "Tipo de comprobante" y "Cuenta Contable" dependen de TU plan de cuentas -- no se adivinan: complétalos aquí como valor fijo (o déjalos en blanco y edítalos en Excel después de exportar) antes de guardar tu copia.</div>'
+    : '';
+  renderColumnasModal();
+  document.getElementById('modalPlantilla').classList.add('show');
+}
+function cerrarModalPlantilla() {
+  document.getElementById('modalPlantilla').classList.remove('show');
+}
+
+function renderColumnasModal() {
+  const el = document.getElementById('plantillaColumnas');
+  el.innerHTML = columnasEnEdicion.map((c, i) => {
+    const campoInfo = CAMPO_POR_KEY[c.campo] || CAMPOS_DISPONIBLES[0];
+    const opciones = CAMPOS_DISPONIBLES.map(cd => `<option value="${cd.key}"${cd.key === c.campo ? ' selected' : ''}>${escapeHtml(cd.label)}</option>`).join('');
+    const mostrarConstante = campoInfo.tipo === 'constante';
+    const mostrarFecha = campoInfo.tipo === 'fecha';
+    return `<div class="plantilla-col-row" data-idx="${i}">
+      <select class="pc-campo">${opciones}</select>
+      <input type="text" class="pc-encabezado" value="${escapeHtml(c.encabezado || '')}" placeholder="Encabezado de la columna">
+      ${mostrarConstante ? `<input type="text" class="pc-constante" value="${escapeHtml(c.valorConstante || '')}" placeholder="Valor fijo">` : (mostrarFecha ? `<select class="pc-fecha"><option value="DD/MM/AAAA"${c.formatoFecha === 'DD/MM/AAAA' || !c.formatoFecha ? ' selected' : ''}>DD/MM/AAAA</option><option value="AAAA-MM-DD"${c.formatoFecha === 'AAAA-MM-DD' ? ' selected' : ''}>AAAA-MM-DD</option><option value="DDMMAAAA"${c.formatoFecha === 'DDMMAAAA' ? ' selected' : ''}>DDMMAAAA</option></select>` : '<span></span>')}
+      <button type="button" class="pc-move" data-dir="up" title="Subir">↑</button>
+      <button type="button" class="pc-move" data-dir="down" title="Bajar">↓</button>
+      <button type="button" class="pc-del" title="Quitar columna">✕</button>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('plantillaColumnas').addEventListener('change', (e) => {
+  const fila = e.target.closest('.plantilla-col-row');
+  if (!fila) return;
+  const idx = Number(fila.dataset.idx);
+  if (e.target.classList.contains('pc-campo')) {
+    const nuevoCampo = e.target.value;
+    const info = CAMPO_POR_KEY[nuevoCampo];
+    const encabezadoActual = columnasEnEdicion[idx].encabezado;
+    columnasEnEdicion[idx] = {
+      campo: nuevoCampo,
+      encabezado: encabezadoActual && encabezadoActual.trim() ? encabezadoActual : (info ? info.label.split(' (')[0] : ''),
+      valorConstante: '',
+      formatoFecha: 'DD/MM/AAAA',
+    };
+    renderColumnasModal();
+  } else if (e.target.classList.contains('pc-encabezado')) {
+    columnasEnEdicion[idx].encabezado = e.target.value;
+  } else if (e.target.classList.contains('pc-constante')) {
+    columnasEnEdicion[idx].valorConstante = e.target.value;
+  } else if (e.target.classList.contains('pc-fecha')) {
+    columnasEnEdicion[idx].formatoFecha = e.target.value;
+  }
+});
+document.getElementById('plantillaColumnas').addEventListener('click', (e) => {
+  const fila = e.target.closest('.plantilla-col-row');
+  if (!fila) return;
+  const idx = Number(fila.dataset.idx);
+  if (e.target.classList.contains('pc-del')) {
+    columnasEnEdicion.splice(idx, 1);
+    renderColumnasModal();
+  } else if (e.target.classList.contains('pc-move')) {
+    const dir = e.target.dataset.dir;
+    const destino = dir === 'up' ? idx - 1 : idx + 1;
+    if (destino < 0 || destino >= columnasEnEdicion.length) return;
+    [columnasEnEdicion[idx], columnasEnEdicion[destino]] = [columnasEnEdicion[destino], columnasEnEdicion[idx]];
+    renderColumnasModal();
+  }
+});
+
+document.getElementById('btnAgregarColumna').addEventListener('click', () => {
+  columnasEnEdicion.push({ campo: 'vacio', encabezado: '', valorConstante: '', formatoFecha: 'DD/MM/AAAA' });
+  renderColumnasModal();
+});
+
+document.getElementById('btnCancelarPlantilla').addEventListener('click', cerrarModalPlantilla);
+document.getElementById('modalPlantillaBackdrop').addEventListener('click', cerrarModalPlantilla);
+
+document.getElementById('btnGuardarPlantilla').addEventListener('click', async () => {
+  const nombre = document.getElementById('plantillaNombre').value.trim();
+  if (!nombre) { alert('Ponle un nombre a la plantilla.'); return; }
+  if (columnasEnEdicion.length === 0) { alert('Agrega al menos una columna.'); return; }
+  const columnasSinEncabezado = columnasEnEdicion.some(c => !c.encabezado || !c.encabezado.trim());
+  if (columnasSinEncabezado) { alert('Todas las columnas necesitan un encabezado.'); return; }
+
+  const btn = document.getElementById('btnGuardarPlantilla');
+  btn.disabled = true;
+  btn.textContent = 'Guardando…';
+  try {
+    const url = plantillaEnEdicionId ? `/api/plantillas-exportacion/${plantillaEnEdicionId}` : '/api/plantillas-exportacion';
+    const method = plantillaEnEdicionId ? 'PUT' : 'POST';
+    const res = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, columnas: columnasEnEdicion }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar la plantilla.');
+    await cargarPlantillas();
+    cerrarModalPlantilla();
+  } catch (err) {
+    alert('No se pudo guardar: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Guardar plantilla';
+  }
+});
+
+async function borrarPlantillaActual(nombre) {
+  if (!confirm(`¿Eliminar la plantilla "${nombre}"? Esto no borra ninguna factura, solo la configuración de columnas.`)) return;
+  try {
+    const res = await fetch(`/api/plantillas-exportacion/${plantillaEnEdicionId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).error || 'No se pudo eliminar.');
+    await cargarPlantillas();
+    cerrarModalPlantilla();
+  } catch (err) {
+    alert('No se pudo eliminar: ' + err.message);
+  }
+}
+document.getElementById('btnEliminarPlantilla').addEventListener('click', () => {
+  const plantilla = misPlantillas.find(p => p.id === plantillaEnEdicionId);
+  borrarPlantillaActual(plantilla ? plantilla.nombre : 'esta plantilla');
 });
 
 tbody.addEventListener('click', async (e) => {
@@ -846,6 +1283,7 @@ async function requireAuthAndInit(){
       window.location.href = '/login.html';
     });
     loadInvoices();
+    cargarPlantillas();
   } catch (e) {
     window.location.href = '/login.html';
   }

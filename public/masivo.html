@@ -334,6 +334,17 @@ const modalPdf = document.getElementById('modalPdf');
 
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida (para calcularRetencionSugerida, misma fuente que Facturas/Escanear)
+let terceroFiscalPorNit = {}; // clave: NIT (solo dígitos) -> perfil fiscal guardado (Gran Contribuyente/Autorretenedor/Régimen Simple/Agente ReteIVA) -- misma fuente que Escanear
+// Misma normalización que usa el servidor (server.js normalizarNit) --
+// si el DV viene pegado con guion (ej. "901.128.185-3"), se quita
+// antes de limpiar el resto, para que el mismo NIT siempre calce con
+// el perfil fiscal guardado, tenga o no el DV pegado.
+function soloDigitos(nit){
+  let s = String(nit || '').trim();
+  s = s.replace(/-\s*\d$/, '');
+  return s.replace(/[^0-9]/g, '');
+}
+function perfilFiscalDelNit(nit){ return terceroFiscalPorNit[soloDigitos(nit)] || null; }
 let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, estado: 'procesando'|'listo'|'revisar'|'error'|'guardada' }
 
 // Si se llegó aquí desde la ficha de un cliente (Inicio → cliente →
@@ -463,8 +474,9 @@ function renderFichaCompleta(item){
   // para este proveedor. Ver retenciones.js para el detalle y las
   // salvedades (esto no reemplaza asesoría tributaria).
   const clienteFicha = myClients.find(c => c.id === item.clienteId);
+  const perfilTerceroFicha = perfilFiscalDelNit(d.nit_cc);
   const sugerido = (clienteFicha && typeof calcularRetencionSugerida === 'function')
-    ? calcularRetencionSugerida(d, clienteFicha, tarifasAprendidas)
+    ? calcularRetencionSugerida(d, clienteFicha, tarifasAprendidas, perfilTerceroFicha)
     : null;
   let filaRetencion = '';
   if (sugerido) {
@@ -477,11 +489,15 @@ function renderFichaCompleta(item){
         <div class="fd-value money">${montoTexto}</div>
       </div>
     `;
-  } else if (clienteFicha && clienteFicha.agente_retenedor && !(d.regimen_simple === true || d.regimen_simple === 'true')) {
+  } else if (clienteFicha && clienteFicha.agente_retenedor) {
+    const perfilEfectivoFicha = (typeof perfilFiscalEfectivo === 'function') ? perfilFiscalEfectivo(d, perfilTerceroFicha) : { regimenSimple: (d.regimen_simple === true || d.regimen_simple === 'true'), autorretenedor: false };
+    let motivo = 'bajo el umbral, o categoría sin tarifa confirmada';
+    if (perfilEfectivoFicha.regimenSimple) motivo = 'proveedor Régimen Simple -- no aplica';
+    else if (perfilEfectivoFicha.autorretenedor) motivo = 'proveedor autorretenedor -- no aplica';
     filaRetencion = `
       <div class="fd-row">
         <div class="fd-label">Retención sugerida</div>
-        <div class="fd-value">— (bajo el umbral, o categoría sin tarifa confirmada)</div>
+        <div class="fd-value">— (${motivo})</div>
       </div>
     `;
   }
@@ -536,7 +552,7 @@ function actualizarEstimadosRetencionMasivo(){
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
   if (parseMoneyValue(fuenteInput.value) === 0 && typeof calcularRetencionSugerida === 'function') {
-    const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas);
+    const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc));
     if (sugerido) {
       const texto = sugerido.mismaTarifa
         ? `$${sugerido.bajo.toLocaleString('es-CO')}`
@@ -1104,6 +1120,16 @@ async function requireAuthAndInit(){
       }
     } catch (e) {
       console.warn('No se pudieron cargar las tarifas aprendidas:', e.message);
+    }
+    try {
+      const perfilesRes = await fetch('/api/terceros-fiscales');
+      if (perfilesRes.ok) {
+        const rows = await perfilesRes.json();
+        terceroFiscalPorNit = {};
+        rows.forEach(t => { terceroFiscalPorNit[t.nit] = t; });
+      }
+    } catch (e) {
+      console.warn('No se pudieron cargar los perfiles fiscales de terceros:', e.message);
     }
   } catch (e) {
     window.location.href = '/login.html';

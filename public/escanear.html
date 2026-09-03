@@ -16,7 +16,7 @@
      claras -- como el mockup de producto en landing.html -- aunque el
      resto de la página ahora sea oscura. Redeclarar las variables acá
      hace que TODO lo de adentro las herede automáticamente. */
-  .intake, #previewWrap, #result, #err, #savedMsg, #retencionHint{
+  .intake, #previewWrap, #result, #err, #savedMsg, #retencionHint, #perfilTerceroPanel{
     --paper-raised:#FFFFFF;
     --ink:#241E18;
     --ink-soft:#6C6152;
@@ -178,6 +178,32 @@
   #retencionHint.show{ display:block; animation:fadeUp .4s var(--ease) forwards; }
   #retencionHint b{ display:block; margin-bottom:2px; font-size:13px; }
   #retencionHint .fine{ display:block; margin-top:6px; font-size:11px; color:#8C6D14; }
+
+  /* Perfil fiscal del tercero (Gran Contribuyente / Autorretenedor /
+     Régimen Simple / Agente ReteIVA), guardado por NIT -- se marca acá
+     y de ahí en adelante manda sobre lo que la IA lea en cada factura
+     puntual de ese mismo proveedor. */
+  #perfilTerceroPanel{ margin-top:14px; }
+  .pft-box{
+    border:1px solid var(--line); background:var(--paper-raised);
+    border-radius:10px; padding:14px 16px;
+  }
+  .pft-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .pft-head b{ font-size:13px; }
+  .pft-nit{ font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint); }
+  .pft-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; margin-bottom:10px; }
+  @media (max-width:520px){ .pft-grid{ grid-template-columns:1fr; } }
+  .pft-check{ display:flex; align-items:flex-start; gap:8px; font-size:12.5px; cursor:pointer; line-height:1.4; }
+  .pft-check input{ margin-top:2px; }
+  .pft-check .pft-desc{ display:block; font-size:11px; color:var(--ink-faint); }
+  .pft-actions{ display:flex; align-items:center; gap:10px; justify-content:flex-end; }
+  .pft-actions button{
+    font-family:'Inter',sans-serif; font-size:12px; font-weight:600;
+    padding:7px 13px; border-radius:7px; cursor:pointer; border:1px solid var(--line);
+    background:#fff; color:var(--ink-soft);
+  }
+  .pft-actions .pft-guardar{ border-color:var(--moss); background:var(--moss); color:#fff; }
+  .pft-saved{ font-size:11.5px; color:var(--moss-deep, #3E6053); }
 
   #result{margin-top:34px;display:none;}
   #result.show{display:block;}
@@ -419,6 +445,7 @@
 
     <div class="ledger" id="ledger"></div>
     <div id="retencionHint"></div>
+    <div id="perfilTerceroPanel"></div>
     <div class="result-actions">
       <button class="btn ghost" id="btnAgain">Escanear otra</button>
       <button class="btn primary" id="btnSave">Guardar en el kárdex</button>
@@ -493,7 +520,7 @@ const FIELDS = [
 // distintas si cambia la norma. Aquí solo se guardan los textos
 // legibles para el aviso, y un umbral de respaldo para categorías que
 // no están en la tabla (ej. "otro").
-const UMBRAL_RETENCION_RESPALDO = 524000; // 10 UVT ($52.374 x 10) -- solo se usa si la categoría no está en TARIFAS_RETENCION
+const UMBRAL_RETENCION_RESPALDO_UVT = 10; // solo se usa si la categoría no está en TARIFAS_RETENCION -- el peso se calcula con umbralPesos() según la fecha de la factura
 const CATEGORIA_TEXTOS_RETENCION = {
   compras:                  'compras (10 UVT)',
   compras_tarjeta:          'compras con tarjeta (desde $0)',
@@ -622,6 +649,33 @@ async function loadTarifasAprendidas(){
   }
 }
 
+// Perfil fiscal por NIT (Gran Contribuyente / Autorretenedor / Régimen
+// Simple / Agente de retención de IVA) que el contador ya marcó antes
+// para ese tercero -- manda sobre lo que la IA lea en la factura de
+// turno. Ver perfilFiscalEfectivo() en retenciones.js.
+let terceroFiscalPorNit = {}; // clave: NIT (solo dígitos) -> {gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, nombre, notas}
+async function loadTercerosFiscales(){
+  try {
+    const res = await fetch('/api/terceros-fiscales');
+    if (!res.ok) return;
+    const rows = await res.json();
+    terceroFiscalPorNit = {};
+    rows.forEach(t => { terceroFiscalPorNit[t.nit] = t; });
+  } catch (e) {
+    console.warn('No se pudieron cargar los perfiles fiscales de terceros:', e.message);
+  }
+}
+// Misma normalización que usa el servidor (server.js normalizarNit) --
+// si el DV viene pegado con guion (ej. "901.128.185-3"), se quita
+// antes de limpiar el resto, para que el mismo NIT siempre calce con
+// el perfil fiscal guardado, tenga o no el DV pegado.
+function soloDigitos(nit){
+  let s = String(nit || '').trim();
+  s = s.replace(/-\s*\d$/, '');
+  return s.replace(/[^0-9]/g, '');
+}
+function perfilFiscalDelNit(nit){ return terceroFiscalPorNit[soloDigitos(nit)] || null; }
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
@@ -637,6 +691,7 @@ async function requireAuthAndInit(){
     await loadMyClients();
     aplicarClientePreseleccionado();
     loadTarifasAprendidas();
+    loadTercerosFiscales();
   } catch (e) {
     window.location.href = '/login.html';
   }
@@ -1140,6 +1195,17 @@ function renderResult(data){
       input.addEventListener('blur', actualizarEstimadosRetencion);
     }
 
+    // Si el contador corrige el NIT del proveedor a mano, el perfil
+    // fiscal (y por lo tanto el estimado de retención) corresponde a
+    // otro tercero -- se refresca todo con el NIT nuevo.
+    if (f.key === 'nit_cc') {
+      input.addEventListener('blur', () => {
+        const nombreInput = ledger.querySelector('input[data-key="nombre_razon_social"]');
+        renderPerfilTerceroPanel(input.value, nombreInput ? nombreInput.value : '');
+        actualizarEstimadosRetencion();
+      });
+    }
+
     ledger.appendChild(row);
 
     // Debajo de la categoría, un segundo selector con las subcuentas
@@ -1187,6 +1253,92 @@ function renderResult(data){
 
   showRetencionHint(data);
   actualizarEstimadosRetencion();
+  renderPerfilTerceroPanel(data.nit_cc, data.nombre_razon_social);
+}
+
+// ---------- Perfil fiscal del tercero (widget editable) ----------
+// Deja ver y marcar de una vez el perfil fiscal del NIT que se está
+// procesando -- Gran Contribuyente / Autorretenedor / Régimen Simple /
+// Agente de retención de IVA. Se guarda por NIT (no por factura), así
+// que de ahí en adelante todas las facturas de ese mismo proveedor lo
+// usan automáticamente, sin depender de que la IA lo detecte cada vez.
+const CAMPOS_PERFIL_FISCAL = [
+  ['gran_contribuyente', 'Gran Contribuyente', 'Informativo -- no cambia ningún cálculo solo. Si también se autorretiene, marca esa casilla aparte.'],
+  ['autorretenedor', 'Autorretenedor (renta)', 'Se autorretiene renta -- fuerza Rete Fuente a $0 en las facturas de este proveedor.'],
+  ['regimen_simple', 'Régimen Simple (RST)', 'Fuerza Rete Fuente y Rete ICA a $0. No exime de Rete IVA -- esa regla no cambia.'],
+  ['agente_retencion_iva', 'Agente de retención de IVA', 'Informativo -- revisa si a este proveedor NO le corresponde que tu cliente le practique Rete IVA.'],
+];
+
+function renderPerfilTerceroPanel(nit, nombreSugerido){
+  const panel = document.getElementById('perfilTerceroPanel');
+  if (!panel) return;
+  const nitLimpio = soloDigitos(nit);
+  if (!nitLimpio) { panel.innerHTML = ''; return; }
+  const perfil = terceroFiscalPorNit[nitLimpio] || null;
+
+  panel.innerHTML = `
+    <div class="pft-box">
+      <div class="pft-head">
+        <b>Perfil fiscal de este proveedor${perfil ? ' (guardado)' : ''}</b>
+        <span class="pft-nit">NIT ${escapeHtml(nitLimpio)}</span>
+      </div>
+      <div class="pft-grid">
+        ${CAMPOS_PERFIL_FISCAL.map(([key, label, desc]) => `
+          <label class="pft-check">
+            <input type="checkbox" data-pft="${key}" ${perfil && perfil[key] ? 'checked' : ''}>
+            <span>${escapeHtml(label)}<span class="pft-desc">${escapeHtml(desc)}</span></span>
+          </label>
+        `).join('')}
+      </div>
+      <div class="pft-actions">
+        <span class="pft-saved" id="pftSavedMsg"></span>
+        ${perfil ? '<button type="button" id="btnQuitarPerfil">Quitar perfil</button>' : ''}
+        <button type="button" class="pft-guardar" id="btnGuardarPerfil">Guardar perfil de este NIT</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('btnGuardarPerfil').addEventListener('click', async () => {
+    const btn = document.getElementById('btnGuardarPerfil');
+    btn.disabled = true;
+    const savedMsg = document.getElementById('pftSavedMsg');
+    savedMsg.textContent = '';
+    const payload = { nit: nitLimpio, nombre: nombreSugerido || (perfil && perfil.nombre) || '' };
+    CAMPOS_PERFIL_FISCAL.forEach(([key]) => {
+      const cb = panel.querySelector(`input[data-pft="${key}"]`);
+      payload[key] = !!(cb && cb.checked);
+    });
+    try {
+      const res = await fetch('/api/terceros-fiscales', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.error || 'No se pudo guardar.');
+      if (saved.borrado) delete terceroFiscalPorNit[nitLimpio];
+      else terceroFiscalPorNit[nitLimpio] = saved;
+      actualizarEstimadosRetencion();
+      renderPerfilTerceroPanel(nitLimpio, nombreSugerido);
+    } catch (e) {
+      alert('No se pudo guardar el perfil fiscal: ' + e.message);
+      btn.disabled = false;
+    }
+  });
+
+  const btnQuitar = document.getElementById('btnQuitarPerfil');
+  if (btnQuitar) {
+    btnQuitar.addEventListener('click', async () => {
+      if (!confirm(`¿Quitar el perfil fiscal guardado para el NIT ${nitLimpio}? Las próximas facturas de este proveedor volverán a depender solo de lo que lea la IA.`)) return;
+      try {
+        const res = await fetch('/api/terceros-fiscales/' + encodeURIComponent(nitLimpio), { method: 'DELETE' });
+        if (!res.ok && res.status !== 404) throw new Error((await res.json()).error || 'No se pudo eliminar.');
+        delete terceroFiscalPorNit[nitLimpio];
+        actualizarEstimadosRetencion();
+        renderPerfilTerceroPanel(nitLimpio, nombreSugerido);
+      } catch (e) {
+        alert('No se pudo eliminar el perfil fiscal: ' + e.message);
+      }
+    });
+  }
 }
 
 // Estimado inline, directamente debajo de cada campo de retención
@@ -1205,17 +1357,21 @@ function actualizarEstimadosRetencion(){
   const subtotalInput = ledger.querySelector('input[data-key="valor_sin_iva"]');
   const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
   const nitInput = ledger.querySelector('input[data-key="nit_cc"]');
+  const fechaInput = ledger.querySelector('input[data-key="fecha_factura"]');
   const estFuenteEl = document.getElementById('estimadoFuente');
   const estIvaEl = document.getElementById('estimadoIva');
   const estIcaEl = document.getElementById('estimadoIca');
   if (!catSelect || !fuenteInput || !ivaRInput || !icaInput || !estFuenteEl || !estIvaEl || !estIcaEl) return;
 
   const cliente = myClients.find(c => c.id === currentClienteId);
+  const nitProveedor = nitInput ? nitInput.value : '';
+  const perfilTercero = perfilFiscalDelNit(nitProveedor);
   const invParaCalculo = {
     categoria_concepto: catSelect.value,
     valor_sin_iva: subtotalInput ? parseMoneyValue(subtotalInput.value) : 0,
     valor_iva: ivaInput ? parseMoneyValue(ivaInput.value) : 0,
-    nit_cc: nitInput ? nitInput.value : '',
+    nit_cc: nitProveedor,
+    fecha_factura: fechaInput ? fechaInput.value : '',
     regimen_simple: currentRegimenSimple,
     desglose_categorias: currentDesgloseCategorias,
   };
@@ -1224,7 +1380,7 @@ function actualizarEstimadosRetencion(){
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
   if (parseMoneyValue(fuenteInput.value) === 0 && typeof calcularRetencionSugerida === 'function') {
-    const sugerido = calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas);
+    const sugerido = calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero);
     if (sugerido) {
       const texto = sugerido.mismaTarifa
         ? `$${sugerido.bajo.toLocaleString('es-CO')}`
@@ -1353,7 +1509,10 @@ function showRetencionHint(data){
     return;
   }
 
-  const esRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
+  const perfilTercero = perfilFiscalDelNit(data.nit_cc);
+  const perfilEfectivo = (typeof perfilFiscalEfectivo === 'function') ? perfilFiscalEfectivo(data, perfilTercero) : null;
+  const esRegimenSimple = perfilEfectivo ? perfilEfectivo.regimenSimple : (data.regimen_simple === true || data.regimen_simple === 'true');
+  const esAutorretenedor = !!(perfilEfectivo && perfilEfectivo.autorretenedor);
   const categoria = (data.categoria_concepto || 'otro').toLowerCase();
   const subtotal = Number(data.valor_sin_iva) || 0;
   const iva = Number(data.valor_iva) || 0;
@@ -1364,7 +1523,9 @@ function showRetencionHint(data){
   // calcularRetencionSugerida() de todas formas no calcula nada para
   // esa categoría.
   const configCategoria = (typeof TARIFAS_RETENCION !== 'undefined') ? TARIFAS_RETENCION[categoria] : null;
-  const umbral = configCategoria ? configCategoria.umbral : UMBRAL_RETENCION_RESPALDO;
+  const umbral = (typeof umbralPesos === 'function')
+    ? umbralPesos(configCategoria || { umbralUvt: UMBRAL_RETENCION_RESPALDO_UVT }, data.fecha_factura)
+    : 524000;
   const tipoTexto = CATEGORIA_TEXTOS_RETENCION[categoria] || 'general (10 UVT)';
   const posibleReteIva = iva > 0 && subtotal >= umbral;
 
@@ -1379,7 +1540,8 @@ function showRetencionHint(data){
     : '';
 
   if (esRegimenSimple) {
-    html += `<b>ℹ Proveedor de Régimen Simple detectado</b>` +
+    const origenPerfil = perfilTercero && perfilTercero.regimen_simple;
+    html += `<b>ℹ Proveedor de Régimen Simple${origenPerfil ? ' (marcado en su perfil fiscal)' : ' detectado'}</b>` +
       `Por norma, no le corresponde Rete Fuente ni Rete ICA. `;
     if (posibleReteIva) {
       html += `Pero sí podría corresponder <b>Rete IVA</b> — esa regla no cambia por ser Régimen Simple.${reteIvaTexto} Verifica si tu empresa es agente de retención de IVA.`;
@@ -1392,6 +1554,18 @@ function showRetencionHint(data){
     return;
   }
 
+  if (esAutorretenedor) {
+    html += `<b>ℹ Proveedor autorretenedor (marcado en su perfil fiscal)</b>` +
+      `Este tercero se autorretiene renta -- por norma, tu cliente NO debe practicarle Rete Fuente ordinaria (el proveedor ya se retiene a sí mismo). `;
+    if (posibleReteIva) {
+      html += `Aun así, revisa si corresponde <b>Rete IVA</b> aparte -- ser autorretenedor de renta no exime de eso.${reteIvaTexto} `;
+    }
+    html += `<span class="fine">Marca/revisa este perfil en Terceros fiscales. No es asesoría tributaria — confirma con tu criterio profesional.</span>`;
+    retencionHintEl.innerHTML = html;
+    retencionHintEl.classList.add('show');
+    return;
+  }
+
   // A partir de aquí se intenta calcular un monto real (no solo un
   // aviso de umbral), cruzando la categoría, el cliente que se
   // identificó para esta factura (¿es agente retenedor?) y cualquier
@@ -1399,7 +1573,7 @@ function showRetencionHint(data){
   // misma función/tabla que usan Facturas y Carga masiva.
   const invParaCalculo = { ...data, desglose_categorias: currentDesgloseCategorias };
   const sugerido = (cliente && typeof calcularRetencionSugerida === 'function')
-    ? calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas)
+    ? calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero)
     : null;
 
   if (sugerido) {

@@ -190,6 +190,26 @@ async function ensureSchema() {
   // archivo de extracto completo, no por movimiento individual.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_movbanco_filehash ON movimientos_banco (contador_id, cliente_id, file_hash) WHERE file_hash <> '';`);
 
+  // ---------- Plantillas de exportación ----------
+  // Ni Helisa ni World Office tienen UN formato fijo de importación --
+  // cada contador configura sus propias columnas dentro de su software
+  // (orden, cuentas, centros de costo...). Por eso esto no es una lista
+  // de plantillas fijas por plataforma, sino que el contador arma la
+  // suya (qué campo va en cada columna, con qué encabezado) y la guarda
+  // para reusarla cada mes. "columnas" es un arreglo JSON de
+  // {campo, encabezado, valorConstante, formatoFecha}.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plantillas_exportacion (
+      id UUID PRIMARY KEY,
+      contador_id UUID,
+      nombre TEXT NOT NULL DEFAULT '',
+      columnas TEXT NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_plantillas_contador ON plantillas_exportacion (contador_id);`);
+
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contador_id UUID;`);
   // Si el cliente es agente retenedor -- sin esto no tiene sentido
   // calcular ninguna retención sugerida (si no es agente retenedor,
@@ -252,6 +272,41 @@ async function ensureSchema() {
       UNIQUE (contador_id, nit_proveedor, categoria)
     );
   `);
+
+  // Perfil fiscal del tercero (proveedor/cliente que aparece EN las
+  // facturas, no el cliente del contador) -- por NIT. Antes lo único
+  // que decidía si un proveedor era Régimen Simple era lo que la IA
+  // leyera de CADA documento (`invoices.regimen_simple`) -- si la IA se
+  // equivocaba, o la factura no lo mostraba claro, la retención podía
+  // calcularse mal sin que nadie se diera cuenta. Ahora el contador
+  // marca el perfil de ese NIT UNA vez y queda guardado -- eso manda
+  // sobre lo que diga la lectura automática de ahí en adelante (ver
+  // perfilFiscalEfectivo() en public/retenciones.js).
+  //
+  // "Gran Contribuyente" y "Agente de retención de IVA" se guardan
+  // como información -- se muestran como advertencia al contador, pero
+  // no fuerzan un cálculo solos, porque la regla de a quién le toca
+  // retener en esos casos es más matizada (depende de jerarquías de
+  // retención) y no queremos adivinar con plata. "Régimen Simple" y
+  // "Autorretenedor" sí fuerzan la retención en la fuente a $0, porque
+  // esa regla SÍ es inequívoca.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS terceros_fiscales (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      nit TEXT NOT NULL,
+      nombre TEXT NOT NULL DEFAULT '',
+      gran_contribuyente BOOLEAN NOT NULL DEFAULT false,
+      autorretenedor BOOLEAN NOT NULL DEFAULT false,
+      regimen_simple BOOLEAN NOT NULL DEFAULT false,
+      agente_retencion_iva BOOLEAN NOT NULL DEFAULT false,
+      notas TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (contador_id, nit)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_terceros_fiscales_contador ON terceros_fiscales (contador_id);`);
   // Plan del contador -- define cuántos clientes puede registrar.
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
@@ -1564,6 +1619,163 @@ app.post('/api/movimientos/:id/desconciliar', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error deshaciendo la conciliación:', err);
     res.status(500).json({ error: 'No se pudo deshacer.' });
+  }
+});
+
+// ---------- Plantillas de exportación ----------
+// El archivo real (.xlsx) se arma en el navegador con ExcelJS -- estos
+// endpoints solo guardan y devuelven la CONFIGURACIÓN de columnas que el
+// contador armó, para que la pueda reusar cada mes sin rehacerla.
+
+function validarColumnasPlantilla(columnas) {
+  return Array.isArray(columnas) && columnas.length > 0 && columnas.every(
+    (c) => c && typeof c.campo === 'string' && typeof c.encabezado === 'string'
+  );
+}
+
+app.get('/api/plantillas-exportacion', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, nombre, columnas, created_at, updated_at FROM plantillas_exportacion WHERE contador_id = $1 ORDER BY nombre ASC',
+      [req.userId]
+    );
+    res.json(rows.map((r) => ({ ...r, columnas: JSON.parse(r.columnas || '[]') })));
+  } catch (err) {
+    console.error('Error leyendo plantillas de exportación:', err);
+    res.status(500).json({ error: 'No se pudieron cargar las plantillas.' });
+  }
+});
+
+app.post('/api/plantillas-exportacion', requireAuth, async (req, res) => {
+  try {
+    const { nombre, columnas } = req.body;
+    if (!nombre || !nombre.trim()) return res.status(400).json({ error: 'Falta el nombre de la plantilla.' });
+    if (!validarColumnasPlantilla(columnas)) return res.status(400).json({ error: 'La plantilla necesita al menos una columna válida.' });
+
+    const id = crypto.randomUUID();
+    const { rows } = await pool.query(
+      `INSERT INTO plantillas_exportacion (id, contador_id, nombre, columnas)
+       VALUES ($1,$2,$3,$4) RETURNING id, nombre, columnas, created_at, updated_at`,
+      [id, req.userId, nombre.trim(), JSON.stringify(columnas)]
+    );
+    res.json({ ...rows[0], columnas: JSON.parse(rows[0].columnas) });
+  } catch (err) {
+    console.error('Error creando plantilla de exportación:', err);
+    res.status(500).json({ error: 'No se pudo guardar la plantilla.' });
+  }
+});
+
+app.put('/api/plantillas-exportacion/:id', requireAuth, async (req, res) => {
+  try {
+    const { nombre, columnas } = req.body;
+    if (!nombre || !nombre.trim()) return res.status(400).json({ error: 'Falta el nombre de la plantilla.' });
+    if (!validarColumnasPlantilla(columnas)) return res.status(400).json({ error: 'La plantilla necesita al menos una columna válida.' });
+
+    const { rows } = await pool.query(
+      `UPDATE plantillas_exportacion SET nombre = $1, columnas = $2, updated_at = now()
+       WHERE id = $3 AND contador_id = $4
+       RETURNING id, nombre, columnas, created_at, updated_at`,
+      [nombre.trim(), JSON.stringify(columnas), req.params.id, req.userId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Plantilla no encontrada.' });
+    res.json({ ...rows[0], columnas: JSON.parse(rows[0].columnas) });
+  } catch (err) {
+    console.error('Error actualizando plantilla de exportación:', err);
+    res.status(500).json({ error: 'No se pudo actualizar la plantilla.' });
+  }
+});
+
+app.delete('/api/plantillas-exportacion/:id', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      'DELETE FROM plantillas_exportacion WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Plantilla no encontrada.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando plantilla de exportación:', err);
+    res.status(500).json({ error: 'No se pudo eliminar la plantilla.' });
+  }
+});
+
+// ---------- Perfil fiscal del tercero (por NIT) ----------
+// Ver comentario junto a la tabla en ensureSchema(). El contador marca
+// esto UNA vez por NIT y de ahí en adelante manda sobre lo que la IA
+// lea en cada factura puntual de ese mismo NIT.
+function normalizarNit(nit) {
+  let s = String(nit || '').trim();
+  // Si viene con el dígito de verificación pegado al final con guion
+  // (ej. "901.128.185-3", formato común al copiar del RUT), se quita
+  // antes de limpiar el resto -- si no, el DV se cuela como si fuera
+  // parte del NIT y el mismo tercero termina con dos perfiles
+  // distintos (uno con DV, uno sin DV) que nunca se cruzan entre sí.
+  s = s.replace(/-\s*\d$/, '');
+  return s.replace(/[^0-9]/g, '');
+}
+
+app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, notas, updated_at
+       FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error leyendo terceros fiscales:', err);
+    res.status(500).json({ error: 'No se pudieron cargar los perfiles fiscales.' });
+  }
+});
+
+app.post('/api/terceros-fiscales', requireAuth, async (req, res) => {
+  try {
+    const nit = normalizarNit(req.body.nit);
+    if (!nit) return res.status(400).json({ error: 'Falta el NIT del tercero.' });
+    const nombre = String(req.body.nombre || '').trim();
+    const notas = String(req.body.notas || '').trim();
+    const granContribuyente = !!req.body.gran_contribuyente;
+    const autorretenedor = !!req.body.autorretenedor;
+    const regimenSimple = !!req.body.regimen_simple;
+    const agenteRetencionIva = !!req.body.agente_retencion_iva;
+
+    // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
+    // sentido guardar una fila vacía -- se borra en vez de guardar.
+    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !nombre && !notas) {
+      await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.userId, nit]);
+      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, notas: '', borrado: true });
+    }
+
+    const id = crypto.randomUUID();
+    const { rows } = await pool.query(
+      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, notas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (contador_id, nit) DO UPDATE SET
+         nombre = EXCLUDED.nombre, gran_contribuyente = EXCLUDED.gran_contribuyente,
+         autorretenedor = EXCLUDED.autorretenedor, regimen_simple = EXCLUDED.regimen_simple,
+         agente_retencion_iva = EXCLUDED.agente_retencion_iva, notas = EXCLUDED.notas, updated_at = now()
+       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, notas, updated_at`,
+      [id, req.userId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, notas]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error guardando perfil fiscal del tercero:', err);
+    res.status(500).json({ error: 'No se pudo guardar el perfil fiscal.' });
+  }
+});
+
+app.delete('/api/terceros-fiscales/:nit', requireAuth, async (req, res) => {
+  try {
+    const nit = normalizarNit(req.params.nit);
+    const { rowCount } = await pool.query(
+      'DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2',
+      [req.userId, nit]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'No había un perfil fiscal guardado para ese NIT.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando perfil fiscal del tercero:', err);
+    res.status(500).json({ error: 'No se pudo eliminar el perfil fiscal.' });
   }
 });
 

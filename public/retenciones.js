@@ -18,7 +18,9 @@
 // tarifa fija, sin importar si declara o no.
 // Umbrales vigentes desde el 1 jul 2026 -- el Consejo de Estado revocó
 // la suspensión del Decreto 572/2025 (exp. 30229), así que volvieron a
-// aplicar las bases originales del decreto.
+// aplicar las bases originales del decreto. Verificado contra tabla de
+// retención en la fuente 2026 (Gerencie.com, cruzado con Siigo/Alegra)
+// el 3 de sept de 2026.
 //
 // IMPORTANTE -- esto NO es asesoría tributaria: es una tabla que se
 // mantiene a mano según la norma vigente al momento de escribir esto.
@@ -35,20 +37,66 @@
 // tarifa depende de la norma; la cuenta depende del PUC -- son cosas
 // separadas. Rete IVA (cuenta 2367) y Rete ICA (cuenta 2368) están
 // aparte, en CUENTAS_PUC_FIJAS, porque no dependen de la categoría.
+//
+// `umbralUvt` -- la base mínima está fijada EN UVT por la norma, no en
+// pesos. Antes esta tabla tenía el peso ya calculado a mano (524000,
+// 105000...) y había que acordarse de recalcular TODOS esos números
+// cada vez que cambiaba la UVT (pasa cada enero, y a veces más --
+// 2026 tuvo cambios judiciales a mitad de año). Ahora el peso se
+// calcula solo, cruzando `umbralUvt` con el valor de UVT del AÑO DE LA
+// FACTURA (ver UVT_POR_ANIO más abajo) -- así una factura de 2025 usa
+// la UVT de 2025 y una de 2026 usa la de 2026, automáticamente.
 const TARIFAS_RETENCION = {
-  compras:                 { umbral: 524000, tarifaBaja: 0.025, tarifaAlta: 0.035, cuentaPUC: '236540', nombrePUC: 'Compras' },
-  compras_tarjeta:         { umbral: 0,      tarifaBaja: 0.015, tarifaAlta: 0.015, cuentaPUC: '236540', nombrePUC: 'Compras' },
-  servicios:                { umbral: 105000, tarifaBaja: 0.04,  tarifaAlta: 0.06,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
-  honorarios_juridica:      { umbral: 0,      tarifaBaja: 0.11,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios' },
-  honorarios_natural:       { umbral: 0,      tarifaBaja: 0.10,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios' },
-  arrendamiento_muebles:    { umbral: 0,      tarifaBaja: 0.04,  tarifaAlta: 0.04,  cuentaPUC: '236530', nombrePUC: 'Arrendamientos' },
-  arrendamiento_inmuebles:  { umbral: 524000, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236530', nombrePUC: 'Arrendamientos' },
-  transporte_carga:         { umbral: 105000, tarifaBaja: 0.01,  tarifaAlta: 0.01,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
-  transporte_pasajeros:     { umbral: 524000, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
-  licenciamiento_software:  { umbral: 0,      tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
-  vigilancia_aseo:          { umbral: 105000, tarifaBaja: 0.02,  tarifaAlta: 0.02,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
-  hoteles_restaurantes:     { umbral: 105000, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  compras:                 { umbralUvt: 10, tarifaBaja: 0.025, tarifaAlta: 0.035, cuentaPUC: '236540', nombrePUC: 'Compras' },
+  compras_tarjeta:         { umbralUvt: 0,  tarifaBaja: 0.015, tarifaAlta: 0.015, cuentaPUC: '236540', nombrePUC: 'Compras' },
+  servicios:                { umbralUvt: 2,  tarifaBaja: 0.04,  tarifaAlta: 0.06,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  honorarios_juridica:      { umbralUvt: 0,  tarifaBaja: 0.11,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios' },
+  honorarios_natural:       { umbralUvt: 0,  tarifaBaja: 0.10,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios' },
+  arrendamiento_muebles:    { umbralUvt: 0,  tarifaBaja: 0.04,  tarifaAlta: 0.04,  cuentaPUC: '236530', nombrePUC: 'Arrendamientos' },
+  arrendamiento_inmuebles:  { umbralUvt: 10, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236530', nombrePUC: 'Arrendamientos' },
+  transporte_carga:         { umbralUvt: 2,  tarifaBaja: 0.01,  tarifaAlta: 0.01,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  transporte_pasajeros:     { umbralUvt: 10, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  licenciamiento_software:  { umbralUvt: 0,  tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  vigilancia_aseo:          { umbralUvt: 2,  tarifaBaja: 0.02,  tarifaAlta: 0.02,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  hoteles_restaurantes:     { umbralUvt: 2,  tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
 };
+
+// ---------- UVT (Unidad de Valor Tributario) por año ----------
+//
+// Valores oficiales publicados por la DIAN. Se agrega una fila nueva
+// cada enero cuando la DIAN publica el valor del año -- es el ÚNICO
+// número que hay que actualizar; todos los umbrales de arriba se
+// recalculan solos a partir de esto.
+//   2025: Resolución DIAN, $49.799 (confirmado, aumento 5.81% vs 2024)
+//   2026: Resolución DIAN, $52.374 (confirmado)
+const UVT_POR_ANIO = {
+  2025: 49799,
+  2026: 52374,
+};
+// Año más reciente conocido -- se usa como respaldo para facturas de
+// años aún no agregados a la tabla (ej. si ya estamos en un año nuevo
+// y todavía no se agrega la fila). Mejor una UVT un poco desactualizada
+// que un umbral de $0 que fuerce a calcular retención sobre cualquier
+// centavo.
+const UVT_ANIO_MAS_RECIENTE = 2026;
+
+function valorUvt(anio) {
+  if (UVT_POR_ANIO[anio] != null) return UVT_POR_ANIO[anio];
+  return UVT_POR_ANIO[UVT_ANIO_MAS_RECIENTE];
+}
+
+// La fecha de factura en esta app siempre viene como texto DD/MM/AAAA.
+function anioDeFechaFactura(fechaFactura) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(fechaFactura || '').trim());
+  if (m) return Number(m[3]);
+  return UVT_ANIO_MAS_RECIENTE;
+}
+
+// Umbral en pesos para una categoría, según la fecha de la factura.
+function umbralPesos(configBase, fechaFactura) {
+  const anio = anioDeFechaFactura(fechaFactura);
+  return Math.round((configBase.umbralUvt || 0) * valorUvt(anio));
+}
 
 // Cuentas PUC fijas para Rete IVA y Rete ICA -- no dependen de la
 // categoría del concepto de la factura, así que viven aparte.
@@ -142,25 +190,54 @@ const SUBCUENTAS_GASTO = {
 };
 
 
+// ---------- Perfil fiscal del tercero (persistido, por NIT) ----------
+//
+// Antes lo ÚNICO que decidía si un proveedor era Régimen Simple era lo
+// que la IA leyera de ESE documento puntual (`inv.regimen_simple`) --
+// si la IA se equivocaba en la lectura, o el proveedor no lo declaraba
+// visible en esa factura, la retención se calculaba mal sin que nadie
+// se diera cuenta. Ahora, si el contador ya marcó el perfil fiscal de
+// ese NIT una vez (ficha de terceros), ESO manda -- sin importar lo
+// que la lectura automática sugiera en la factura de turno.
+//
+// `perfilTercero` es lo que devuelve GET /api/terceros-fiscales para
+// ese NIT: { gran_contribuyente, autorretenedor, regimen_simple,
+// agente_retencion_iva } -- o null/undefined si el contador nunca
+// marcó nada para ese NIT (en ese caso, se cae de vuelta a lo que la
+// IA leyó en el documento, como antes).
+function perfilFiscalEfectivo(inv, perfilTercero) {
+  const regimenSimple = !!(perfilTercero && perfilTercero.regimen_simple) ||
+    inv.regimen_simple === true || inv.regimen_simple === 'true';
+  const autorretenedor = !!(perfilTercero && perfilTercero.autorretenedor);
+  return { regimenSimple, autorretenedor };
+}
+
 // Calcula la retención en la fuente SUGERIDA (estimada -- no oficial, no
 // leída del documento) para una factura, cruzando la categoría del
-// concepto, si el cliente es agente retenedor, y si el proveedor es
-// Régimen Simple. Si la factura mezcla categorías (ej. productos + mano
-// de obra en una misma factura), usa el desglose guardado y calcula
-// cada parte por separado contra su propio umbral y tarifa, en vez de
-// tratar todo el subtotal como una sola categoría.
+// concepto, si el cliente es agente retenedor, y el perfil fiscal del
+// proveedor (Régimen Simple / Autorretenedor). Si la factura mezcla
+// categorías (ej. productos + mano de obra en una misma factura), usa
+// el desglose guardado y calcula cada parte por separado contra su
+// propio umbral y tarifa, en vez de tratar todo el subtotal como una
+// sola categoría.
 //
 // `cliente` necesita al menos `{ agente_retenedor }`.
 // `tarifasAprendidas` es un objeto { "NIT|categoria": tarifaExacta } --
 // si ya se confirmó la tarifa real de un proveedor antes, se usa esa en
 // vez de un rango. Pasa {} (o nada) si no la tienes disponible.
+// `perfilTercero` -- ver perfilFiscalEfectivo() arriba. Opcional, pasa
+// null/undefined si no se cargó (se comporta como antes: solo mira
+// inv.regimen_simple).
 //
 // Devuelve null cuando no se puede/debe calcular nada, o
 // { bajo, alto, mismaTarifa } en pesos colombianos (COP).
-function calcularRetencionSugerida(inv, cliente, tarifasAprendidas){
+function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero){
   tarifasAprendidas = tarifasAprendidas || {};
   if (!cliente || !cliente.agente_retenedor) return null; // nunca le corresponde retener
-  if (inv.regimen_simple === true || inv.regimen_simple === 'true') return null; // Régimen Simple -- Rete Fuente no aplica
+
+  const perfil = perfilFiscalEfectivo(inv, perfilTercero);
+  if (perfil.regimenSimple) return null; // Régimen Simple -- Rete Fuente no aplica
+  if (perfil.autorretenedor) return null; // el proveedor se autorretiene -- el comprador no debe practicar retención ordinaria
 
   function tarifaParaProveedor(categoria, nitProveedor, config) {
     const aprendida = tarifasAprendidas[`${nitProveedor}|${categoria}`];
@@ -183,7 +260,7 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas){
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
       const configBase = TARIFAS_RETENCION[String(categoriaParte).toLowerCase()];
       const subtotalParte = Number(montoParte) || 0;
-      if (!configBase || subtotalParte < configBase.umbral) continue; // esta parte no aplica, se omite
+      if (!configBase || subtotalParte < umbralPesos(configBase, inv.fecha_factura)) continue; // esta parte no aplica, se omite
       const config = tarifaParaProveedor(categoriaParte, inv.nit_cc || '', configBase);
       bajoTotal += Math.round(subtotalParte * config.tarifaBaja);
       altoTotal += Math.round(subtotalParte * config.tarifaAlta);
@@ -204,7 +281,7 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas){
   if (!configBase) return null; // "otro" -- tarifa no confirmada, no adivinamos
 
   const subtotal = Number(inv.valor_sin_iva) || 0;
-  if (subtotal < configBase.umbral) return null; // bajo el umbral, no aplica
+  if (subtotal < umbralPesos(configBase, inv.fecha_factura)) return null; // bajo el umbral, no aplica
 
   const config = tarifaParaProveedor(categoria, inv.nit_cc || '', configBase);
   const bajo = Math.round(subtotal * config.tarifaBaja);
@@ -233,6 +310,15 @@ const RETEIVA_TARIFA_GENERAL = 0.15;
 // Calcula el ReteIVA sugerido para una factura -- devuelve el monto
 // en pesos, o null si no aplica (cliente no es agente retenedor, no
 // hay IVA, o el subtotal no supera el umbral de su categoría).
+//
+// OJO -- a propósito NO se exime aquí por Régimen Simple ni por
+// Autorretenedor: esos dos solo eximen de Rete Fuente (renta) y de
+// ICA -- un proveedor de Régimen Simple responsable de IVA SÍ puede
+// tener ReteIVA practicado sobre sus ventas (verificado: la exención
+// del RST aplica a renta e ICA, no a IVA). Mezclar esa regla aquí
+// sería inventar una exención que la norma no da -- por eso
+// `calcularRetencionSugerida()` sí revisa el perfil fiscal y esta
+// función no.
 function calcularReteIvaSugerido(inv, cliente){
   if (!cliente || !cliente.agente_retenedor) return null;
 
@@ -246,7 +332,7 @@ function calcularReteIvaSugerido(inv, cliente){
   if (!config) return null;
 
   const subtotal = Number(inv.valor_sin_iva) || 0;
-  if (subtotal < config.umbral) return null;
+  if (subtotal < umbralPesos(config, inv.fecha_factura)) return null;
 
   return Math.round(ivaValor * RETEIVA_TARIFA_GENERAL);
 }
