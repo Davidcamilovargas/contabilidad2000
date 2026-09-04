@@ -1270,6 +1270,97 @@ async function llamarGeminiJSON(base64, effectiveMediaType, prompt) {
   }
 }
 
+// Misma idea que llamarGeminiJSON, pero para una conversación de texto
+// simple (sin archivo adjunto, sin esperar JSON de vuelta) -- la usa el
+// chatbot de soporte. `historial` es un arreglo de { rol: 'usuario'|'bot',
+// texto } para que la IA tenga contexto de los últimos mensajes.
+async function llamarGeminiChat(systemPrompt, historial, mensajeNuevo) {
+  const contents = [];
+  (historial || []).slice(-8).forEach((turno) => {
+    contents.push({
+      role: turno.rol === 'bot' ? 'model' : 'user',
+      parts: [{ text: turno.texto }],
+    });
+  });
+  contents.push({ role: 'user', parts: [{ text: mensajeNuevo }] });
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('Error de Gemini API (chat):', response.status, errText);
+    const err = new Error(errText);
+    err.status = response.status;
+    err.publicMessage = 'No se pudo conectar con el asistente en este momento. Intenta de nuevo en un momento.';
+    throw err;
+  }
+
+  const data = await response.json();
+  const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!textOut) {
+    const err = new Error('Gemini no devolvió texto.');
+    err.status = 500;
+    err.publicMessage = 'El asistente no pudo generar una respuesta. Intenta reformular la pregunta.';
+    throw err;
+  }
+  return textOut.trim();
+}
+
+const SOPORTE_CHAT_PROMPT = `Eres el asistente de soporte de Kárdex IA, una aplicación colombiana para contadores independientes que escanea facturas y cuentas de cobro con IA, calcula retenciones, y organiza la contabilidad de sus clientes.
+
+Tu trabajo es ser la PRIMERA capa de soporte -- responder dudas rápidas sobre cómo usar la aplicación, y explicar mensajes de error comunes -- ANTES de que el contador tenga que escribirle a soporte humano.
+
+CÓMO ESTÁ ORGANIZADA LA APLICACIÓN (para que sepas de qué hablar):
+- Lobby (inicio): lista de clientes del contador, con sus estadísticas básicas. Al elegir uno, todo lo demás queda filtrado a ese cliente.
+- Escanear: subir o fotografiar una factura o cuenta de cobro para que la IA la lea.
+- Facturas: historial de todo lo guardado, organizado por mes, con filtros.
+- Kárdex: historial y saldo acumulado por proveedor.
+- Clientes: donde se registran las empresas que atiende el contador (no los proveedores).
+- Carga masiva: subir varias facturas de una vez (incluye .zip).
+- Ingresos / Egresos / Balance: estadísticas y gráficas.
+- Cartera: conciliación bancaria -- sube el extracto del banco y el sistema sugiere qué pagos corresponden a qué facturas pendientes.
+- Integraciones: conexión con software contable externo (por ahora, Alegra).
+
+ERRORES COMUNES Y QUÉ SIGNIFICAN:
+- "Error 403" o "No se pudo verificar la sesión": la sesión expiró, o se perdió la cookie de inicio de sesión. Solución: cerrar sesión y volver a entrar con Google.
+- "Este archivo no parece ser una factura de venta ni una cuenta de cobro": el sistema solo procesa esos 2 tipos de documento a propósito -- cualquier otro (extractos, comprobantes de pago, cotizaciones) se rechaza automáticamente, no es un error del sistema.
+- Un aviso amarillo de "posible error de digitación": el sistema comparó el valor de retención escrito contra las tarifas típicas y no coincide -- vale la pena revisar el documento original.
+- "No se pudieron leer las facturas" o error 500: normalmente es un problema temporal de conexión -- sugiere recargar la página o intentar en un momento.
+
+REGLAS IMPORTANTES QUE SIEMPRE DEBES SEGUIR:
+1. Responde siempre en español, con un tono cercano y claro -- como el resto de la aplicación (nunca uses jerga técnica sin explicarla).
+2. Responde corto -- 2 a 4 frases normalmente, no un ensayo. El contador está buscando ayuda rápida, no un documento.
+3. NUNCA das asesoría tributaria específica (no calcules ni confirmes si a un cliente le corresponde una retención particular, ni interpretes normas). Para eso, remite a que confirme con su propio criterio profesional o su contador -- tú solo explicas CÓMO FUNCIONA la aplicación, no qué dice la ley en su caso.
+4. Si la pregunta es sobre algo que de verdad no puedes resolver (un bug real, algo que suena a error del servidor, o algo muy específico de su cuenta), dilo con honestidad y sugiere contactar soporte humano -- no inventes una solución.
+5. Nunca inventes funciones que la aplicación no tiene.`;
+
+app.post('/api/soporte-chat', requireAuth, async (req, res) => {
+  const { mensaje, historial } = req.body;
+  if (!mensaje || typeof mensaje !== 'string' || !mensaje.trim()) {
+    return res.status(400).json({ error: 'Escribe una pregunta antes de enviar.' });
+  }
+  if (mensaje.length > 1000) {
+    return res.status(400).json({ error: 'El mensaje es demasiado largo -- intenta resumirlo.' });
+  }
+  try {
+    const respuesta = await llamarGeminiChat(SOPORTE_CHAT_PROMPT, historial, mensaje.trim());
+    res.json({ respuesta });
+  } catch (err) {
+    console.error('Error en chat de soporte:', err);
+    res.status(err.status || 500).json({ error: err.publicMessage || 'No se pudo responder en este momento.' });
+  }
+});
+
 const INVOICE_PROMPT = `Eres un asistente contable colombiano. Antes de extraer ningún dato, tu PRIMERA tarea es identificar qué tipo de documento es la imagen o archivo que recibiste, porque Kárdex IA SOLO debe procesar los dos únicos documentos que se pueden causar contablemente en Colombia: la factura de venta y la cuenta de cobro. Cualquier otro tipo de documento debe rechazarse, aunque tenga valores y NIT parecidos a una factura.
 
 CÓMO IDENTIFICAR CADA TIPO (usa estas señales, no solo el título del documento):
