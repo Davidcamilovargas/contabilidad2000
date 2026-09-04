@@ -64,6 +64,17 @@
     cursor:pointer; white-space:nowrap; transition:background .15s ease;
   }
   .btn-reintentar:hover{ background:#FBE4DE; }
+  .btn-eliminar{
+    background:none; border:1px solid #C9C4B4; border-radius:6px; color:#4E5A52;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:5px 10px; margin-left:8px;
+    cursor:pointer; white-space:nowrap; transition:background .15s ease;
+  }
+  .btn-eliminar:hover{ background:#EFEBDD; }
+  .btn-eliminar-icono{
+    background:none; border:none; color:#8A9289; font-size:13px; padding:2px 5px;
+    margin-left:8px; cursor:pointer; border-radius:4px; vertical-align:middle;
+  }
+  .btn-eliminar-icono:hover{ background:#FBE4DE; color:#B0402D; }
   .btn-ver:hover{ border-color:var(--ember); color:var(--ember-deep); }
 
   /* El modal de Carga masiva es más ancho que el de Escanear -- muestra
@@ -1009,12 +1020,37 @@ async function extraerFactura(file, forzar){
   const data = contentType.includes('application/json') ? await res.json() : null;
 
   if (!res.ok) {
-    throw new Error((data && data.error) || `No se pudo leer este archivo (error ${res.status}).`);
+    const err = new Error((data && data.error) || `No se pudo leer este archivo (error ${res.status}).`);
+    err.status = res.status; // 422 = la IA sí lo leyó y lo rechazó a propósito (no reintentar solo)
+    throw err;
   }
   if (!data) {
-    throw new Error('El servidor no respondió correctamente -- revisa que esté actualizado y corriendo.');
+    const err = new Error('El servidor no respondió correctamente -- revisa que esté actualizado y corriendo.');
+    err.status = 0; // sin respuesta clara del servidor -- se trata como falla técnica, sí se reintenta
+    throw err;
   }
   return data;
+}
+
+// Reintenta automáticamente SOLO cuando el error parece técnico (sin
+// conexión, el servidor tardó, un 500/503 momentáneo) -- nunca cuando
+// la IA sí leyó el documento y lo rechazó a propósito (422, ej. es una
+// póliza de seguro, no una factura): eso no cambia por reintentar, es
+// la respuesta correcta, y solo gastaría lecturas de IA de más.
+async function extraerConReintentoAutomatico(file, forzar){
+  const MAX_INTENTOS = 3;
+  const ESPERA_MS = 1500;
+  let ultimoError;
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      return await extraerFactura(file, forzar);
+    } catch (err) {
+      ultimoError = err;
+      if (err.status === 422) throw err; // rechazo real de la IA -- no tiene sentido reintentar
+      if (intento < MAX_INTENTOS) await new Promise((r) => setTimeout(r, ESPERA_MS));
+    }
+  }
+  throw ultimoError;
 }
 
 // Misma lógica de detección que en Escanear -- comparar el NIT contra
@@ -1054,7 +1090,7 @@ async function procesarLote(files){
 
     const item = lote[i];
     try {
-      const data = await extraerFactura(item.file);
+      const data = await extraerConReintentoAutomatico(item.file);
       item.data = data;
 
       // Este mismo archivo ya se había leído y guardado antes -- no se
@@ -1104,7 +1140,7 @@ async function reintentarItem(idx, forzar){
   renderSummary();
 
   try {
-    const data = await extraerFactura(item.file, forzar);
+    const data = await extraerConReintentoAutomatico(item.file, forzar);
     item.data = data;
 
     if (data.duplicado) {
@@ -1152,6 +1188,7 @@ function renderSummary(){
         <td colspan="5" style="color:#B0402D;">
           ${escapeHtml(item.errorMsg || 'No se pudo procesar')}
           <button type="button" class="btn-reintentar" data-role="reintentar" data-idx="${idx}">🔄 Reintentar</button>
+          <button type="button" class="btn-eliminar" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑 Eliminar</button>
         </td>
         <td><span class="status-badge error">✕ Error</span></td>
       `;
@@ -1171,7 +1208,10 @@ function renderSummary(){
           Ya está guardado como <b>${escapeHtml(nombre)}</b>${numero ? ` (factura ${escapeHtml(numero)})` : ''} — ${valor}. No se volvió a leer con IA.
           <button type="button" class="btn-forzar-lectura" data-role="forzar-lectura" data-idx="${idx}">Leer de todas formas</button>
         </td>
-        <td><span class="status-badge duplicado">📋 Ya existe</span></td>
+        <td>
+          <span class="status-badge duplicado">📋 Ya existe</span>
+          <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
+        </td>
       `;
       summaryBody.appendChild(tr);
       return;
@@ -1226,7 +1266,10 @@ function renderSummary(){
       <td><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></td>
       <td><select data-idx="${idx}" data-role="subcuenta" style="min-width:170px;">${subcuentaOpts}</select></td>
       <td>${movimientoHtml}</td>
-      <td><span class="status-badge ${item.estado}">${item.estado === 'listo' ? '✓ Listo' : '⚠ Revisar'}</span></td>
+      <td>
+        <span class="status-badge ${item.estado}">${item.estado === 'listo' ? '✓ Listo' : '⚠ Revisar'}</span>
+        <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
+      </td>
     `;
     summaryBody.appendChild(tr);
   });
@@ -1293,6 +1336,18 @@ summaryBody.addEventListener('click', (e) => {
   if (btnForzar) {
     const idx = Number(btnForzar.dataset.idx);
     if (!isNaN(idx)) reintentarItem(idx, true);
+    return;
+  }
+
+  const btnEliminar = e.target.closest('[data-role="eliminar"]');
+  if (btnEliminar) {
+    const idx = Number(btnEliminar.dataset.idx);
+    if (isNaN(idx)) return;
+    // Se quita del lote sin preguntar -- el contador ya lo está viendo
+    // en pantalla antes de guardar, no hace falta un segundo aviso
+    // para algo que todavía no se guardó en ningún lado.
+    lote.splice(idx, 1);
+    renderSummary();
   }
 });
 

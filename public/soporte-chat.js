@@ -10,55 +10,85 @@
 (function () {
   const ESTILOS = `
     #soporteChatBtn{
-      position:fixed; bottom:24px; right:24px; z-index:9999;
-      width:56px; height:56px; border-radius:50%; border:none;
-      background:#FF5A36; color:#fff; font-size:24px; cursor:pointer;
-      box-shadow:0 12px 28px -8px rgba(0,0,0,0.5);
-      display:flex; align-items:center; justify-content:center;
+      position:fixed; bottom:22px; right:22px; z-index:9999;
+      display:flex; align-items:center; gap:7px;
+      height:42px; padding:0 16px 0 12px; border-radius:100px; border:none;
+      background:#FF5A36; color:#fff; cursor:pointer;
+      box-shadow:0 12px 26px -8px rgba(0,0,0,0.5);
+      font-family:'Inter', -apple-system, sans-serif; font-size:13px; font-weight:700;
       transition:transform .15s cubic-bezier(0.16,1,0.3,1);
     }
-    #soporteChatBtn:hover{ transform:scale(1.06); }
+    #soporteChatBtn:hover{ transform:scale(1.04); }
+    #soporteChatBtn svg{ width:18px; height:18px; flex-shrink:0; }
     #soporteChatPanel{
-      position:fixed; bottom:90px; right:24px; z-index:9999;
-      width:340px; max-width:calc(100vw - 32px); height:460px; max-height:70vh;
-      background:#171E20; border:1px solid #2B3436; border-radius:14px;
-      box-shadow:0 30px 60px -20px rgba(0,0,0,0.65);
+      position:fixed; bottom:76px; right:22px; z-index:9999;
+      width:320px; max-width:calc(100vw - 32px); height:420px; max-height:66vh;
+      background:#fff; border-radius:16px;
+      box-shadow:0 30px 60px -16px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.06);
       display:none; flex-direction:column; overflow:hidden;
       font-family:'Inter', -apple-system, sans-serif;
     }
     #soporteChatPanel.show{ display:flex; }
     #soporteChatHeader{
-      background:#0E1315; padding:14px 16px; display:flex; align-items:center;
-      justify-content:space-between; border-bottom:1px solid #2B3436;
+      background:#0E1315; padding:12px 14px; display:flex; align-items:center; gap:9px;
+      flex-shrink:0;
     }
-    #soporteChatHeader .titulo{ font-family:'Archivo',sans-serif; font-weight:800; font-size:14px; color:#fff; }
-    #soporteChatHeader .subtitulo{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:rgba(255,255,255,0.5); margin-top:2px; }
-    #soporteChatCerrar{ background:none; border:none; color:rgba(255,255,255,0.6); font-size:18px; cursor:pointer; padding:0 4px; }
+    #soporteChatHeader svg{ width:20px; height:20px; flex-shrink:0; }
+    #soporteChatHeader .titulos{ flex:1; min-width:0; }
+    #soporteChatHeader .titulo{ font-family:'Archivo',sans-serif; font-weight:800; font-size:13px; color:#fff; line-height:1.2; }
+    #soporteChatHeader .subtitulo{ font-family:'JetBrains Mono',monospace; font-size:9.5px; color:rgba(255,255,255,0.5); }
+    #soporteChatCerrar{ background:none; border:none; color:rgba(255,255,255,0.6); font-size:16px; cursor:pointer; padding:2px 4px; line-height:1; }
+    #soporteChatCerrar:hover{ color:#fff; }
+
+    #soporteChatBienvenida{
+      flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      padding:20px 18px; text-align:center; gap:14px; overflow-y:auto;
+    }
+    #soporteChatBienvenida h3{ font-family:'Archivo',sans-serif; font-size:16px; margin:0; color:#1B2420; }
+    .sc-sugerencias{ display:flex; flex-direction:column; gap:7px; width:100%; }
+    .sc-sugerencia{
+      background:#F6F4EC; border:1px solid #E4E0D3; border-radius:10px;
+      padding:9px 12px; font-size:12px; color:#1B2420; text-align:left;
+      cursor:pointer; transition:background .12s;
+    }
+    .sc-sugerencia:hover{ background:#EFEBDD; }
+
     #soporteChatMensajes{
-      flex:1; overflow-y:auto; padding:14px 14px 6px; display:flex; flex-direction:column; gap:10px;
+      flex:1; overflow-y:auto; padding:14px 14px 6px; display:none; flex-direction:column; gap:9px;
     }
-    .sc-msg{ max-width:85%; padding:9px 12px; border-radius:12px; font-size:13px; line-height:1.4; }
-    .sc-msg.bot{ background:#232C2E; color:#fff; align-self:flex-start; border-bottom-left-radius:3px; }
+    #soporteChatMensajes.show{ display:flex; }
+    .sc-msg{ max-width:85%; padding:8px 11px; border-radius:11px; font-size:12.5px; line-height:1.4; }
+    .sc-msg.bot{ background:#F6F4EC; color:#1B2420; align-self:flex-start; border-bottom-left-radius:3px; }
     .sc-msg.usuario{ background:#FF5A36; color:#fff; align-self:flex-end; border-bottom-right-radius:3px; }
-    .sc-msg.error{ background:#3A2420; color:#FFB4A0; align-self:flex-start; border-bottom-left-radius:3px; }
-    .sc-typing{ align-self:flex-start; font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.4); padding:0 4px; }
-    #soporteChatForm{ display:flex; gap:8px; padding:12px; border-top:1px solid #2B3436; }
+    .sc-msg.error{ background:#FBE4DE; color:#B0402D; align-self:flex-start; border-bottom-left-radius:3px; }
+    .sc-typing{ align-self:flex-start; font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#8A9289; padding:0 4px; }
+
+    #soporteChatForm{
+      display:flex; align-items:center; gap:8px; padding:12px 14px; flex-shrink:0;
+      border-top:1px solid #EEEBE0;
+    }
     #soporteChatInput{
-      flex:1; background:#0E1315; border:1px solid #2B3436; border-radius:8px; color:#fff;
-      padding:9px 11px; font-size:13px; font-family:inherit; resize:none;
+      flex:1; background:#F6F4EC; border:1px solid #E4E0D3; border-radius:100px; color:#1B2420;
+      padding:9px 14px; font-size:12.5px; font-family:inherit; resize:none; max-height:70px;
     }
     #soporteChatInput:focus{ outline:none; border-color:#FF5A36; }
     #soporteChatEnviar{
-      background:#FF5A36; color:#fff; border:none; border-radius:8px; padding:0 14px;
-      font-size:13px; font-weight:600; cursor:pointer;
+      flex-shrink:0; width:32px; height:32px; border-radius:50%; background:#FF5A36; color:#fff;
+      border:none; cursor:pointer; display:flex; align-items:center; justify-content:center;
     }
     #soporteChatEnviar:disabled{ opacity:.5; cursor:default; }
+    #soporteChatEnviar svg{ width:15px; height:15px; }
   `;
 
-  function escapeHtml(str) {
-    if (str === null || str === undefined) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
+  const ICONO_BOT = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C10.9 2 10 2.9 10 4C10 4.7 10.4 5.4 11 5.7V7H7C5.3 7 4 8.3 4 10V17C4 18.7 5.3 20 7 20H17C18.7 20 20 18.7 20 17V10C20 8.3 18.7 7 17 7H13V5.7C13.6 5.4 14 4.7 14 4C14 2.9 13.1 2 12 2ZM7 9H17C17.6 9 18 9.4 18 10V17C18 17.6 17.6 18 17 18H7C6.4 18 6 17.6 6 17V10C6 9.4 6.4 9 7 9ZM8.5 11.5C7.7 11.5 7 12.2 7 13C7 13.8 7.7 14.5 8.5 14.5C9.3 14.5 10 13.8 10 13C10 12.2 9.3 11.5 8.5 11.5ZM15.5 11.5C14.7 11.5 14 12.2 14 13C14 13.8 14.7 14.5 15.5 14.5C16.3 14.5 17 13.8 17 13C17 12.2 16.3 11.5 15.5 11.5Z" fill="currentColor"/></svg>`;
+  const ICONO_ENVIAR = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 11L21 3L13 21L11 13L3 11Z" fill="currentColor"/></svg>`;
+
+  const SUGERENCIAS = [
+    '¿Qué significa el error 403?',
+    '¿Cómo subo varias facturas a la vez?',
+    '¿Qué es la conciliación de Cartera?',
+    '¿Cómo conecto con Alegra?',
+  ];
 
   const styleEl = document.createElement('style');
   styleEl.textContent = ESTILOS;
@@ -68,27 +98,35 @@
   btn.id = 'soporteChatBtn';
   btn.type = 'button';
   btn.title = 'Ayuda de Kárdex IA';
-  btn.textContent = '💬';
+  btn.innerHTML = ICONO_BOT + '<span>Ayuda</span>';
   document.body.appendChild(btn);
 
   const panel = document.createElement('div');
   panel.id = 'soporteChatPanel';
   panel.innerHTML = `
     <div id="soporteChatHeader">
-      <div>
+      ${ICONO_BOT.replace('fill="currentColor"', 'fill="#FF5A36"')}
+      <div class="titulos">
         <div class="titulo">Asistente Kárdex IA</div>
-        <div class="subtitulo">Primera ayuda -- no es asesoría tributaria</div>
+        <div class="subtitulo">No es asesoría tributaria</div>
       </div>
       <button id="soporteChatCerrar" type="button" title="Cerrar">✕</button>
+    </div>
+    <div id="soporteChatBienvenida">
+      <h3>¿En qué puedo ayudarte hoy?</h3>
+      <div class="sc-sugerencias">
+        ${SUGERENCIAS.map((s) => `<button type="button" class="sc-sugerencia">${s}</button>`).join('')}
+      </div>
     </div>
     <div id="soporteChatMensajes"></div>
     <form id="soporteChatForm">
       <textarea id="soporteChatInput" rows="1" placeholder="Escribe tu pregunta..." maxlength="1000"></textarea>
-      <button id="soporteChatEnviar" type="submit">Enviar</button>
+      <button id="soporteChatEnviar" type="submit">${ICONO_ENVIAR}</button>
     </form>
   `;
   document.body.appendChild(panel);
 
+  const bienvenidaEl = document.getElementById('soporteChatBienvenida');
   const mensajesEl = document.getElementById('soporteChatMensajes');
   const formEl = document.getElementById('soporteChatForm');
   const inputEl = document.getElementById('soporteChatInput');
@@ -96,7 +134,11 @@
 
   let historial = []; // { rol: 'usuario'|'bot', texto }
   let abierto = false;
-  let yaSaludo = false;
+
+  function mostrarVistaConversacion() {
+    bienvenidaEl.style.display = 'none';
+    mensajesEl.classList.add('show');
+  }
 
   function agregarMensaje(texto, tipo) {
     const div = document.createElement('div');
@@ -110,10 +152,6 @@
   function abrirPanel() {
     panel.classList.add('show');
     abierto = true;
-    if (!yaSaludo) {
-      agregarMensaje('¡Hola! Soy el asistente de Kárdex IA. Pregúntame si algo no te queda claro -- por ejemplo, qué significa un error, o cómo funciona alguna parte de la app.', 'bot');
-      yaSaludo = true;
-    }
     inputEl.focus();
   }
   function cerrarPanel() {
@@ -123,6 +161,13 @@
 
   btn.addEventListener('click', () => (abierto ? cerrarPanel() : abrirPanel()));
   document.getElementById('soporteChatCerrar').addEventListener('click', cerrarPanel);
+
+  document.querySelectorAll('.sc-sugerencia').forEach((el) => {
+    el.addEventListener('click', () => {
+      inputEl.value = el.textContent;
+      formEl.requestSubmit();
+    });
+  });
 
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -136,6 +181,7 @@
     const mensaje = inputEl.value.trim();
     if (!mensaje) return;
 
+    mostrarVistaConversacion();
     agregarMensaje(mensaje, 'usuario');
     historial.push({ rol: 'usuario', texto: mensaje });
     inputEl.value = '';

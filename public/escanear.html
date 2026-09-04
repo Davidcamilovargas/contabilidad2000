@@ -1077,6 +1077,58 @@ function detenerContadorLectura(){
   if (contadorLecturaInterval) { clearInterval(contadorLecturaInterval); contadorLecturaInterval = null; }
 }
 
+// Llama a /api/extract una sola vez -- separada de extractInvoice()
+// para poder envolverla con reintento automático sin duplicar la
+// lógica de fetch/parseo.
+async function llamarApiExtractUnaVez(forzar){
+  const response = await fetch('/api/extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      base64: currentBase64,
+      mediaType: currentMediaType,
+      isPdf: currentIsPdf,
+      forzar: !!forzar
+    })
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const err = new Error('El servidor no respondió correctamente (puede que la app estuviera "despertando"). Espera unos segundos y vuelve a intentar.');
+    err.status = 0;
+    throw err;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    const err = new Error(data.error || ('Error del servidor (' + response.status + ')'));
+    err.status = response.status; // 422 = la IA sí lo leyó y lo rechazó a propósito
+    throw err;
+  }
+  return data;
+}
+
+// Reintenta sola SOLO cuando el error parece técnico (sin conexión, el
+// servidor tardó, un 500/503 momentáneo) -- nunca cuando la IA sí leyó
+// el documento y lo rechazó a propósito (422, ej. no es una factura ni
+// una cuenta de cobro): eso no cambia por reintentar, es la respuesta
+// correcta. Mismo criterio que en Carga masiva.
+async function llamarApiExtractConReintento(forzar){
+  const MAX_INTENTOS = 3;
+  const ESPERA_MS = 1500;
+  let ultimoError;
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      return await llamarApiExtractUnaVez(forzar);
+    } catch (err) {
+      ultimoError = err;
+      if (err.status === 422) throw err;
+      if (intento < MAX_INTENTOS) await new Promise((r) => setTimeout(r, ESPERA_MS));
+    }
+  }
+  throw ultimoError;
+}
+
 async function extractInvoice(forzar){
   if(!currentBase64) return;
   errEl.classList.remove('show');
@@ -1090,27 +1142,7 @@ async function extractInvoice(forzar){
   iniciarContadorLectura();
 
   try{
-    const response = await fetch('/api/extract', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        base64: currentBase64,
-        mediaType: currentMediaType,
-        isPdf: currentIsPdf,
-        forzar: !!forzar
-      })
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      throw new Error('El servidor no respondió correctamente (puede que la app estuviera "despertando"). Espera unos segundos y vuelve a intentar.');
-    }
-
-    const data = await response.json();
-
-    if(!response.ok){
-      throw new Error(data.error || ('Error del servidor (' + response.status + ')'));
-    }
+    const data = await llamarApiExtractConReintento(forzar);
 
     if (data.duplicado) {
       currentFileHash = data.file_hash || '';
