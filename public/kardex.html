@@ -189,6 +189,7 @@
       <a href="#" id="ctbEscanear">Escanear</a>
       <a href="#" id="ctbMasivo">Carga masiva</a>
       <a href="#" id="ctbCartera">Cartera</a>
+      <a href="#" id="ctbAuditoria">Auditoría</a>
     </span>
     <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
   </div>
@@ -301,6 +302,7 @@ function aplicarClientTabbar(clienteId){
   document.getElementById('ctbEscanear').href = '/escanear.html' + qs;
   document.getElementById('ctbMasivo').href = '/masivo.html' + qs;
   document.getElementById('ctbCartera').href = '/cartera.html' + qs;
+  document.getElementById('ctbAuditoria').href = '/informe-auditoria.html' + qs;
   document.getElementById('ctbKardex').classList.add('active');
   document.getElementById('clientTabbar').style.display = 'flex';
 }
@@ -495,5 +497,6 @@ requireAuthAndInit();
 
 </script>
 <script src="/soporte-chat.js"></script>
+<script src="/lote-aviso.js"></script>
 </body>
 </html>

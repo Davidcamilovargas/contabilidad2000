@@ -8,6 +8,7 @@ const { OAuth2Client } = require('google-auth-library');
 const { Pool } = require('pg');
 const integraciones = require('./integraciones');
 const cartera = require('./cartera');
+const lotes = require('./public/lotes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -130,6 +131,14 @@ async function ensureSchema() {
   // misma factura) -- se guarda como texto JSON, ej: '{"compras":442000,"servicios":140000}'.
   // Vacío ('' o '{}') significa que toda la factura es una sola categoría.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS desglose_categorias TEXT DEFAULT '';`);
+  // Igual que desglose_categorias pero sumando el componente de AIU
+  // declarado por categoría (solo aplica a vigilancia_aseo/servicios_
+  // temporales) -- ej: '{"vigilancia_aseo":80000}'. Una categoría con
+  // baseEspecial 'aiu' que NO aparece aquí significa "AIU no se sabe
+  // todavía", no "AIU es cero" (ver calcularRetencionCategoriaLinea en
+  // public/retenciones.js, que distingue exactamente ese caso en vez de
+  // asumir $0 de retención).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS desglose_aiu TEXT DEFAULT '';`);
   // La subcuenta PUC del gasto (clase 5) que el contador confirmó a
   // mano -- distinta de la cuenta de retención (grupo 2365). El
   // sistema nunca la adivina sola cuando hay ambigüedad (ej. "compras"
@@ -177,6 +186,16 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_factura_items_invoice ON factura_items (invoice_id);`);
+  // AIU (Administración + Imprevistos + Utilidad) del ítem -- SOLO
+  // aplica a categorías con base especial (aseo/vigilancia, servicios
+  // temporales). La retención en esas categorías NO se calcula sobre el
+  // subtotal bruto del ítem sino sobre este valor (ver baseEspecial en
+  // TARIFAS_RETENCION, public/retenciones.js). Cadena vacía = "no se
+  // sabe todavía" (el ítem no trae AIU desglosado o el contador aún no
+  // lo ha ingresado) -- nunca se guarda 0 por defecto, porque 0 se
+  // leería como "AIU es cero" y dejaría de cobrar la retención mínima
+  // presuntiva del 10%.
+  await pool.query(`ALTER TABLE factura_items ADD COLUMN IF NOT EXISTS aiu TEXT DEFAULT '';`);
   // Si la factura que los contenía se borra, sus ítems quedarían
   // huérfanos (basura que nadie vuelve a leer) -- se borran con ella.
   await pool.query(`
@@ -644,7 +663,7 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple', 'desglose_categorias', 'subcuenta_gasto', 'file_hash',
+  'regimen_simple', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
   'tarifa_ica_id',
 ];
 
@@ -958,14 +977,15 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
         for (const item of req.body.items) {
           await pool.query(
             `INSERT INTO factura_items
-              (id, invoice_id, contador_id, orden, descripcion, cantidad, valor_unitario, subtotal, categoria_concepto, subcuenta_gasto, valor_iva, iva_mayor_valor)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+              (id, invoice_id, contador_id, orden, descripcion, cantidad, valor_unitario, subtotal, categoria_concepto, subcuenta_gasto, valor_iva, iva_mayor_valor, aiu)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
             [
               crypto.randomUUID(), id, req.userId, orden++,
               String(item.descripcion ?? ''), String(item.cantidad ?? ''), String(item.valor_unitario ?? ''),
               String(item.subtotal ?? ''), String(item.categoria_concepto ?? '').toLowerCase(),
               String(item.subcuenta_gasto ?? ''), String(item.valor_iva ?? ''),
               item.iva_mayor_valor === true || item.iva_mayor_valor === 'true',
+              String(item.aiu ?? ''),
             ]
           );
         }
@@ -1409,9 +1429,9 @@ Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO 
   "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
-  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'hoteles_restaurantes' (alojamiento o alimentación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
+  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'servicios_temporales' (suministro de personal temporal por una Empresa de Servicios Temporales -- EST -- legalmente constituida, distinto de una simple prestación de servicios), 'hoteles_restaurantes' (alojamiento o alimentación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
   "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás.",
-  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba. Nunca inventes ítems que no estén realmente en el documento."
+  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). Nunca inventes ítems que no estén realmente en el documento."
 }
 
 REGLA DE FORMATO PARA LOS CAMPOS DE VALOR (los 3 de arriba, y también valor_unitario/subtotal de cada ítem del arreglo "items" -- muy importante, es el error más común):
@@ -1428,6 +1448,68 @@ Si algún campo no se puede determinar con certeza, usa una cadena vacía "" par
 Si documento_valido es false (el documento no es factura de venta ni cuenta de cobro), igual completa nombre_razon_social y concepto con lo que alcances a leer si es evidente (ayuda a que el contador entienda qué era el archivo), pero deja los campos de valores en 0 y el resto en cadena vacía -- no hace falta forzar una lectura completa de un documento que de todos modos se va a rechazar.`;
 
 // Endpoint que recibe el archivo (imagen o PDF) de una factura y llama a la API gratuita de Gemini
+// Misma lógica que usaba /api/extract directamente -- ahora vive
+// aparte para que el procesamiento en segundo plano de lotes.js
+// también pueda usarla, sin duplicar el código.
+async function procesarExtraccionFactura(userId, base64, effectiveMediaType, isPdf, forzar) {
+  const fileHash = calcularFileHash(base64);
+
+  if (!forzar) {
+    try {
+      const existente = await buscarFacturaPorHash(userId, fileHash);
+      if (existente) {
+        return { duplicado: true, file_hash: fileHash, factura_existente: existente };
+      }
+    } catch (err) {
+      console.error('No se pudo revisar duplicados antes de leer con IA:', err.message);
+    }
+  }
+
+  const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
+  parsed.file_hash = fileHash;
+
+  if (parsed.documento_valido === false || (parsed.tipo_documento && parsed.tipo_documento !== 'factura_venta' && parsed.tipo_documento !== 'cuenta_cobro')) {
+    const err = new Error('Documento rechazado -- no es factura ni cuenta de cobro (tipo detectado: ' + (parsed.tipo_documento || 'desconocido') + ').');
+    err.status = 422;
+    const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
+    err.publicMessage = `Este archivo no parece ser una factura de venta ni una cuenta de cobro.${motivo} Kárdex IA solo procesa esos dos tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`;
+    throw err;
+  }
+
+  for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
+    if (parsed[key] !== undefined && parsed[key] !== '' && !isNaN(Number(parsed[key]))) {
+      parsed[key] = Math.round(Number(parsed[key]));
+    }
+  }
+
+  parsed.categoria_concepto_ia = parsed.categoria_concepto || '';
+  try {
+    const corregida = await buscarCorreccionAprendida(userId, parsed.concepto);
+    if (corregida && corregida !== parsed.categoria_concepto) {
+      parsed.categoria_concepto = corregida;
+      parsed.categoria_ajustada_por_ti = true;
+    }
+  } catch (err) {
+    console.error('No se pudo revisar correcciones aprendidas:', err.message);
+  }
+
+  return parsed;
+}
+
+// Versión de servidor de la misma detección que ya hacía el navegador
+// en Escanear/Carga masiva -- comparar el NIT de la factura contra los
+// clientes del contador para decidir solo si es ingreso o egreso. Vive
+// aquí también porque el procesamiento en segundo plano no tiene un
+// navegador que lo haga por él.
+async function detectarClienteYMovimientoServidor(contadorId, data) {
+  const { rows: clientes } = await pool.query('SELECT id, nit, nombre FROM clients WHERE contador_id = $1', [contadorId]);
+  const asComprador = clientes.find(c => c.nit && data.adquiriente_nit && c.nit === data.adquiriente_nit);
+  const asVendedor = clientes.find(c => c.nit && data.nit_cc && c.nit === data.nit_cc);
+  if (asComprador) return { clienteId: asComprador.id, tipoMovimiento: 'egreso', confiado: true };
+  if (asVendedor) return { clienteId: asVendedor.id, tipoMovimiento: 'ingreso', confiado: true };
+  return { clienteId: '', tipoMovimiento: 'egreso', confiado: false };
+}
+
 app.post('/api/extract', requireAuth, async (req, res) => {
   const { base64, mediaType, isPdf, forzar } = req.body;
 
@@ -1436,73 +1518,10 @@ app.post('/api/extract', requireAuth, async (req, res) => {
   }
 
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
-  const fileHash = calcularFileHash(base64);
-
-  // Antes de gastar una lectura de IA, revisamos si este mismo archivo
-  // (mismos bytes exactos) ya se leyó y se guardó antes para este
-  // contador. Si es así, no se vuelve a mandar a Gemini -- se avisa de
-  // una vez con los datos de la factura ya guardada. "forzar" permite
-  // saltarse este aviso si el contador de verdad quiere volver a leerlo
-  // (ej. sospecha que el duplicado es un falso positivo).
-  if (!forzar) {
-    try {
-      const existente = await buscarFacturaPorHash(req.userId, fileHash);
-      if (existente) {
-        return res.json({ duplicado: true, file_hash: fileHash, factura_existente: existente });
-      }
-    } catch (err) {
-      console.error('No se pudo revisar duplicados antes de leer con IA:', err.message);
-      // Si falla la búsqueda, seguimos con la lectura normal -- mejor
-      // gastar una lectura de más que bloquear el flujo por esto.
-    }
-  }
 
   try {
-    const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
-    parsed.file_hash = fileHash;
-
-    // Kárdex IA solo causa dos tipos de documento: factura de venta y
-    // cuenta de cobro -- son los únicos con validez legal para registrar
-    // un ingreso o egreso. Si la IA determinó que el archivo es otra cosa
-    // (comprobante de pago, extracto bancario, cotización, contrato...),
-    // se rechaza aquí antes de guardarlo o mostrarlo como si fuera una
-    // factura válida. Aplica igual para Escanear (uno por uno) y Carga
-    // masiva (por archivo), porque ambos pasan por este mismo endpoint.
-    if (parsed.documento_valido === false || (parsed.tipo_documento && parsed.tipo_documento !== 'factura_venta' && parsed.tipo_documento !== 'cuenta_cobro')) {
-      const err = new Error('Documento rechazado -- no es factura ni cuenta de cobro (tipo detectado: ' + (parsed.tipo_documento || 'desconocido') + ').');
-      err.status = 422;
-      const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
-      err.publicMessage = `Este archivo no parece ser una factura de venta ni una cuenta de cobro.${motivo} Kárdex IA solo procesa esos dos tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`;
-      throw err;
-    }
-
-    // Capa de seguridad extra: si la IA devolvió centavos (ej. 39915.96) en
-    // vez del entero pedido, se redondea aquí antes de mostrarlo/guardarlo.
-    for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
-      if (parsed[key] !== undefined && parsed[key] !== '' && !isNaN(Number(parsed[key]))) {
-        parsed[key] = Math.round(Number(parsed[key]));
-      }
-    }
-
-    // Antes de mostrarle el resultado al contador, revisamos si él
-    // mismo ya corrigió antes una categoría para un concepto parecido
-    // -- si es así, la aplicamos solos, sin que tenga que corregirla
-    // otra vez. Guardamos la sugerencia original de la IA para poder
-    // comparar después si el contador la cambia de nuevo.
-    parsed.categoria_concepto_ia = parsed.categoria_concepto || '';
-    try {
-      const corregida = await buscarCorreccionAprendida(req.userId, parsed.concepto);
-      if (corregida && corregida !== parsed.categoria_concepto) {
-        parsed.categoria_concepto = corregida;
-        parsed.categoria_ajustada_por_ti = true;
-      }
-    } catch (err) {
-      console.error('No se pudo revisar correcciones aprendidas:', err.message);
-      // Si falla, seguimos con la categoría que dio la IA -- no bloquea el flujo.
-    }
-
+    const parsed = await procesarExtraccionFactura(req.userId, base64, effectiveMediaType, isPdf, forzar);
     res.json(parsed);
-
   } catch (err) {
     console.error('Error al llamar a Gemini (factura):', err);
     res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
@@ -2121,9 +2140,75 @@ app.delete('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
   }
 });
 
+// ---------- Lotes de procesamiento en segundo plano ----------
+
+app.post('/api/lotes', requireAuth, async (req, res) => {
+  const { clienteId, archivos } = req.body;
+  if (!Array.isArray(archivos) || archivos.length === 0) {
+    return res.status(400).json({ error: 'No se recibió ningún archivo para procesar.' });
+  }
+  if (archivos.length > 100) {
+    return res.status(400).json({ error: 'Máximo 100 archivos por lote -- sube el resto en un segundo lote.' });
+  }
+  try {
+    const loteId = await lotes.crearLote(req.userId, clienteId || null, archivos);
+    res.status(201).json({ loteId });
+  } catch (err) {
+    console.error('Error creando lote:', err);
+    res.status(500).json({ error: 'No se pudo iniciar el procesamiento del lote.' });
+  }
+});
+
+// El lote en curso (o el último completado, si no hay ninguno
+// procesándose ahora) de este contador -- lo usa tanto el avisito
+// global (en cualquier página) como Carga masiva para reconectarse.
+app.get('/api/lotes/activo', requireAuth, async (req, res) => {
+  try {
+    const lote = await lotes.obtenerLoteActivoOUltimo(req.userId);
+    res.json(lote || null);
+  } catch (err) {
+    console.error('Error leyendo el lote activo:', err);
+    res.status(500).json({ error: 'No se pudo consultar el estado del procesamiento.' });
+  }
+});
+
+app.post('/api/lotes/items/:id/reintentar', requireAuth, async (req, res) => {
+  try {
+    await lotes.reintentarItem(req.params.id, req.userId, !!req.body.forzar);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error reintentando ítem de lote:', err);
+    res.status(500).json({ error: 'No se pudo reintentar este archivo.' });
+  }
+});
+
+app.delete('/api/lotes/items/:id', requireAuth, async (req, res) => {
+  try {
+    await lotes.eliminarItem(req.params.id, req.userId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando ítem de lote:', err);
+    res.status(500).json({ error: 'No se pudo quitar este archivo del lote.' });
+  }
+});
+
+app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
+  try {
+    const archivo = await lotes.obtenerArchivoItem(req.params.id, req.userId);
+    if (!archivo) return res.status(404).json({ error: 'No se encontró el archivo.' });
+    res.json(archivo);
+  } catch (err) {
+    console.error('Error leyendo archivo de ítem de lote:', err);
+    res.status(500).json({ error: 'No se pudo cargar el archivo original.' });
+  }
+});
+
 app.listen(PORT, async () => {
   try {
     await ensureSchema();
+    lotes.init({ pool, crypto, procesarExtraccionFactura, detectarClienteYMovimientoServidor });
+    await lotes.asegurarSchemaLotes();
+    lotes.dispararProcesamiento(); // por si el servidor se reinició con un lote a medias
     console.log(`\n✔ Kárdex IA corriendo en http://localhost:${PORT}`);
     console.log(`✔ Base de datos conectada y lista\n`);
   } catch (err) {

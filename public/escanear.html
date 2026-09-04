@@ -229,6 +229,12 @@
   table.items-table input.money{ font-family:'JetBrains Mono',monospace; text-align:right; }
   table.items-table input:focus, table.items-table select:focus{ outline:none; border-color:var(--ember); }
   .item-estimado{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
+  .item-aiu-col{ min-width:110px; }
+  .item-aiu-na{ display:block; text-align:center; color:var(--ink-faint); font-size:12px; }
+  .item-aiu-pendiente{
+    font-family:'Inter',sans-serif; font-size:10px; font-weight:600; color:#B0402D;
+    background:#FBEAE6; border-radius:5px; padding:2px 6px; white-space:nowrap;
+  }
   .item-del-btn{
     background:none; border:1px solid var(--line); color:var(--ink-faint); border-radius:6px;
     width:26px; height:26px; cursor:pointer; font-size:12px;
@@ -583,6 +589,7 @@ const FIELDS = [
     ["transporte_pasajeros","Transporte de pasajeros"],
     ["licenciamiento_software","Licenciamiento de software"],
     ["vigilancia_aseo","Vigilancia y aseo"],
+    ["servicios_temporales","Servicios temporales (EST)"],
     ["hoteles_restaurantes","Hoteles y restaurantes"],
     ["otro","Otro"],
   ]}
@@ -606,7 +613,8 @@ const CATEGORIA_TEXTOS_RETENCION = {
   transporte_carga:         'transporte de carga (2 UVT)',
   transporte_pasajeros:     'transporte de pasajeros (10 UVT)',
   licenciamiento_software:  'licenciamiento de software (desde $0)',
-  vigilancia_aseo:          'vigilancia/aseo (2 UVT)',
+  vigilancia_aseo:          'vigilancia/aseo (2 UVT, sobre AIU)',
+  servicios_temporales:     'servicios temporales -- EST (2 UVT, sobre AIU)',
   hoteles_restaurantes:     'hoteles/restaurantes (2 UVT)',
 };
 
@@ -659,6 +667,12 @@ let currentCategoriaConceptoIA = '';
 let currentDesgloseCategorias = {};
 let currentItems = []; // ítems línea por línea de la factura actual (Fase 4) -- ver normalizarItemsDesdeIA()
 let currentInvoiceData = null; // el objeto que devolvió la IA (o vacío) para la factura en pantalla -- ver renderResult()
+// "Tocado" = el contador ya interactuó de verdad con este campo (escribió,
+// borró, o usó el botón "Usar $X"). Mientras esté en false y el campo siga
+// en $0, el estimado se aplica solo una vez; si el contador lo borra a
+// propósito después, se respeta esa decisión y no se vuelve a rellenar solo.
+let reteFuenteTocado = false;
+let reteIvaTocado = false;
 let currentSubcuentaGasto = '';
 let currentFileHash = ''; // huella del archivo actual -- para detectar y guardar el estado de duplicado
 let currentTarifaIcaId = ''; // id de la tarifa de ICA (tabla del contador) elegida para esta factura, si aplica
@@ -1050,6 +1064,8 @@ function resetAll(){
   currentSubcuentaGasto = '';
   currentFileHash = '';
   currentTarifaIcaId = '';
+  reteFuenteTocado = false;
+  reteIvaTocado = false;
   previewImg.style.display = 'block';
   previewPdfIcon.style.display = 'none';
   btnExtract.textContent = 'Leer factura';
@@ -1077,11 +1093,16 @@ function detenerContadorLectura(){
   if (contadorLecturaInterval) { clearInterval(contadorLecturaInterval); contadorLecturaInterval = null; }
 }
 
-// Llama a /api/extract una sola vez -- separada de extractInvoice()
-// para poder envolverla con reintento automático sin duplicar la
-// lógica de fetch/parseo.
+// Llama al endpoint correcto UNA vez -- /api/extract-paquete para un PDF
+// (puede traer varios documentos concatenados: un extracto bancario
+// seguido de varios comprobantes con su soporte, por ejemplo; si resulta
+// ser un único documento, esto devuelve exactamente lo mismo que
+// /api/extract habría dado), /api/extract directo para fotos, como
+// siempre. Separada de extractInvoice() para poder envolverla con
+// reintento automático sin duplicar la lógica de fetch/parseo.
 async function llamarApiExtractUnaVez(forzar){
-  const response = await fetch('/api/extract', {
+  const endpoint = currentIsPdf ? '/api/extract-paquete' : '/api/extract';
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1112,7 +1133,12 @@ async function llamarApiExtractUnaVez(forzar){
 // servidor tardó, un 500/503 momentáneo) -- nunca cuando la IA sí leyó
 // el documento y lo rechazó a propósito (422, ej. no es una factura ni
 // una cuenta de cobro): eso no cambia por reintentar, es la respuesta
-// correcta. Mismo criterio que en Carga masiva.
+// correcta. Mismo criterio que en Carga masiva. Para PDFs (que pasan por
+// /api/extract-paquete) esto en la práctica nunca corta por un 422: un
+// rechazo de UN documento dentro de un paquete vuelve como
+// {error:true,...} adentro de una respuesta 200 normal, no como error
+// HTTP -- así que cualquier fallo real de ese endpoint sí vale la pena
+// reintentar.
 async function llamarApiExtractConReintento(forzar){
   const MAX_INTENTOS = 3;
   const ESPERA_MS = 1500;
@@ -1142,7 +1168,35 @@ async function extractInvoice(forzar){
   iniciarContadorLectura();
 
   try{
-    const data = await llamarApiExtractConReintento(forzar);
+    let data = await llamarApiExtractConReintento(forzar);
+
+    if (currentIsPdf) {
+      const facturas = Array.isArray(data.facturas) ? data.facturas : [];
+      const otros = Array.isArray(data.otros_grupos) ? data.otros_grupos : [];
+
+      // Este PDF trae más de un documento -- Escanear muestra un solo
+      // formulario a la vez, así que no tiene sentido intentar mostrar
+      // varios acá. Se avisa y se manda al contador a Carga masiva, que
+      // sí está construida para revisar varios documentos de un tirón.
+      if (facturas.length + otros.length > 1) {
+        renderPaqueteDetectado(facturas.length, otros.length);
+        return;
+      }
+
+      if (facturas.length === 0) {
+        // Solo se encontró un grupo "no facturable" (ej. subieron
+        // únicamente un extracto bancario) -- no hay nada que leer aquí.
+        const grupo = otros[0];
+        throw new Error(`Este archivo parece ser ${grupo?.tipo === 'extracto_bancario' ? 'un extracto bancario' : 'un documento sin identificar'}${grupo?.descripcion_breve ? ` (${grupo.descripcion_breve})` : ''}, no una factura ni cuenta de cobro.`);
+      }
+
+      // Un solo documento causable -- se desenvuelve y sigue el mismo
+      // camino de siempre, como si hubiera venido de /api/extract.
+      data = facturas[0];
+      if (data.error) {
+        throw new Error(data.mensaje || 'Este documento no parece ser una factura ni cuenta de cobro.');
+      }
+    }
 
     if (data.duplicado) {
       currentFileHash = data.file_hash || '';
@@ -1198,12 +1252,41 @@ function renderDuplicado(existente){
   document.getElementById('btnOtroArchivo').addEventListener('click', resetAll);
 }
 
+// Se muestra en vez del formulario de resultado cuando el PDF subido
+// trae VARIOS documentos concatenados (un "paquete de legalización":
+// extracto bancario + varios comprobantes con soporte, todo en el mismo
+// archivo) -- Escanear solo puede mostrar un formulario a la vez, así
+// que en vez de intentar leerlo aquí se manda al contador a Carga
+// masiva, que sí revisa y guarda varios documentos de un tirón.
+function renderPaqueteDetectado(totalFacturas, totalOtros){
+  const partes = [];
+  if (totalFacturas > 0) partes.push(`${totalFacturas} factura${totalFacturas === 1 ? '' : 's'}/cuenta${totalFacturas === 1 ? '' : 's'} de cobro`);
+  if (totalOtros > 0) partes.push(`${totalOtros} documento${totalOtros === 1 ? '' : 's'} aparte (ej. extracto bancario)`);
+
+  dupWarnEl.innerHTML = `
+    <b>📎 Este PDF trae varios documentos en el mismo archivo</b>
+    Se detectó: ${escapeHtml(partes.join(' y '))}. Escanear solo puede revisar un documento a la vez -- sube este mismo
+    archivo en <b style="display:inline;color:inherit;">Carga masiva</b> y se separa y se muestra cada uno por su lado,
+    listo para revisar y guardar.
+    <div class="dup-actions">
+      <button type="button" id="btnIrCargaMasiva">Ir a Carga masiva</button>
+      <button type="button" id="btnOtroArchivoPaquete">Subir otro archivo</button>
+    </div>
+  `;
+  dupWarnEl.classList.add('show');
+
+  document.getElementById('btnIrCargaMasiva').addEventListener('click', () => { window.location.href = 'masivo.html'; });
+  document.getElementById('btnOtroArchivoPaquete').addEventListener('click', resetAll);
+}
+
 function renderResult(data){
   currentInvoiceData = data;
   detectClient(data);
   currentRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
   currentCategoriaConceptoIA = data.categoria_concepto_ia || data.categoria_concepto || '';
   currentTarifaIcaId = ''; // factura nueva -- no arrastrar el municipio de ICA elegido en la anterior
+  reteFuenteTocado = false; // factura nueva -- el estimado se puede volver a aplicar solo
+  reteIvaTocado = false;
 
   // El desglose puede venir como objeto (normal) o como texto JSON
   // (si la IA lo mandó ya serializado) -- se maneja de forma
@@ -1320,7 +1403,16 @@ function renderResult(data){
       // dispara un evento input) se revisa el dígito Y se refresca el
       // estimado -- si ya quedó un valor real, el estimado desaparece
       // solo, en vez de seguir mostrando una sugerencia ya innecesaria.
-      const check = () => { checkDigitSanity(f.key, input, warnEl); actualizarEstimadosRetencion(); };
+      const check = () => {
+        // Una interacción real del contador con Rete Fuente / Rete IVA
+        // (escribir, borrar, o el "input" sintético del botón "Usar $X")
+        // marca el campo como "tocado" -- de ahí en adelante se respeta
+        // su decisión y no se vuelve a aplicar el estimado solo.
+        if (f.key === 'rete_fuente') reteFuenteTocado = true;
+        if (f.key === 'rete_iva') reteIvaTocado = true;
+        checkDigitSanity(f.key, input, warnEl);
+        actualizarEstimadosRetencion();
+      };
       input.addEventListener('blur', check);
       input.addEventListener('input', check);
 
@@ -1517,14 +1609,36 @@ function actualizarEstimadosRetencion(){
     fecha_factura: fechaInput ? fechaInput.value : '',
     regimen_simple: currentRegimenSimple,
     desglose_categorias: currentDesgloseCategorias,
+    desglose_aiu: (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {},
   };
 
-  // Rete Fuente
+  // Rete Fuente -- si el campo sigue en $0 y el contador todavía no lo
+  // tocó, el estimado se aplica solo (una sola vez) para que la
+  // retención se vea calculada de una y no escondida detrás de un
+  // botón. Si el contador lo borra a propósito después, se respeta esa
+  // decisión: vuelve a mostrarse como sugerencia con botón "Usar $X",
+  // no se rellena solo otra vez.
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
-  if (parseMoneyValue(fuenteInput.value) === 0 && typeof calcularRetencionSugerida === 'function') {
+  if (typeof calcularRetencionSugerida === 'function') {
     const sugerido = calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero);
-    if (sugerido) {
+    const valorActual = parseMoneyValue(fuenteInput.value);
+    if (sugerido && sugerido.requiereAiu) {
+      // NUNCA se aplica solo ni se muestra como "coincide" -- bajo/alto
+      // acá son un total PARCIAL (falta el AIU de al menos una
+      // categoría). Mostrarlo como si fuera el estimado final llevaría a
+      // retener de menos sin que el contador se diera cuenta.
+      const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_TEXTOS_RETENCION[f.categoria] || f.categoria).join(', ');
+      estFuenteEl.innerHTML = `⚠ Falta el AIU para calcular la retención (${escapeHtml(faltantes)}) -- ingrésalo en la columna AIU de "Ítems de la factura" abajo.`;
+      estFuenteEl.classList.add('show');
+    } else if (sugerido && valorActual === 0 && !reteFuenteTocado) {
+      fuenteInput.value = sugerido.bajo.toLocaleString('es-CO');
+      estFuenteEl.innerHTML = `✓ Aplicado automáticamente: <b>$${sugerido.bajo.toLocaleString('es-CO')}</b> -- verifica y ajusta si no corresponde.`;
+      estFuenteEl.classList.add('show');
+    } else if (sugerido && valorActual === sugerido.bajo) {
+      estFuenteEl.innerHTML = `✓ Coincide con el estimado calculado (<b>$${sugerido.bajo.toLocaleString('es-CO')}</b>).`;
+      estFuenteEl.classList.add('show');
+    } else if (sugerido && valorActual === 0 && reteFuenteTocado) {
       const texto = sugerido.mismaTarifa
         ? `$${sugerido.bajo.toLocaleString('es-CO')}`
         : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
@@ -1541,12 +1655,20 @@ function actualizarEstimadosRetencion(){
     }
   }
 
-  // Rete IVA
+  // Rete IVA -- misma lógica de aplicar-solo-una-vez que Rete Fuente.
   estIvaEl.classList.remove('show');
   estIvaEl.innerHTML = '';
-  if (parseMoneyValue(ivaRInput.value) === 0 && typeof calcularReteIvaSugerido === 'function') {
-    const reteIva = calcularReteIvaSugerido(invParaCalculo, cliente);
-    if (reteIva) {
+  if (typeof calcularReteIvaSugerido === 'function') {
+    const reteIva = calcularReteIvaSugerido(invParaCalculo, cliente, perfilTercero);
+    const valorActualIva = parseMoneyValue(ivaRInput.value);
+    if (reteIva && valorActualIva === 0 && !reteIvaTocado) {
+      ivaRInput.value = reteIva.toLocaleString('es-CO');
+      estIvaEl.innerHTML = `✓ Aplicado automáticamente: <b>$${reteIva.toLocaleString('es-CO')}</b> (15% del IVA) -- verifica y ajusta si no corresponde.`;
+      estIvaEl.classList.add('show');
+    } else if (reteIva && valorActualIva === reteIva) {
+      estIvaEl.innerHTML = `✓ Coincide con el estimado calculado (<b>$${reteIva.toLocaleString('es-CO')}</b>, 15% del IVA).`;
+      estIvaEl.classList.add('show');
+    } else if (reteIva && valorActualIva === 0 && reteIvaTocado) {
       estIvaEl.innerHTML = `≈ Estimado: <b>$${reteIva.toLocaleString('es-CO')}</b> (15% del IVA)`;
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1803,18 +1925,29 @@ function showRetencionHint(data){
 
   const cliente = myClients.find(c => c.id === currentClienteId);
   const reteIvaSugerido = (posibleReteIva && typeof calcularReteIvaSugerido === 'function')
-    ? calcularReteIvaSugerido(data, cliente)
+    ? calcularReteIvaSugerido(data, cliente, perfilTercero)
     : null;
   const reteIvaTexto = reteIvaSugerido !== null
     ? ` Estimado: <b>$${reteIvaSugerido.toLocaleString('es-CO')}</b> (15% del IVA, tarifa general Art. 437-1 ET).`
     : '';
+  // Para las frases de abajo ("¿podría corresponder Rete IVA?"), usamos
+  // si el cálculo de verdad dio un monto (reteIvaSugerido !== null) y no
+  // el heurístico posibleReteIva -- éste no sabe que el proveedor puede
+  // estar exento por su propia calidad (agente de retención de IVA o
+  // Gran Contribuyente), así que sin esto el aviso seguiría sugiriendo
+  // revisar Rete IVA en casos donde ya se determinó que no corresponde.
+  const reteIvaAplicaAviso = reteIvaSugerido !== null;
+  const exentoPorCalidadVendedor = posibleReteIva && !reteIvaAplicaAviso &&
+    perfilTercero && (perfilTercero.agente_retencion_iva || perfilTercero.gran_contribuyente);
 
   if (esRegimenSimple) {
     const origenPerfil = perfilTercero && perfilTercero.regimen_simple;
     html += `<b>ℹ Proveedor de Régimen Simple${origenPerfil ? ' (marcado en su perfil fiscal)' : ' detectado'}</b>` +
       `Por norma, no le corresponde Rete Fuente ni Rete ICA. `;
-    if (posibleReteIva) {
+    if (reteIvaAplicaAviso) {
       html += `Pero sí podría corresponder <b>Rete IVA</b> — esa regla no cambia por ser Régimen Simple.${reteIvaTexto} Verifica si tu empresa es agente de retención de IVA.`;
+    } else if (exentoPorCalidadVendedor) {
+      html += `Tampoco corresponde Rete IVA -- el proveedor ya es ${perfilTercero.gran_contribuyente ? 'Gran Contribuyente' : 'agente de retención de IVA'}, y entre agentes de retención no se practica retención.`;
     } else {
       html += `Tampoco se detectó un IVA que amerite revisar Rete IVA en este caso.`;
     }
@@ -1827,8 +1960,10 @@ function showRetencionHint(data){
   if (esAutorretenedor) {
     html += `<b>ℹ Proveedor autorretenedor (marcado en su perfil fiscal)</b>` +
       `Este tercero se autorretiene renta -- por norma, tu cliente NO debe practicarle Rete Fuente ordinaria (el proveedor ya se retiene a sí mismo). `;
-    if (posibleReteIva) {
+    if (reteIvaAplicaAviso) {
       html += `Aun así, revisa si corresponde <b>Rete IVA</b> aparte -- ser autorretenedor de renta no exime de eso.${reteIvaTexto} `;
+    } else if (exentoPorCalidadVendedor) {
+      html += `Tampoco corresponde Rete IVA -- el proveedor ya es ${perfilTercero.gran_contribuyente ? 'Gran Contribuyente' : 'agente de retención de IVA'}. `;
     }
     html += `<span class="fine">Marca/revisa este perfil en Terceros fiscales. No es asesoría tributaria — confirma con tu criterio profesional.</span>`;
     retencionHintEl.innerHTML = html;
@@ -1841,10 +1976,25 @@ function showRetencionHint(data){
   // identificó para esta factura (¿es agente retenedor?) y cualquier
   // tarifa ya aprendida antes para este proveedor -- todo con la
   // misma función/tabla que usan Facturas y Carga masiva.
-  const invParaCalculo = { ...data, desglose_categorias: currentDesgloseCategorias };
+  const invParaCalculo = {
+    ...data,
+    desglose_categorias: currentDesgloseCategorias,
+    desglose_aiu: (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {},
+  };
   const sugerido = (cliente && typeof calcularRetencionSugerida === 'function')
     ? calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero)
     : null;
+
+  if (sugerido && sugerido.requiereAiu) {
+    const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_TEXTOS_RETENCION[f.categoria] || f.categoria).join(', ');
+    html = `<b>⚠ Falta el AIU para calcular la retención</b>` +
+      `Esta factura incluye ${escapeHtml(faltantes)}, que se retiene sobre el componente de AIU (Administración + Imprevistos + Utilidad), no sobre el subtotal bruto -- ingrésalo en la columna AIU de "Ítems de la factura" abajo. ` +
+      (reteIvaAplicaAviso ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
+      `<span class="fine">Concepto DIAN 100202208-1587. No es asesoría tributaria.</span>`;
+    retencionHintEl.innerHTML = html;
+    retencionHintEl.classList.add('show');
+    return;
+  }
 
   if (sugerido) {
     const montoTexto = sugerido.mismaTarifa
@@ -1853,7 +2003,8 @@ function showRetencionHint(data){
     html = `<b>⚠ Retención en la fuente sugerida: ${montoTexto}</b>` +
       `Calculada sobre ${tipoTexto} para ${escapeHtml(cliente.nombre || 'este cliente')} (agente retenedor). ` +
       (sugerido.mismaTarifa ? '' : 'El rango depende de si el proveedor es declarante de renta o no — confírmalo para saber cuál de los dos valores aplica. ') +
-      (posibleReteIva ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
+      (reteIvaAplicaAviso ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
+      (exentoPorCalidadVendedor ? `No corresponde Rete IVA aparte -- el proveedor ya es ${perfilTercero.gran_contribuyente ? 'Gran Contribuyente' : 'agente de retención de IVA'}. ` : '') +
       `<span class="fine">Estimado con la tarifa vigente conocida al construir esta app — la base de retención cambió varias veces en 2026 por decisiones judiciales. Verifica la norma actual antes de aplicar este valor. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
     retencionHintEl.classList.add('show');
@@ -1954,12 +2105,23 @@ function renderItemsPanel(){
       `<option value="${val}"${item.categoria_concepto === val ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
     const est = estimadoPorItem ? estimadoPorItem.porItem[idx] : null;
     const estTexto = est
-      ? (est.mismaTarifa ? `≈ $${est.bajo.toLocaleString('es-CO')}` : `≈ $${est.bajo.toLocaleString('es-CO')}–$${est.alto.toLocaleString('es-CO')}`)
+      ? (est.requiereAiu
+          ? `<span class="item-aiu-pendiente" title="Esta línea necesita el valor de AIU para poder calcular la retención -- ingrésalo en la columna AIU.">falta AIU</span>`
+          : (est.mismaTarifa ? `≈ $${est.bajo.toLocaleString('es-CO')}` : `≈ $${est.bajo.toLocaleString('es-CO')}–$${est.alto.toLocaleString('es-CO')}`))
       : '—';
+    // La columna AIU solo aplica a categorías con base especial
+    // (vigilancia_aseo/servicios_temporales) -- para el resto, la
+    // retención se calcula sobre el subtotal normal y no tiene sentido
+    // pedir este dato.
+    const requiereAiuCategoria = (typeof esCategoriaBaseAiu === 'function') && esCategoriaBaseAiu(item.categoria_concepto);
+    const aiuCelda = requiereAiuCategoria
+      ? `<input type="text" inputmode="numeric" class="money it-aiu" value="${item.aiu ? (Number(item.aiu) || 0).toLocaleString('es-CO') : ''}" placeholder="sin AIU">`
+      : `<span class="item-aiu-na" title="No aplica -- esta categoría no se calcula sobre AIU">—</span>`;
     return `<tr data-idx="${idx}">
       <td><input type="text" class="it-descripcion" value="${escapeHtml(item.descripcion)}" placeholder="Descripción del ítem"></td>
       <td><input type="text" inputmode="numeric" class="money it-subtotal" value="${(Number(item.subtotal) || 0).toLocaleString('es-CO')}"></td>
       <td><select class="it-categoria">${opciones}</select></td>
+      <td class="item-aiu-col" title="Componente de AIU (Administración + Imprevistos + Utilidad) de esta línea, solo si la factura lo desglosa -- deja vacío si no se sabe.">${aiuCelda}</td>
       <td class="item-estimado" title="Retención en la fuente estimada para esta línea, informativa -- el valor real se registra una sola vez en Rete Fuente arriba.">${estTexto}</td>
       <td><label class="item-iva-mv"><input type="checkbox" class="it-iva-mv" ${item.iva_mayor_valor ? 'checked' : ''}> IVA no descontable</label></td>
       <td><button type="button" class="item-del-btn" title="Quitar este ítem" ${currentItems.length <= 1 ? 'disabled' : ''}>✕</button></td>
@@ -1973,7 +2135,7 @@ function renderItemsPanel(){
       <div class="items-table-wrap">
         <table class="items-table">
           <thead><tr>
-            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>Rete Fuente est.</th><th>IVA mayor valor</th><th></th>
+            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>AIU</th><th>Rete Fuente est.</th><th>IVA mayor valor</th><th></th>
           </tr></thead>
           <tbody id="itemsTbody">${filas}</tbody>
         </table>
@@ -1996,6 +2158,13 @@ function renderItemsPanel(){
     } else if (e.target.classList.contains('it-subtotal')) {
       currentItems[idx].subtotal = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '') || '0';
       onItemsChanged();
+    } else if (e.target.classList.contains('it-aiu')) {
+      // Vacío se guarda como '' (no como '0') -- "no se sabe" es distinto
+      // de "el AIU es cero", y calcularRetencionCategoriaLinea distingue
+      // exactamente ese caso (ver comentario en retenciones.js).
+      const limpio = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '');
+      currentItems[idx].aiu = limpio;
+      onItemsChanged();
     }
   });
   tbody.addEventListener('change', (e) => {
@@ -2004,6 +2173,12 @@ function renderItemsPanel(){
       currentItems[idx].categoria_concepto = e.target.value;
       const opciones = (typeof SUBCUENTAS_GASTO !== 'undefined') ? (SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro']) : null;
       currentItems[idx].subcuenta_gasto = opciones ? opciones[0][0] : '';
+      // Si la nueva categoría ya no se calcula sobre AIU, el valor que
+      // hubiera queda sin sentido -- se limpia para no dejar un dato
+      // "fantasma" que ya no aplica a nada.
+      if (!((typeof esCategoriaBaseAiu === 'function') && esCategoriaBaseAiu(e.target.value))) {
+        currentItems[idx].aiu = '';
+      }
       onItemsChanged();
     } else if (e.target.classList.contains('it-iva-mv')) {
       currentItems[idx].iva_mayor_valor = e.target.checked;
@@ -2020,7 +2195,7 @@ function renderItemsPanel(){
     currentItems.push({
       descripcion: '', cantidad: '', valor_unitario: '', subtotal: '0',
       categoria_concepto: 'otro', subcuenta_gasto: (SUBCUENTAS_GASTO['otro'] || [['', '']])[0][0],
-      iva_mayor_valor: false,
+      iva_mayor_valor: false, aiu: '',
     });
     onItemsChanged();
   });
@@ -2042,6 +2217,7 @@ function currentFieldValues(){
   out.regimen_simple = currentRegimenSimple;
   out.categoria_concepto_ia = currentCategoriaConceptoIA;
   out.desglose_categorias = JSON.stringify(currentDesgloseCategorias || {});
+  out.desglose_aiu = JSON.stringify((typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {});
   out.subcuenta_gasto = currentSubcuentaGasto || '';
   out.file_hash = currentFileHash || '';
   out.tarifa_ica_id = currentTarifaIcaId || '';
@@ -2090,5 +2266,6 @@ async function guardarFactura(forzar){
 btnSave.addEventListener('click', () => guardarFactura(false));
 </script>
 <script src="/soporte-chat.js"></script>
+<script src="/lote-aviso.js"></script>
 </body>
 </html>

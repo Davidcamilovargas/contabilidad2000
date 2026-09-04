@@ -46,6 +46,15 @@
 // calcula solo, cruzando `umbralUvt` con el valor de UVT del AÑO DE LA
 // FACTURA (ver UVT_POR_ANIO más abajo) -- así una factura de 2025 usa
 // la UVT de 2025 y una de 2026 usa la de 2026, automáticamente.
+//
+// `baseEspecial: 'aiu'` -- SOLO en vigilancia_aseo y servicios_temporales.
+// Marca las dos categorías donde la DIAN aplica una regla de dos pasos
+// distinta al resto (Concepto DIAN 100202208-1587, ago 2026): el umbral
+// de arriba se prueba contra el valor BRUTO de la factura (igual que
+// cualquier otra categoría), pero la TARIFA se aplica solo sobre el
+// componente de AIU (Administración + Imprevistos + Utilidad), nunca
+// sobre el bruto -- ver calcularRetencionCategoriaLinea() más abajo,
+// que es donde vive toda la lógica especial.
 const TARIFAS_RETENCION = {
   compras:                 { umbralUvt: 10, tarifaBaja: 0.025, tarifaAlta: 0.035, cuentaPUC: '236540', nombrePUC: 'Compras' },
   compras_tarjeta:         { umbralUvt: 0,  tarifaBaja: 0.015, tarifaAlta: 0.015, cuentaPUC: '236540', nombrePUC: 'Compras' },
@@ -57,9 +66,22 @@ const TARIFAS_RETENCION = {
   transporte_carga:         { umbralUvt: 2,  tarifaBaja: 0.01,  tarifaAlta: 0.01,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
   transporte_pasajeros:     { umbralUvt: 10, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
   licenciamiento_software:  { umbralUvt: 0,  tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
-  vigilancia_aseo:          { umbralUvt: 2,  tarifaBaja: 0.02,  tarifaAlta: 0.02,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
+  vigilancia_aseo:          { umbralUvt: 2,  tarifaBaja: 0.02,  tarifaAlta: 0.02,  cuentaPUC: '236525', nombrePUC: 'Servicios', baseEspecial: 'aiu' },
+  servicios_temporales:     { umbralUvt: 2,  tarifaBaja: 0.01,  tarifaAlta: 0.01,  cuentaPUC: '236525', nombrePUC: 'Servicios', baseEspecial: 'aiu' },
   hoteles_restaurantes:     { umbralUvt: 2,  tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236525', nombrePUC: 'Servicios' },
 };
+
+// El piso presuntivo de AIU que fija la norma para estos dos conceptos
+// (aseo/vigilancia y temporales): si el contrato no desglosa AIU, o lo
+// desglosa por debajo de este mínimo, la tarifa se aplica sobre este
+// piso -- nunca sobre un AIU menor, así el proveedor no pueda reducir
+// la base reportando un AIU artificialmente bajo.
+const AIU_PISO_PORCENTAJE = 0.10;
+
+function esCategoriaBaseAiu(categoria) {
+  const config = TARIFAS_RETENCION[String(categoria || '').toLowerCase()];
+  return !!(config && config.baseEspecial === 'aiu');
+}
 
 // ---------- UVT (Unidad de Valor Tributario) por año ----------
 //
@@ -180,6 +202,9 @@ const SUBCUENTAS_GASTO = {
   vigilancia_aseo: [
     ['513505', 'Aseo y vigilancia'],
   ],
+  servicios_temporales: [
+    ['513510', 'Temporales'],
+  ],
   hoteles_restaurantes: [
     ['519560', 'Casino y restaurante'],
     ['515505', 'Alojamiento y manutención (gastos de viaje)'],
@@ -240,19 +265,61 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
 // segunda copia que se puede desincronizar.
 //
 // Devuelve null si la categoría no tiene tarifa confirmada en la tabla, o
-// si el subtotal no supera su umbral. Si no, { bajo, alto, mismaTarifa,
-// cuentaPUC, nombrePUC } en pesos.
-function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas) {
+// si el subtotal no supera su umbral -- en ese caso no aplica, punto.
+//
+// Para vigilancia_aseo y servicios_temporales (baseEspecial: 'aiu') hay un
+// tercer resultado posible: si el umbral SÍ se supera (probado contra el
+// bruto) pero no se recibió un valor de AIU, esta categoría SÍ requiere
+// retención pero no se puede calcular el monto sin ese dato -- se
+// devuelve { requiereAiu: true, subtotalBruto, aiuMinimoPresuntivo,
+// cuentaPUC, nombrePUC } en vez de silenciarlo como si no aplicara (eso
+// entendería el contador como "no hay que retener nada", que sería
+// justo el error que este ajuste vino a corregir).
+//
+// Si sí hay un monto calculado: { bajo, alto, mismaTarifa, cuentaPUC,
+// nombrePUC, baseUsada, aiuUsado, aiuAjustadoAlPiso } en pesos.
+// `aiuUsado`/`baseUsada` solo vienen en las categorías con baseEspecial
+// -- en las demás, la base ES el subtotal (mismo comportamiento de
+// siempre, no hace falta reportarla aparte).
+function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu) {
   tarifasAprendidas = tarifasAprendidas || {};
   const categoriaKey = String(categoria || '').toLowerCase();
   const configBase = TARIFAS_RETENCION[categoriaKey];
   if (!configBase) return null; // "otro" -- tarifa no confirmada, no adivinamos
 
   const subtotalNum = Number(subtotal) || 0;
+  // El umbral SIEMPRE se prueba contra el valor bruto (subtotal de la
+  // línea/categoría), incluso en las categorías de base especial -- eso
+  // no cambia, es solo la TARIFA la que se aplica distinto para esas dos.
   if (subtotalNum < umbralPesos(configBase, fechaFactura)) return null; // bajo el umbral, no aplica
 
   const aprendida = tarifasAprendidas[`${nitProveedor || ''}|${categoriaKey}`];
   const config = aprendida !== undefined ? { tarifaBaja: aprendida, tarifaAlta: aprendida } : configBase;
+
+  if (configBase.baseEspecial === 'aiu') {
+    const aiuNum = (aiu === undefined || aiu === null || aiu === '') ? null : Number(aiu);
+    const pisoAiu = Math.round(subtotalNum * AIU_PISO_PORCENTAJE);
+    if (aiuNum === null || isNaN(aiuNum)) {
+      return {
+        requiereAiu: true,
+        subtotalBruto: subtotalNum,
+        aiuMinimoPresuntivo: pisoAiu,
+        cuentaPUC: configBase.cuentaPUC,
+        nombrePUC: configBase.nombrePUC,
+      };
+    }
+    const baseTarifa = Math.max(aiuNum, pisoAiu);
+    return {
+      bajo: Math.round(baseTarifa * config.tarifaBaja),
+      alto: Math.round(baseTarifa * config.tarifaAlta),
+      mismaTarifa: config.tarifaBaja === config.tarifaAlta,
+      cuentaPUC: configBase.cuentaPUC,
+      nombrePUC: configBase.nombrePUC,
+      baseUsada: baseTarifa,
+      aiuUsado: aiuNum,
+      aiuAjustadoAlPiso: baseTarifa > aiuNum,
+    };
+  }
 
   return {
     bajo: Math.round(subtotalNum * config.tarifaBaja),
@@ -280,31 +347,65 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     }
   } catch (e) { desglose = null; }
 
+  // Desglose paralelo de AIU por categoría (solo relevante para
+  // vigilancia_aseo/servicios_temporales) -- mismo formato que
+  // `desglose`: { categoria: montoAiu }. Puede venir vacío/ausente si la
+  // factura no desglosó AIU en ninguna de sus líneas.
+  let desgloseAiu = {};
+  try {
+    const rawAiu = inv.desglose_aiu;
+    const parsedAiu = typeof rawAiu === 'string' ? JSON.parse(rawAiu || '{}') : (rawAiu || {});
+    if (parsedAiu && typeof parsedAiu === 'object' && !Array.isArray(parsedAiu)) desgloseAiu = parsedAiu;
+  } catch (e) { desgloseAiu = {}; }
+
   if (desglose) {
     let bajoTotal = 0, altoTotal = 0, huboAlguno = false, mismaTarifaEnTodas = true;
+    let faltaAiuEnAlguna = false;
+    const categoriasFaltantesAiu = [];
     const cuentasInvolucradas = new Map(); // cuentaPUC -> nombrePUC, sin duplicados
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
-      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas);
+      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte]);
       if (!r) continue; // esta parte no aplica (categoría sin tarifa, o bajo su umbral), se omite
+      if (r.requiereAiu) {
+        faltaAiuEnAlguna = true;
+        categoriasFaltantesAiu.push({ categoria: categoriaParte, subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo });
+        cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
+        continue;
+      }
       bajoTotal += r.bajo;
       altoTotal += r.alto;
       huboAlguno = true;
       if (!r.mismaTarifa) mismaTarifaEnTodas = false;
       cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
     }
-    if (!huboAlguno) return null; // ninguna de las partes superó su umbral
+    if (!huboAlguno && !faltaAiuEnAlguna) return null; // ninguna de las partes superó su umbral
     return {
       bajo: bajoTotal, alto: altoTotal, mismaTarifa: mismaTarifaEnTodas,
       cuentasPUC: [...cuentasInvolucradas.entries()].map(([cuenta, nombre]) => ({ cuenta, nombre })),
+      // Si esto es true, `bajo`/`alto` son un total PARCIAL -- falta el
+      // AIU de las categorías en `categoriasFaltantesAiu` para completar
+      // el cálculo. Nunca se debe mostrar bajo/alto como el total final
+      // sin revisar este flag primero.
+      requiereAiu: faltaAiuEnAlguna,
+      categoriasFaltantesAiu,
     };
   }
 
   // Sin desglose -- factura de una sola categoría, comportamiento normal.
-  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas);
+  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu);
   if (!r) return null;
+  if (r.requiereAiu) {
+    return {
+      bajo: 0, alto: 0, mismaTarifa: true,
+      cuentasPUC: [{ cuenta: r.cuentaPUC, nombre: r.nombrePUC }],
+      requiereAiu: true,
+      categoriasFaltantesAiu: [{ categoria: inv.categoria_concepto, subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo }],
+    };
+  }
   return {
     bajo: r.bajo, alto: r.alto, mismaTarifa: r.mismaTarifa,
     cuentasPUC: [{ cuenta: r.cuentaPUC, nombre: r.nombrePUC }],
+    requiereAiu: false, categoriasFaltantesAiu: [],
   };
 }
 
@@ -324,25 +425,35 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
 // no a una parte de ella.
 //
 // Si aplica, devuelve:
-//   { porItem: [ {bajo,alto,mismaTarifa,cuentaPUC,nombrePUC} | null, ... ],
-//     bajo, alto, mismaTarifa, cuentasPUC }
+//   { porItem: [ {bajo,alto,mismaTarifa,cuentaPUC,nombrePUC} | {requiereAiu:true,...} | null, ... ],
+//     bajo, alto, mismaTarifa, cuentasPUC, requiereAiu, itemsFaltantesAiu }
 // `porItem` tiene el mismo largo y orden que `items` -- porItem[i] es el
 // resultado (o null) para items[i], para poder mostrar el estimado al
-// lado de cada línea en la interfaz.
+// lado de cada línea en la interfaz. Un ítem de vigilancia_aseo o
+// servicios_temporales sin `item.aiu` cae en `{requiereAiu:true,...}` en
+// vez de en un monto -- `bajo`/`alto` del total son igual que en
+// calcularRetencionSugerida: un total PARCIAL cuando `requiereAiu` es
+// true, nunca el total final sin revisar ese flag primero.
 function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendidas, perfilTercero) {
   if (!cliente || !cliente.agente_retenedor) return null;
   if (!Array.isArray(items) || items.length === 0) return null;
 
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
   if (perfil.regimenSimple || perfil.autorretenedor) {
-    return { porItem: items.map(() => null), bajo: 0, alto: 0, mismaTarifa: true, cuentasPUC: [] };
+    return { porItem: items.map(() => null), bajo: 0, alto: 0, mismaTarifa: true, cuentasPUC: [], requiereAiu: false, itemsFaltantesAiu: [] };
   }
 
   let bajoTotal = 0, altoTotal = 0, mismaTarifaEnTodas = true;
   const cuentasInvolucradas = new Map();
-  const porItem = items.map((item) => {
-    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas);
+  const itemsFaltantesAiu = [];
+  const porItem = items.map((item, idx) => {
+    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu);
     if (!r) return null;
+    if (r.requiereAiu) {
+      itemsFaltantesAiu.push({ idx, descripcion: item.descripcion || '', subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo });
+      cuentasInvolucradas.set(r.cuentaPUC, r.nombrePUC);
+      return r;
+    }
     bajoTotal += r.bajo;
     altoTotal += r.alto;
     if (!r.mismaTarifa) mismaTarifaEnTodas = false;
@@ -353,6 +464,7 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   return {
     porItem, bajo: bajoTotal, alto: altoTotal, mismaTarifa: mismaTarifaEnTodas,
     cuentasPUC: [...cuentasInvolucradas.entries()].map(([cuenta, nombre]) => ({ cuenta, nombre })),
+    requiereAiu: itemsFaltantesAiu.length > 0, itemsFaltantesAiu,
   };
 }
 
@@ -398,6 +510,12 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       categoria_concepto: categoria,
       subcuenta_gasto: subcuentaPorDefecto(categoria),
       iva_mayor_valor: false,
+      // AIU (Administración+Imprevistos+Utilidad) -- solo tiene sentido
+      // para vigilancia_aseo/servicios_temporales (ver esCategoriaBaseAiu
+      // en la tabla de arriba); en cualquier otra categoría este campo
+      // simplemente no se usa. Vacío = "no se sabe todavía", nunca 0 a
+      // propósito (0 sí sería un valor real, aunque poco común).
+      aiu: data.valor_aiu !== undefined && data.valor_aiu !== null && data.valor_aiu !== '' ? String(data.valor_aiu) : '',
     }];
   }
   return raw.map((it) => {
@@ -410,6 +528,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       categoria_concepto: categoria,
       subcuenta_gasto: subcuentaPorDefecto(categoria),
       iva_mayor_valor: false,
+      aiu: it.aiu !== undefined && it.aiu !== null && it.aiu !== '' ? String(it.aiu) : '',
     };
   });
 }
@@ -445,6 +564,24 @@ function desgloseDesdeItems(items) {
   return desglose;
 }
 
+// Mismo agrupamiento que desgloseDesdeItems(), pero sumando `item.aiu` en
+// vez de `item.subtotal` -- alimenta `inv.desglose_aiu` que usa
+// calcularRetencionSugerida() para las categorías de base especial
+// (vigilancia_aseo/servicios_temporales). Solo suma categorías que SÍ
+// declararon un AIU en al menos un ítem -- una categoría ausente aquí no
+// significa AIU=0, significa "no se sabe", y calcularRetencionCategoriaLinea
+// ya distingue eso (devuelve requiereAiu:true en vez de asumir $0).
+function desgloseAiuDesdeItems(items) {
+  const desglose = {};
+  (items || []).forEach((item) => {
+    const categoria = String(item.categoria_concepto || '').toLowerCase();
+    if (!categoria || item.aiu === undefined || item.aiu === null || item.aiu === '') return;
+    const aiu = Number(item.aiu) || 0;
+    desglose[categoria] = (desglose[categoria] || 0) + aiu;
+  });
+  return desglose;
+}
+
 // ---------- Retención de IVA (ReteIVA) ----------
 //
 // Es un cálculo aparte de la retención en la fuente de arriba -- no
@@ -462,7 +599,8 @@ const RETEIVA_TARIFA_GENERAL = 0.15;
 
 // Calcula el ReteIVA sugerido para una factura -- devuelve el monto
 // en pesos, o null si no aplica (cliente no es agente retenedor, no
-// hay IVA, o el subtotal no supera el umbral de su categoría).
+// hay IVA, el subtotal no supera el umbral de su categoría, o el
+// proveedor está exento por su propia calidad tributaria -- ver abajo).
 //
 // OJO -- a propósito NO se exime aquí por Régimen Simple ni por
 // Autorretenedor: esos dos solo eximen de Rete Fuente (renta) y de
@@ -472,8 +610,24 @@ const RETEIVA_TARIFA_GENERAL = 0.15;
 // sería inventar una exención que la norma no da -- por eso
 // `calcularRetencionSugerida()` sí revisa el perfil fiscal y esta
 // función no.
-function calcularReteIvaSugerido(inv, cliente){
+//
+// Exención que SÍ aplica aquí -- "entre agentes de retención de IVA no
+// se practica retención" (doctrina DIAN, resumida en Gerencie.com y
+// Actualícese sobre Art. 437-2 E.T.): si el proveedor mismo ya es un
+// agente de retención de IVA designado, o es Gran Contribuyente, tu
+// cliente no debe retenerle -- sin importar si tu cliente también es
+// Gran Contribuyente o no, en NINGUNA combinación de las que reporta la
+// norma le corresponde retención cuando el VENDEDOR tiene esa calidad.
+// (El único caso donde SÍ se retiene es el normal: comprador agente
+// retenedor comprándole a un proveedor de régimen común corriente, que
+// es exactamente lo que ya cubre el resto de esta función.)
+// `perfilTercero` es lo mismo que recibe `calcularRetencionSugerida()`
+// -- opcional, pasa null/undefined si no se cargó (se comporta como
+// antes: no exime por esto, solo por lo que ya cubría).
+function calcularReteIvaSugerido(inv, cliente, perfilTercero){
   if (!cliente || !cliente.agente_retenedor) return null;
+
+  if (perfilTercero && (perfilTercero.agente_retencion_iva || perfilTercero.gran_contribuyente)) return null;
 
   const ivaValor = Number(inv.valor_iva) || 0;
   if (ivaValor <= 0) return null; // sin IVA, no hay nada que retener
