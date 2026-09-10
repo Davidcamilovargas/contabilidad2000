@@ -1,21 +1,33 @@
 :root{
-  /* ---- superficie ---- */
-  --paper:#FAF7F1;
+  /* ---- superficie -- ahora en la familia fría de marca (Enlaza) ---- */
+  --paper:#F6FAFC;
   --paper-raised:#FFFFFF;
-  --paper-sunken:#F1EAD9;
-  --ink:#241E18;
-  --ink-soft:#6C6152;
-  --ink-faint:#A79C8B;
-  --line:#E6DECA;
-  --line-strong:#D6C6A8;
+  --paper-sunken:#EAF3F7;
+  --ink:#1D2A32;
+  --ink-soft:#4A5E68;
+  --ink-faint:#8AA0AC;
+  --line:#DCE7EC;
+  --line-strong:#C3D3DB;
 
-  /* ---- sage / verde salvia -- secundario, positivo, ingresos ---- */
+  /* ---- azul petróleo -- primario de marca, domina la interfaz (encabezados, nav activa, enlaces, foco) ---- */
+  --petroleo:#0B4F6C;
+  --petroleo-deep:#083A4F;
+  --petroleo-soft:rgba(11,79,108,0.12);
+  --petroleo-tint:#EAF3F7;
+
+  /* ---- coral cálido -- acento de marca, solo en botones de acción / precios, nunca como fondo grande ---- */
+  --coral:#FF6B4A;
+  --coral-deep:#E0512F;
+  --coral-soft:rgba(255,107,74,0.14);
+  --coral-tint:#FFEDE6;
+
+  /* ---- sage / verde salvia -- secundario, positivo, ingresos (sin cambios: es el código de color financiero, no la marca) ---- */
   --moss:#5B8072;
   --moss-deep:#3E6053;
   --moss-soft:#4C7365;
   --moss-tint:#E9F0EB;
 
-  /* ---- ember / naranja -- primario, acciones, egresos ---- */
+  /* ---- ember / naranja -- reservado para el código de color financiero de "egreso" (antes también hacía de color primario de marca; ese rol ahora lo cumple --petroleo/--coral arriba) ---- */
   --ember:#FF5A36;
   --ember-deep:#D8431F;
   --ember-soft:rgba(255,90,54,0.14);
@@ -30,9 +42,9 @@
   --stamp:#8B5245;
   --stamp-soft:#F6ECE7;
 
-  --shadow-sm:0 1px 2px rgba(46,34,20,0.06);
-  --shadow-md:0 14px 32px -16px rgba(46,34,20,0.18);
-  --shadow-lg:0 30px 60px -28px rgba(46,34,20,0.22);
+  --shadow-sm:0 1px 2px rgba(13,30,40,0.07);
+  --shadow-md:0 14px 32px -16px rgba(13,30,40,0.20);
+  --shadow-lg:0 30px 60px -28px rgba(13,30,40,0.24);
 
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -42,16 +54,16 @@ html{scroll-behavior:smooth;}
 body{
   background:var(--paper);
   background-image:
-    radial-gradient(1100px 480px at 8% -10%, rgba(255,90,54,0.05), transparent 60%),
-    radial-gradient(900px 460px at 100% 0%, rgba(91,128,114,0.06), transparent 55%);
+    radial-gradient(1100px 480px at 8% -10%, rgba(11,79,108,0.055), transparent 60%),
+    radial-gradient(900px 460px at 100% 0%, rgba(255,107,74,0.045), transparent 55%);
   background-attachment:fixed;
   color:var(--ink);
   font-family:'Inter', -apple-system, sans-serif;
   min-height:100vh;
   -webkit-font-smoothing:antialiased;
 }
-::selection{ background:var(--ember); color:#fff; }
-*:focus-visible{ outline:2px solid var(--ember); outline-offset:2px; }
+::selection{ background:var(--petroleo); color:#fff; }
+*:focus-visible{ outline:2px solid var(--petroleo); outline-offset:2px; }
 
 .wrap{
   max-width:900px;
@@ -81,8 +93,8 @@ body{
   position:sticky;
   top:0;
   align-self:flex-start;
-  background:var(--paper-raised);
-  border-right:1px solid var(--line);
+  background:var(--petroleo);
+  border-right:1px solid var(--petroleo-deep);
   display:flex;
   flex-direction:column;
   padding:24px 16px;
@@ -94,29 +106,30 @@ body{
 }
 .sidebar-brand .logo-mark{
   width:32px; height:32px; border-radius:8px; flex-shrink:0;
-  background:linear-gradient(135deg, var(--ember) 0%, var(--clay) 55%, var(--moss) 100%); color:#fff;
+  background:#fff;
   display:flex; align-items:center; justify-content:center;
   font-family:'Archivo',sans-serif; font-weight:900; font-size:16px;
 }
+.sidebar-brand .logo-mark svg{ width:20px; height:20px; display:block; }
 .sidebar-brand .brand-text{
-  font-family:'Archivo',sans-serif; font-weight:800; font-size:15.5px; letter-spacing:-0.01em; color:var(--ink);
+  font-family:'Archivo',sans-serif; font-weight:800; font-size:15.5px; letter-spacing:-0.01em; color:#fff;
 }
 .sidebar-nav{ display:flex; flex-direction:column; gap:3px; }
 .sidebar-link{
   display:flex; align-items:center; gap:11px;
   padding:10px 12px; border-radius:8px;
   font-family:'Inter',sans-serif; font-size:13.5px; font-weight:600;
-  color:var(--ink-soft); text-decoration:none;
+  color:rgba(255,255,255,0.72); text-decoration:none;
   transition:background .15s var(--ease), color .15s var(--ease);
 }
 .sidebar-link svg{ flex-shrink:0; opacity:.85; }
-.sidebar-link:hover{ background:var(--paper-sunken); color:var(--ink); }
-.sidebar-link.active{ background:var(--ember); color:#fff; box-shadow:0 8px 18px -8px rgba(255,90,54,0.5); }
+.sidebar-link:hover{ background:rgba(255,255,255,0.10); color:#fff; }
+.sidebar-link.active{ background:rgba(255,255,255,0.16); color:#fff; box-shadow:inset 3px 0 0 var(--coral); }
 .sidebar-link.active svg{ opacity:1; }
 .sidebar-spacer{ flex:1; }
 .sidebar-foot{
-  border-top:1px solid var(--line); padding-top:16px; margin-top:auto;
-  font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-faint);
+  border-top:1px solid rgba(255,255,255,0.16); padding-top:16px; margin-top:auto;
+  font-family:'JetBrains Mono',monospace; font-size:10.5px; color:rgba(255,255,255,0.5);
   letter-spacing:.04em; padding-left:8px;
 }
 
@@ -126,7 +139,7 @@ body{
     position:static; width:100%; min-height:0; height:auto;
     flex-direction:row; align-items:center; gap:16px;
     padding:14px 16px; overflow-x:auto;
-    border-right:none; border-bottom:1px solid var(--line);
+    border-right:none; border-bottom:1px solid var(--petroleo-deep);
   }
   .sidebar-nav{ flex-direction:row; gap:6px; }
   .sidebar-link{ white-space:nowrap; padding:8px 12px; }
@@ -211,10 +224,10 @@ nav.tabs a{
   border-radius:6px;
   transition:background .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-nav.tabs a:hover{ border-color:var(--ember); color:var(--ember-deep); background:var(--ember-tint); }
+nav.tabs a:hover{ border-color:var(--petroleo); color:var(--petroleo-deep); background:var(--petroleo-soft); }
 nav.tabs a.active{
-  background:var(--ember); color:#fff; border-color:var(--ember);
-  box-shadow:0 8px 18px -8px rgba(255,90,54,0.55);
+  background:var(--petroleo); color:#fff; border-color:var(--petroleo);
+  box-shadow:0 8px 18px -8px rgba(11,79,108,0.5);
 }
 
 /* ---------- botones ---------- */
@@ -225,8 +238,8 @@ button{font-family:inherit;cursor:pointer;border:none;}
   font-family:'Inter',sans-serif;
   font-weight:700;
   font-size:13.5px;letter-spacing:.2px;
-  padding:11px 20px;background:var(--ember);color:#fff;
-  border:1px solid var(--ember);
+  padding:11px 20px;background:var(--coral);color:#fff;
+  border:1px solid var(--coral);
   border-radius:7px;
   transition:transform .15s var(--ease), box-shadow .2s var(--ease);
   z-index:0;
@@ -234,19 +247,19 @@ button{font-family:inherit;cursor:pointer;border:none;}
 .btn::before{
   content:"";
   position:absolute; inset:0;
-  background:var(--ember-deep);
+  background:var(--coral-deep);
   transform:translateX(-101%);
   transition:transform .5s var(--ease);
   z-index:-1;
 }
 .btn:hover::before{ transform:translateX(0); }
-.btn:hover{ transform:translateY(-2px); box-shadow:0 10px 24px -8px rgba(255,90,54,0.45); }
+.btn:hover{ transform:translateY(-2px); box-shadow:0 10px 24px -8px rgba(13,30,40,0.28); }
 .btn:active{ transform:translateY(0) scale(.98); box-shadow:none; }
 .btn.ghost{background:var(--paper-raised);color:var(--ink);border:1.5px solid var(--line);}
 .btn.ghost::before{ background:var(--ink); opacity:.05; }
 .btn.ghost:hover{ color:var(--ink); border-color:var(--ink-faint); }
-.btn.primary{ background:var(--ember); border-color:var(--ember); }
-.btn.primary::before{ background:var(--ember-deep); }
+.btn.primary{ background:var(--coral); border-color:var(--coral); }
+.btn.primary::before{ background:var(--coral-deep); }
 .btn.secondary{ background:var(--moss); border-color:var(--moss); }
 .btn.secondary::before{ background:var(--moss-deep); }
 .btn:disabled{opacity:.4;cursor:not-allowed; transform:none; box-shadow:none;}
@@ -271,7 +284,7 @@ footer{
   text-transform:uppercase; color:var(--ink-faint); background:none; border:1px solid var(--line);
   padding:5px 10px; border-radius:6px; cursor:pointer; transition:color .15s ease, border-color .15s ease;
 }
-.user-badge button:hover{ color:var(--ember); border-color:var(--ember); }
+.user-badge button:hover{ color:var(--petroleo); border-color:var(--petroleo); }
 
 @media (max-width:560px){
   h1{font-size:21px;}
@@ -287,10 +300,10 @@ footer{
   padding:28px;
 }
 .file-modal.show{ display:flex; }
-.file-modal-backdrop{ position:absolute; inset:0; background:rgba(20,15,10,0.82); }
+.file-modal-backdrop{ position:absolute; inset:0; background:rgba(9,16,22,0.82); }
 .file-modal-content{
   position:relative; z-index:1; max-width:min(900px, 92vw); max-height:88vh;
-  background:#241E18; border:1px solid rgba(255,255,255,0.1); border-radius:10px;
+  background:#1D2A32; border:1px solid rgba(255,255,255,0.1); border-radius:10px;
   padding:14px; display:flex; align-items:center; justify-content:center;
   box-shadow:0 40px 80px -20px rgba(0,0,0,0.6);
 }
@@ -298,7 +311,7 @@ footer{
 .file-modal-content iframe{ width:min(820px, 86vw); height:80vh; border:none; border-radius:4px; background:#fff; }
 .file-modal-close{
   position:absolute; top:-14px; right:-14px; width:34px; height:34px;
-  border-radius:50%; background:var(--ember); color:#fff; border:2px solid var(--paper);
+  border-radius:50%; background:var(--coral); color:#fff; border:2px solid var(--paper);
   font-size:16px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;
   transition:transform .15s var(--ease);
 }
@@ -334,7 +347,7 @@ footer{
    Antes cada página fijaba #171E20/#2B3436 a mano -- ahora es una clase
    compartida, con texto claro y los tres colores de marca como acento. */
 .dark-card{
-  background:#241E18; border:1px solid rgba(255,255,255,0.08); border-radius:12px;
+  background:#1D2A32; border:1px solid rgba(255,255,255,0.08); border-radius:12px;
   color:rgba(255,255,255,0.92);
 }
 

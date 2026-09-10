@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kárdex IA — Facturas</title>
+<title>Enlaza — Facturas</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,10 +22,10 @@
      debe seguir el tema oscuro). */
   #tableWrap, #empty{
     --paper-raised:#FFFFFF;
-    --ink:#241E18;
-    --ink-soft:#6C6152;
-    --ink-faint:#A79C8B;
-    --line:#E6DECA;
+    --ink:#1D2A32;
+    --ink-soft:#4A5E68;
+    --ink-faint:#8AA0AC;
+    --line:#DCE7EC;
     color:var(--ink);
   }
 
@@ -36,8 +36,8 @@
   select{
     font-family:'JetBrains Mono',monospace;
     font-size:12.5px; letter-spacing:.5px; text-transform:uppercase;
-    padding:9px 14px; border:1px solid #E6DECA; background:#FFFFFF;
-    color:#241E18; border-radius:6px; cursor:pointer;
+    padding:9px 14px; border:1px solid #DCE7EC; background:#FFFFFF;
+    color:#1D2A32; border-radius:6px; cursor:pointer;
   }
   .total-chip{
     font-family:'JetBrains Mono',monospace;
@@ -50,8 +50,8 @@
   .total-chip.egreso b{ color:var(--ember-deep); }
   .total-chip.ingreso{ color:#3E6053; background:#E9F0EB; }
   .total-chip.ingreso b{ color:#3E6053; }
-  .total-chip.balance{ color:#241E18; background:#EDEAE0; }
-  .total-chip.balance b{ color:#241E18; }
+  .total-chip.balance{ color:#1D2A32; background:#EDEAE0; }
+  .total-chip.balance b{ color:#1D2A32; }
 
   .mov-badge{
     display:inline-flex; align-items:center; gap:5px;
@@ -69,7 +69,7 @@
   thead th{
     font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:1px;
     text-transform:uppercase; color:var(--ink-soft); text-align:left;
-    padding:14px 20px; background:#F1EAD9; border-bottom:1px solid var(--line);
+    padding:14px 20px; background:#EAF3F7; border-bottom:1px solid var(--line);
   }
   tbody td{
     padding:18px 20px; font-size:14px; border-bottom:1px solid var(--line);
@@ -112,58 +112,58 @@
   .export-menu-wrap{ position:relative; }
   .export-menu{
     display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:40;
-    background:#FFFFFF; border:1px solid #E6DECA; border-radius:10px;
+    background:#FFFFFF; border:1px solid #DCE7EC; border-radius:10px;
     box-shadow:0 12px 32px -10px rgba(20,26,24,0.25); min-width:260px; padding:6px;
   }
   .export-menu.show{ display:block; }
   .export-menu-item{
     display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
     text-align:left; background:none; border:none; padding:9px 10px; border-radius:6px;
-    font-family:'JetBrains Mono',monospace; font-size:12px; color:#241E18; cursor:pointer;
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:#1D2A32; cursor:pointer;
   }
-  .export-menu-item:hover{ background:#F1EAD9; }
+  .export-menu-item:hover{ background:#EAF3F7; }
   .export-menu-item .emi-edit, .export-menu-item .emi-del{
-    font-size:11px; color:#A79C8B; padding:2px 5px; border-radius:4px;
+    font-size:11px; color:#8AA0AC; padding:2px 5px; border-radius:4px;
   }
   .export-menu-item .emi-edit:hover{ color:#3D5A45; }
   .export-menu-item .emi-del:hover{ color:#B8452F; }
-  .export-menu-sep{ height:1px; background:#E6DECA; margin:6px 4px; }
+  .export-menu-sep{ height:1px; background:#DCE7EC; margin:6px 4px; }
   .export-menu-label{
     font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase;
-    color:#A79C8B; padding:6px 10px 2px;
+    color:#8AA0AC; padding:6px 10px 2px;
   }
-  .export-menu-empty{ padding:8px 10px; font-size:11.5px; color:#A79C8B; font-style:italic; }
+  .export-menu-empty{ padding:8px 10px; font-size:11.5px; color:#8AA0AC; font-style:italic; }
 
   /* ---------- Modal de plantilla de exportación ---------- */
   .modal-plantilla{ display:none; position:fixed; inset:0; z-index:100; align-items:flex-start; justify-content:center; padding:5vh 16px; overflow-y:auto; }
   .modal-plantilla.show{ display:flex; }
   .modal-plantilla-backdrop{ position:fixed; inset:0; background:rgba(20,26,24,0.55); }
   .modal-plantilla-card{
-    position:relative; background:#FFFFFF; color:#241E18; border-radius:14px; width:100%; max-width:640px;
+    position:relative; background:#FFFFFF; color:#1D2A32; border-radius:14px; width:100%; max-width:640px;
     padding:26px 28px; box-shadow:0 24px 60px -12px rgba(0,0,0,0.4);
   }
   .modal-plantilla-card h3{ font-family:'Newsreader',serif; font-size:21px; margin:0 0 6px; }
-  .modal-plantilla-card label{ display:block; font-size:12px; color:#6C6152; margin:14px 0 5px; }
+  .modal-plantilla-card label{ display:block; font-size:12px; color:#4A5E68; margin:14px 0 5px; }
   .modal-plantilla-card input[type="text"]{
-    width:100%; padding:9px 12px; border:1px solid #E6DECA; border-radius:7px; font-size:13.5px; color:#241E18;
+    width:100%; padding:9px 12px; border:1px solid #DCE7EC; border-radius:7px; font-size:13.5px; color:#1D2A32;
     font-family:'Inter',sans-serif; box-sizing:border-box;
   }
   .modal-plantilla-note{
-    font-size:12px; color:#6C6152; background:#F1EAD9; border-radius:8px; padding:10px 12px; margin:14px 0 4px; line-height:1.5;
+    font-size:12px; color:#4A5E68; background:#EAF3F7; border-radius:8px; padding:10px 12px; margin:14px 0 4px; line-height:1.5;
   }
   .plantilla-columnas-head{
     display:grid; grid-template-columns:1fr 1fr auto auto auto; gap:6px; padding:0 4px;
-    font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A79C8B;
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#8AA0AC;
     margin-top:16px;
   }
   .plantilla-col-row{
     display:grid; grid-template-columns:1fr 1fr auto auto auto; gap:6px; align-items:center; margin-top:6px;
   }
   .plantilla-col-row select, .plantilla-col-row input{
-    font-family:'Inter',sans-serif; font-size:12.5px; padding:7px 9px; border:1px solid #E6DECA; border-radius:6px; color:#241E18; width:100%; box-sizing:border-box;
+    font-family:'Inter',sans-serif; font-size:12.5px; padding:7px 9px; border:1px solid #DCE7EC; border-radius:6px; color:#1D2A32; width:100%; box-sizing:border-box;
   }
   .plantilla-col-row .pc-move, .plantilla-col-row .pc-del{
-    background:none; border:1px solid #E6DECA; border-radius:6px; width:28px; height:30px; cursor:pointer; color:#6C6152;
+    background:none; border:1px solid #DCE7EC; border-radius:6px; width:28px; height:30px; cursor:pointer; color:#4A5E68;
   }
   .plantilla-col-row .pc-move:hover{ border-color:#3D5A45; color:#3D5A45; }
   .plantilla-col-row .pc-del:hover{ border-color:#B8452F; color:#B8452F; }
@@ -175,38 +175,38 @@
   .modal-validacion.show{ display:flex; }
   .modal-validacion-backdrop{ position:fixed; inset:0; background:rgba(20,26,24,0.55); }
   .modal-validacion-card{
-    position:relative; background:#FFFFFF; color:#241E18; border-radius:14px; width:100%; max-width:980px;
+    position:relative; background:#FFFFFF; color:#1D2A32; border-radius:14px; width:100%; max-width:980px;
     padding:26px 28px; box-shadow:0 24px 60px -12px rgba(0,0,0,0.4);
   }
   .modal-validacion-card h3{ font-family:'Newsreader',serif; font-size:21px; margin:0 0 6px; }
-  .modal-validacion-card .panel-sub{ color:#6C6152; margin-bottom:16px; }
-  .val-table-wrap{ overflow-x:auto; border:1px solid #E6DECA; border-radius:10px; }
+  .modal-validacion-card .panel-sub{ color:#4A5E68; margin-bottom:16px; }
+  .val-table-wrap{ overflow-x:auto; border:1px solid #DCE7EC; border-radius:10px; }
   table.val-table{ width:100%; border-collapse:collapse; min-width:820px; }
   table.val-table thead th{
     font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase;
-    color:#A79C8B; text-align:right; padding:9px 10px; background:#F1EAD9; border-bottom:1px solid #E6DECA; white-space:nowrap;
+    color:#8AA0AC; text-align:right; padding:9px 10px; background:#EAF3F7; border-bottom:1px solid #DCE7EC; white-space:nowrap;
   }
   table.val-table thead th:first-child, table.val-table thead th:nth-child(2){ text-align:left; }
-  table.val-table tbody td{ padding:8px 10px; border-bottom:1px solid #F1EAD9; vertical-align:middle; }
+  table.val-table tbody td{ padding:8px 10px; border-bottom:1px solid #EAF3F7; vertical-align:middle; }
   table.val-table tbody tr:last-child td{ border-bottom:none; }
   .val-proveedor{ font-size:12.5px; font-weight:600; white-space:nowrap; }
-  .val-proveedor-nit{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A79C8B; }
+  .val-proveedor-nit{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#8AA0AC; }
   .val-money-ro{ font-family:'JetBrains Mono',monospace; font-size:12px; text-align:right; white-space:nowrap; }
   .val-input{
     width:92px; font-family:'JetBrains Mono',monospace; font-size:12px; text-align:right;
-    padding:5px 7px; border:1px solid #E6DECA; border-radius:6px; color:#241E18; box-sizing:border-box;
+    padding:5px 7px; border:1px solid #DCE7EC; border-radius:6px; color:#1D2A32; box-sizing:border-box;
   }
   .val-input:focus{ outline:none; border-color:#3D5A45; }
   .val-input.val-changed{ border-color:#B8622F; background:#FBF1E9; }
   .val-total-cell{ font-family:'JetBrains Mono',monospace; font-size:12.5px; font-weight:600; text-align:right; white-space:nowrap; }
   .val-eximir-btn{
-    background:none; border:1px solid #E6DECA; color:#6C6152; font-family:'JetBrains Mono',monospace;
+    background:none; border:1px solid #DCE7EC; color:#4A5E68; font-family:'JetBrains Mono',monospace;
     font-size:10px; padding:4px 7px; border-radius:6px; cursor:pointer; white-space:nowrap;
   }
   .val-eximir-btn:hover{ border-color:#B8452F; color:#B8452F; }
   table.val-table tfoot td{
     padding:11px 10px; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600;
-    border-top:2px solid #241E18; background:#F1EAD9; text-align:right; white-space:nowrap;
+    border-top:2px solid #1D2A32; background:#EAF3F7; text-align:right; white-space:nowrap;
   }
   table.val-table tfoot td:first-child{ text-align:left; }
   .modal-validacion-actions{ display:flex; align-items:center; gap:10px; margin-top:20px; }
@@ -216,7 +216,7 @@
 
   tfoot td{
     padding:16px 20px; font-family:'JetBrains Mono',monospace; font-size:13px;
-    border-top:2px solid var(--ink); background:#F1EAD9;
+    border-top:2px solid var(--ink); background:#EAF3F7;
   }
   tfoot td.money{ text-align:right; font-weight:600; font-size:13.5px; }
 
@@ -226,7 +226,7 @@
     border:1px dashed var(--line); border-radius:12px; background:var(--paper-raised); display:none;
   }
   #empty.show{ display:block; }
-  #empty a{ color:var(--ember-deep); }
+  #empty a{ color:var(--petroleo-deep); }
   #tableWrap{ display:none; overflow-x:auto; }
   #tableWrap.show{ display:block; }
 
@@ -245,7 +245,7 @@
   .client-tabbar .ctb-back{
     font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink); font-weight:600; text-decoration:none; white-space:nowrap;
   }
-  .client-tabbar .ctb-back:hover{ color:var(--ember); }
+  .client-tabbar .ctb-back:hover{ color:var(--petroleo); }
   .client-tabbar .ctb-links{ display:flex; gap:6px; flex-wrap:wrap; }
   .client-tabbar .ctb-links a{
     font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
@@ -253,7 +253,7 @@
     transition:all .15s ease;
   }
   .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
-  .client-tabbar .ctb-links a.active{ background:var(--ember); border-color:var(--ember); color:#fff; }
+  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
   .client-tabbar .ctb-exit{
     font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
   }
@@ -271,8 +271,8 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <div class="logo-mark">K</div>
-      <span class="brand-text">K&aacute;rdex IA</span>
+      <div class="logo-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="16" r="7" stroke="#0B4F6C" stroke-width="3"/><circle cx="20" cy="16" r="7" stroke="#FF6B4A" stroke-width="3"/></svg></div>
+      <span class="brand-text">Enlaza</span>
     </div>
     <nav class="sidebar-nav">
       <a href="/" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Inicio</a>
@@ -282,7 +282,7 @@
       <a href="/integraciones.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6M10.5 6.5l1-1a3 3 0 014.24 4.24l-1 1M13.5 17.5l-1 1a3 3 0 01-4.24-4.24l1-1"/></svg>Integraciones</a>
     </nav>
     <div class="sidebar-spacer"></div>
-    <div class="sidebar-foot">C&oacute;lombia &middot; Kardex IA</div>
+    <div class="sidebar-foot">C&oacute;lombia &middot; Enlaza</div>
   </aside>
   <div class="wrap">
 
@@ -334,7 +334,7 @@
       <div class="export-menu-wrap">
         <button class="btn ghost" id="btnExportMenuToggle">Exportar ▾</button>
         <div class="export-menu" id="exportMenu">
-          <button class="export-menu-item" id="btnExportarDefault" type="button"><span>Formato Kárdex IA (el de siempre)</span></button>
+          <button class="export-menu-item" id="btnExportarDefault" type="button"><span>Formato Enlaza (el de siempre)</span></button>
           <div class="export-menu-sep"></div>
           <div class="export-menu-label">Tus plantillas</div>
           <div id="exportMenuPlantillas"><div class="export-menu-empty">Todavía no tienes ninguna.</div></div>
@@ -389,7 +389,7 @@
   <div class="modal-plantilla-backdrop" id="modalPlantillaBackdrop"></div>
   <div class="modal-plantilla-card">
     <h3 id="modalPlantillaTitulo">Nueva plantilla</h3>
-    <div class="panel-sub" style="color:#6C6152;">Ni Helisa ni World Office (ni la mayoría de sistemas contables) tienen un solo formato fijo de importación -- cada contador configura sus propias columnas. Arma aquí la tuya: qué dato va en cada columna, en qué orden, y con qué encabezado. Se guarda para que la reuses cada mes.</div>
+    <div class="panel-sub" style="color:#4A5E68;">Ni Helisa ni World Office (ni la mayoría de sistemas contables) tienen un solo formato fijo de importación -- cada contador configura sus propias columnas. Arma aquí la tuya: qué dato va en cada columna, en qué orden, y con qué encabezado. Se guarda para que la reuses cada mes.</div>
     <div id="modalPlantillaNota"></div>
 
     <label for="plantillaNombre">Nombre de la plantilla</label>
@@ -470,7 +470,7 @@ function escapeHtml(str){
 }
 
 (function animateTitle(){
-  const text = "Kárdex IA";
+  const text = "Enlaza";
   const container = document.getElementById('titleLetters');
   text.split('').forEach((ch, i) => {
     const span = document.createElement('span');
@@ -781,7 +781,7 @@ async function generarYDescargarExcelDefault(filtered, month){
     const COLOR_LINE = 'FFC9C2B2';
 
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Kárdex IA';
+    workbook.creator = 'Enlaza';
     workbook.created = new Date();
 
     const sheet = workbook.addWorksheet(monthLabel.slice(0, 31), {
@@ -800,7 +800,7 @@ async function generarYDescargarExcelDefault(filtered, month){
     // Fila 1: título de la hoja, fondo carbón (igual al sidebar de la app)
     sheet.mergeCells(1, 1, 1, headers.length);
     const titleCell = sheet.getCell(1, 1);
-    titleCell.value = `Kárdex IA — Facturas de ${monthLabel}`;
+    titleCell.value = `Enlaza — Facturas de ${monthLabel}`;
     titleCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: COLOR_WHITE } };
     titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_CARBON } };
@@ -963,7 +963,7 @@ async function generarYDescargarExcelDefault(filtered, month){
     alert('No se pudo generar el Excel: ' + err.message);
   } finally {
     btnExport.disabled = false;
-    btnExport.textContent = 'Formato Kárdex IA (el de siempre)';
+    btnExport.textContent = 'Formato Enlaza (el de siempre)';
   }
 }
 
@@ -1145,7 +1145,7 @@ function exportarConPlantilla(plantilla) {
 async function generarYDescargarExcelPlantilla(plantilla, filtered, month) {
   try {
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Kárdex IA';
+    workbook.creator = 'Enlaza';
     workbook.created = new Date();
     const sheet = workbook.addWorksheet('Datos', { views: [{ state: 'frozen', ySplit: 1 }] });
     sheet.columns = plantilla.columnas.map(c => ({ header: c.encabezado, width: Math.max(12, c.encabezado.length + 4) }));
