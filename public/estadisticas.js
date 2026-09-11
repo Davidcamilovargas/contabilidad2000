@@ -90,5 +90,5 @@ const CATEGORIA_LABELS_COMPARTIDO = {
   arrendamiento_muebles: 'Arriendo muebles', arrendamiento_inmuebles: 'Arriendo inmuebles',
   transporte_carga: 'Transporte carga', transporte_pasajeros: 'Transporte pasajeros',
   licenciamiento_software: 'Software', vigilancia_aseo: 'Vigilancia/aseo',
-  hoteles_restaurantes: 'Hoteles/restaurantes', otro: 'Otro',
+  hoteles_restaurantes: 'Hoteles/restaurantes', servicios_publicos: 'Servicios públicos', otro: 'Otro',
 };

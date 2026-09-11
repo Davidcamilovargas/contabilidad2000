@@ -159,10 +159,17 @@ const SUBCUENTAS_GASTO = {
   servicios: [
     ['513595', 'Servicios -- Otros'],
     ['513510', 'Temporales'],
+    ['513515', 'Asesoría y asistencia técnica'],
+    ['513520', 'Procesamiento electrónico de datos'],
     ['513525', 'Acueducto y alcantarillado'],
     ['513530', 'Energía eléctrica'],
     ['513535', 'Teléfono'],
+    ['513540', 'Correo, portes y telégrafo'],
+    ['513545', 'Publicidad y propaganda'],
     ['513555', 'Gas'],
+    ['513560', 'Servicios de aseo (contratado, sin ser vigilancia/aseo fijo)'],
+    ['513565', 'Fletes y acarreos menores'],
+    ['513570', 'Mantenimiento y reparaciones (equipos/oficina)'],
   ],
   honorarios_juridica: [
     ['511095', 'Honorarios -- Otros'],
@@ -212,6 +219,9 @@ const SUBCUENTAS_GASTO = {
   otro: [
     ['519595', 'Diversos -- Otros'],
   ],
+  servicios_publicos: [
+    ['513528', 'Servicios públicos'],
+  ],
 };
 
 
@@ -233,8 +243,20 @@ const SUBCUENTAS_GASTO = {
 function perfilFiscalEfectivo(inv, perfilTercero) {
   const regimenSimple = !!(perfilTercero && perfilTercero.regimen_simple) ||
     inv.regimen_simple === true || inv.regimen_simple === 'true';
-  const autorretenedor = !!(perfilTercero && perfilTercero.autorretenedor);
-  return { regimenSimple, autorretenedor };
+  // Igual que regimen_simple: si el contador ya marcó el NIT como
+  // autorretenedor en la ficha de terceros, ESO manda; si no, se cae de
+  // vuelta a lo que la IA leyó en el documento puntual (inv.autorretenedor
+  // -- muy común verlo impreso en facturas de servicios públicos).
+  const autorretenedor = !!(perfilTercero && perfilTercero.autorretenedor) ||
+    inv.autorretenedor === true || inv.autorretenedor === 'true';
+  // `declaranteRenta` -- a diferencia de los tres de arriba, esto NO
+  // fuerza la retención a $0: solo permite usar la tarifa BAJA exacta
+  // (la de declarante) en vez del rango bajo-alto, en las categorías
+  // donde la tarifa depende de si el proveedor declara renta o no. Si
+  // nadie lo marcó todavía, se sigue mostrando el rango como antes --
+  // "no se sabe" nunca se trata como "no declara".
+  const declaranteRenta = !!(perfilTercero && perfilTercero.declarante_renta);
+  return { regimenSimple, autorretenedor, declaranteRenta };
 }
 
 // Calcula la retención en la fuente SUGERIDA (estimada -- no oficial, no
@@ -281,7 +303,7 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
 // `aiuUsado`/`baseUsada` solo vienen en las categorías con baseEspecial
 // -- en las demás, la base ES el subtotal (mismo comportamiento de
 // siempre, no hace falta reportarla aparte).
-function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu) {
+function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta) {
   tarifasAprendidas = tarifasAprendidas || {};
   const categoriaKey = String(categoria || '').toLowerCase();
   const configBase = TARIFAS_RETENCION[categoriaKey];
@@ -294,7 +316,14 @@ function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fech
   if (subtotalNum < umbralPesos(configBase, fechaFactura)) return null; // bajo el umbral, no aplica
 
   const aprendida = tarifasAprendidas[`${nitProveedor || ''}|${categoriaKey}`];
-  const config = aprendida !== undefined ? { tarifaBaja: aprendida, tarifaAlta: aprendida } : configBase;
+  // Si ya se confirmó una tarifa exacta antes (aprendida), esa manda --
+  // es más específica que el flag general de declarante. Si no hay
+  // tarifa aprendida pero el contador SÍ marcó a este proveedor como
+  // declarante de renta (ficha de terceros), se usa la tarifa BAJA
+  // exacta en vez del rango bajo-alto -- ver perfilFiscalEfectivo().
+  const config = aprendida !== undefined
+    ? { tarifaBaja: aprendida, tarifaAlta: aprendida }
+    : (declaranteRenta ? { tarifaBaja: configBase.tarifaBaja, tarifaAlta: configBase.tarifaBaja } : configBase);
 
   if (configBase.baseEspecial === 'aiu') {
     const aiuNum = (aiu === undefined || aiu === null || aiu === '') ? null : Number(aiu);
@@ -364,7 +393,7 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     const categoriasFaltantesAiu = [];
     const cuentasInvolucradas = new Map(); // cuentaPUC -> nombrePUC, sin duplicados
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
-      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte]);
+      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta);
       if (!r) continue; // esta parte no aplica (categoría sin tarifa, o bajo su umbral), se omite
       if (r.requiereAiu) {
         faltaAiuEnAlguna = true;
@@ -392,7 +421,7 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
   }
 
   // Sin desglose -- factura de una sola categoría, comportamiento normal.
-  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu);
+  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu, perfil.declaranteRenta);
   if (!r) return null;
   if (r.requiereAiu) {
     return {
@@ -447,7 +476,7 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   const cuentasInvolucradas = new Map();
   const itemsFaltantesAiu = [];
   const porItem = items.map((item, idx) => {
-    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu);
+    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu, perfil.declaranteRenta);
     if (!r) return null;
     if (r.requiereAiu) {
       itemsFaltantesAiu.push({ idx, descripcion: item.descripcion || '', subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo });

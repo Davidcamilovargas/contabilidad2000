@@ -126,6 +126,27 @@ async function ensureSchema() {
   // hasta ahora nunca se guardaba. Sin esto, el cálculo de retención
   // sugerida no puede saber esto para facturas ya guardadas.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS regimen_simple BOOLEAN DEFAULT false;`);
+  // Igual que regimen_simple, pero para "Autorretenedor" -- muy común en
+  // facturas de servicios públicos (EPM y similares lo imprimen junto al
+  // NIT del emisor). Si el proveedor se autorretiene, el comprador NO
+  // debe practicar retención en la fuente ni ReteICA sobre esa factura
+  // (ver perfilFiscalEfectivo() en public/retenciones.js).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS autorretenedor BOOLEAN DEFAULT false;`);
+  // Número de digitación/comprobante -- lo escribe el contador cuando YA
+  // registró esta factura en su propio software contable (Siigo, Alegra,
+  // World Office, etc.). Mientras esté vacío, la factura se puede seguir
+  // corrigiendo libremente en Enlaza; el frontend exige este número antes
+  // de poder guardar/marcar como lista, para que nunca quede una factura
+  // "digitada" (ya contabilizada afuera) que alguien siga editando acá
+  // sin que el número contable quede desincronizado.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS numero_digitacion TEXT DEFAULT '';`);
+  // Avisos informativos que la IA puede detectar en el documento -- no
+  // afectan ningún cálculo, solo alimentan un aviso en la interfaz para
+  // que el contador revise a mano (ej. una factura de servicios públicos
+  // que muestra un "saldo vencido" de un periodo anterior ya pagado, o
+  // un anticipo/avance que el proveedor ya descontó del total).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS saldo_vencido_detectado BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS anticipo_detectado BOOLEAN DEFAULT false;`);
   // Desglose del subtotal por categoría, para facturas que mezclan
   // ítems de distinta naturaleza (ej. productos + mano de obra en la
   // misma factura) -- se guarda como texto JSON, ej: '{"compras":442000,"servicios":140000}'.
@@ -298,7 +319,7 @@ async function ensureSchema() {
 
   // "Memoria" de correcciones -- guarda qué categoría corrigió cada
   // contador para qué palabra del concepto. No es que la IA aprenda,
-  // es que Kárdex IA recuerda y aplica la corrección la próxima vez,
+  // es que Enlaza recuerda y aplica la corrección la próxima vez,
   // antes de mostrarle el resultado al contador.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS concepto_correcciones (
@@ -356,6 +377,7 @@ async function ensureSchema() {
       autorretenedor BOOLEAN NOT NULL DEFAULT false,
       regimen_simple BOOLEAN NOT NULL DEFAULT false,
       agente_retencion_iva BOOLEAN NOT NULL DEFAULT false,
+      declarante_renta BOOLEAN NOT NULL DEFAULT false,
       notas TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -363,6 +385,10 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_terceros_fiscales_contador ON terceros_fiscales (contador_id);`);
+  // CREATE TABLE IF NOT EXISTS no agrega columnas nuevas a una tabla que
+  // ya existía de antes -- por eso `declarante_renta` (agregado después
+  // de las cuatro banderas originales) necesita su propio ALTER TABLE.
+  await pool.query(`ALTER TABLE terceros_fiscales ADD COLUMN IF NOT EXISTS declarante_renta BOOLEAN NOT NULL DEFAULT false;`);
 
   // Tarifas de ReteICA -- a diferencia de Rete Fuente/Rete IVA (que son
   // nacionales, una sola tabla vale para todo el país), el ICA lo fija
@@ -426,7 +452,7 @@ async function ensureSchema() {
   // aparte por si la tabla ya existía de antes de este campo.
   await pool.query(`ALTER TABLE integraciones_contables ADD COLUMN IF NOT EXISTS configuracion TEXT NOT NULL DEFAULT '{}';`);
   // A qué factura de Alegra/Siigo (u otro proveedor) corresponde cada
-  // factura guardada en Kárdex IA, para no volver a crearla si se manda
+  // factura guardada en Enlaza, para no volver a crearla si se manda
   // "Enviar" dos veces, y para mostrar el estado en Facturas. Cada
   // proveedor tiene sus propias columnas porque una misma factura se
   // podría enviar a más de uno.
@@ -509,7 +535,7 @@ app.post('/auth/google', async (req, res) => {
     if (Number(authCount.rows[0].count) > 0) {
       const allowed = await pool.query('SELECT 1 FROM authorized_emails WHERE LOWER(email) = LOWER($1)', [email]);
       if (allowed.rows.length === 0) {
-        return res.status(403).json({ error: 'Tu correo todavía no está autorizado para usar Kárdex IA. Escríbele a David para que te dé acceso.' });
+        return res.status(403).json({ error: 'Tu correo todavía no está autorizado para usar Enlaza. Escríbele a David para que te dé acceso.' });
       }
     }
 
@@ -663,8 +689,8 @@ const SAVED_FIELDS = [
   'valor_sin_iva', 'valor_iva', 'valor_con_iva',
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
-  'regimen_simple', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
-  'tarifa_ica_id',
+  'regimen_simple', 'autorretenedor', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
+  'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado',
 ];
 
 function rowToInvoice(row) {
@@ -918,8 +944,10 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       if (key === 'cliente_id') return val === '' ? null : val;
       // tarifa_ica_id es de tipo UUID igual que cliente_id -- mismo tratamiento.
       if (key === 'tarifa_ica_id') return val === '' ? null : val;
-      // regimen_simple es de tipo BOOLEAN -- convertir explícitamente.
-      if (key === 'regimen_simple') return val === true || val === 'true';
+      // Estos campos son de tipo BOOLEAN -- convertir explícitamente.
+      if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
+        return val === true || val === 'true';
+      }
       return val;
     });
     const columns = [...SAVED_FIELDS, 'contador_id'].join(', ');
@@ -1091,7 +1119,7 @@ app.get('/api/integraciones', requireAuth, async (req, res) => {
 // del proveedor -- si el correo/token no sirven, no se guarda basura.
 //
 // Algunos proveedores (hoy, Siigo) además exigen que el contador elija
-// de su PROPIA cuenta algo que Kárdex IA no puede adivinar (ej. qué
+// de su PROPIA cuenta algo que Enlaza no puede adivinar (ej. qué
 // tipo de comprobante y qué forma de pago usar). Si el adaptador
 // declara `obtenerOpcionesConfiguracion` y todavía no llegó una
 // `configuracion` válida en el body, esta ruta responde con las
@@ -1163,7 +1191,7 @@ app.delete('/api/integraciones/:proveedor', requireAuth, async (req, res) => {
   }
 });
 
-// Envía una factura YA guardada en Kárdex IA hacia el software contable
+// Envía una factura YA guardada en Enlaza hacia el software contable
 // conectado (por ahora, Alegra) como factura de proveedor. El contador
 // decide cuándo mandarla -- nunca es automático al guardar, para que
 // siempre haya una revisión humana antes de tocar su contabilidad real.
@@ -1336,7 +1364,7 @@ async function llamarGeminiChat(systemPrompt, historial, mensajeNuevo) {
   return textOut.trim();
 }
 
-const SOPORTE_CHAT_PROMPT = `Eres el asistente de soporte de Kárdex IA, una aplicación colombiana para contadores independientes que escanea facturas y cuentas de cobro con IA, calcula retenciones, y organiza la contabilidad de sus clientes.
+const SOPORTE_CHAT_PROMPT = `Eres el asistente de soporte de Enlaza, una aplicación colombiana para contadores independientes que escanea facturas y cuentas de cobro con IA, calcula retenciones, y organiza la contabilidad de sus clientes.
 
 Tu trabajo es ser la PRIMERA capa de soporte -- responder dudas rápidas sobre cómo usar la aplicación, y explicar mensajes de error comunes -- ANTES de que el contador tenga que escribirle a soporte humano.
 
@@ -1381,7 +1409,7 @@ app.post('/api/soporte-chat', requireAuth, async (req, res) => {
   }
 });
 
-const INVOICE_PROMPT = `Eres un asistente contable colombiano. Antes de extraer ningún dato, tu PRIMERA tarea es identificar qué tipo de documento es la imagen o archivo que recibiste, porque Kárdex IA SOLO debe procesar los dos únicos documentos que se pueden causar contablemente en Colombia: la factura de venta y la cuenta de cobro. Cualquier otro tipo de documento debe rechazarse, aunque tenga valores y NIT parecidos a una factura.
+const INVOICE_PROMPT = `Eres un asistente contable colombiano. Antes de extraer ningún dato, tu PRIMERA tarea es identificar qué tipo de documento es la imagen o archivo que recibiste, porque Enlaza SOLO debe procesar los tres únicos documentos que se pueden causar contablemente en Colombia: la factura de venta, la cuenta de cobro y la factura de servicios públicos domiciliarios (agua, energía, gas, aseo -- es un "documento equivalente electrónico" con la misma validez legal que una factura, según el artículo 130 de la Ley 142 de 1994). Cualquier otro tipo de documento debe rechazarse, aunque tenga valores y NIT parecidos a una factura.
 
 CÓMO IDENTIFICAR CADA TIPO (usa estas señales, no solo el título del documento):
 
@@ -1398,19 +1426,25 @@ CUENTA DE COBRO -- tipo_documento = "cuenta_cobro":
 - Trae: fecha, nombre y NIT/cédula de quien cobra, nombre y NIT/cédula (o razón social) de quien debe pagar, una descripción del servicio o concepto, y el valor total a pagar.
 - A menudo incluye la frase "no obligado(a) a facturar" (o similar) y un espacio de firma.
 
+FACTURA DE SERVICIOS PÚBLICOS DOMICILIARIOS -- tipo_documento = "factura_servicios_publicos":
+- Es la factura periódica (mensual) de una empresa de servicios públicos: acueducto, alcantarillado, energía eléctrica, gas natural, aseo/recolección de basuras, o una combinación de varias en un mismo documento (ej. EPM, Enel-Codensa, Vanti, Aguas de ..., Enviaseo).
+- Suele decir "Documento Equivalente Electrónico" o traer el nombre de la empresa prestadora de forma muy prominente (logo grande), un "período facturado", lecturas de medidor (actual/anterior) o consumos en m³/kWh, y un "Total a pagar".
+- Identifica al usuario/suscriptor que paga (con NIT o cédula) y a la empresa prestadora (con su propio NIT), aunque no siempre discrimine IVA como una factura de venta común -- muchos de estos servicios son excluidos de IVA.
+- A menudo aclara en letra pequeña que la empresa es "Autorretenedor" (de renta y/o de ICA) -- eso es clave para el campo "autorretenedor" más abajo.
+
 CUALQUIER OTRO DOCUMENTO -- tipo_documento = "otro" (SIEMPRE rechazar, documento_valido debe ser false), por ejemplo:
 - Comprobantes o recibos de pago, soportes o confirmaciones de transferencia bancaria, extractos bancarios.
 - Cotizaciones, proformas, órdenes de compra o remisiones sin valor fiscal.
 - Contratos, recibos de consignación, tickets no fiscales, reportes o resúmenes de pagos.
-- Capturas de pantalla de apps de pago, comprobantes de Nequi/Daviplata/PSE, o cualquier documento que no sea ni una factura de venta ni una cuenta de cobro.
+- Capturas de pantalla de apps de pago, comprobantes de Nequi/Daviplata/PSE, o cualquier documento que no sea una factura de venta, una cuenta de cobro, ni una factura de servicios públicos.
 
-Si tienes dudas genuinas entre factura de venta y cuenta de cobro, elige la que mejor encaje y sigue adelante -- el rechazo (tipo_documento = "otro") es solo para documentos que claramente NO son ninguno de los dos.
+Si tienes dudas genuinas entre estos tres tipos válidos, elige el que mejor encaje y sigue adelante -- el rechazo (tipo_documento = "otro") es solo para documentos que claramente NO son ninguno de los tres.
 
 Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
 
 {
-  "tipo_documento": "'factura_venta' si es una factura de venta (electrónica o física), 'cuenta_cobro' si es una cuenta de cobro, 'otro' para cualquier otro documento (comprobantes de pago, extractos, cotizaciones, contratos, etc.) -- ver criterios arriba",
-  "documento_valido": "true SOLO si tipo_documento es 'factura_venta' o 'cuenta_cobro'. false para 'otro'",
+  "tipo_documento": "'factura_venta' si es una factura de venta (electrónica o física), 'cuenta_cobro' si es una cuenta de cobro, 'factura_servicios_publicos' si es una factura de servicios públicos domiciliarios (agua/energía/gas/aseo), 'otro' para cualquier otro documento (comprobantes de pago, extractos, cotizaciones, contratos, etc.) -- ver criterios arriba",
+  "documento_valido": "true SOLO si tipo_documento es 'factura_venta', 'cuenta_cobro' o 'factura_servicios_publicos'. false para 'otro'",
   "motivo_rechazo": "si documento_valido es false, una frase breve en español explicando qué parece ser el documento en su lugar (ej: 'Este documento parece ser un comprobante de transferencia bancaria, no una factura ni una cuenta de cobro'). Si documento_valido es true, cadena vacía",
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
   "nit_cc": "número de identificación del proveedor/emisor, solo dígitos",
@@ -1429,9 +1463,12 @@ Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO 
   "adquiriente_nit": "número de identificación de quien RECIBE la factura (no quien la emite). Casi todas las facturas colombianas traen una segunda sección de identificación, separada de la del emisor/vendedor -- puede llamarse 'Adquiriente', 'Comprador', 'Receptor', 'Cliente', 'Datos del Cliente', o similar según el software que generó la factura. Busca esa segunda sección sin importar cómo la llamen, y extrae el NIT que aparece ahí, solo dígitos. Si no la encuentras, deja una cadena vacía",
   "adquiriente_nombre": "nombre o razón social de quien RECIBE la factura -- la misma segunda sección mencionada arriba (Adquiriente / Comprador / Receptor / Cliente, como la llame el documento). Si no la encuentras, deja una cadena vacía",
   "regimen_simple": "true si el documento menciona explícitamente que el emisor pertenece al 'Régimen Simple de Tributación' o dice algo como 'no practique ninguna retención' (suele aparecer en la sección de notas/detalles). false en cualquier otro caso, incluido cuando no estés seguro",
-  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'servicios_temporales' (suministro de personal temporal por una Empresa de Servicios Temporales -- EST -- legalmente constituida, distinto de una simple prestación de servicios), 'hoteles_restaurantes' (alojamiento o alimentación), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
+  "autorretenedor": "true si el documento menciona explícitamente que el emisor es 'Autorretenedor' (de renta y/o de ICA) -- es muy común en facturas de servicios públicos (EPM y similares suelen imprimirlo en letra pequeña cerca del NIT del emisor, ej. 'Autorretenedor Renta -- Res. ...'). false en cualquier otro caso, incluido cuando no estés seguro. Cuando es true, el comprador NO debe practicar retención en la fuente ni ReteICA sobre esta factura -- el proveedor ya se autorretiene y se la gira directamente a la DIAN/municipio.",
+  "saldo_vencido_detectado": "true SOLO si el documento muestra explícitamente un 'saldo vencido', 'deuda anterior', 'saldo anterior pendiente' o similar (frecuente en facturas de servicios públicos que arrastran periodos sin pagar) -- es decir, el 'total a pagar' del documento incluye algo más que el consumo/servicio de ESTE periodo. false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si ese saldo anterior ya fue pagado antes de registrar el gasto.",
+  "anticipo_detectado": "true SOLO si el documento menciona explícitamente un anticipo o avance ya entregado/descontado (ej. 'anticipo del 50% ya cancelado', 'menos avance recibido'). false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si el total de la factura ya descuenta ese anticipo.",
+  "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'servicios_temporales' (suministro de personal temporal por una Empresa de Servicios Temporales -- EST -- legalmente constituida, distinto de una simple prestación de servicios), 'hoteles_restaurantes' (alojamiento o alimentación), 'servicios_publicos' (usa SIEMPRE esta categoría cuando tipo_documento es 'factura_servicios_publicos', sin importar cuántos servicios distintos venga combinando el documento -- acueducto, alcantarillado, energía, aseo, etc. son todos 'servicios_publicos'), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
   "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás.",
-  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). Nunca inventes ítems que no estén realmente en el documento."
+  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). EXCEPCIÓN -- factura de servicios públicos: cuando tipo_documento es 'factura_servicios_publicos' y el documento combina varios servicios (ej. acueducto + alcantarillado + energía + aseo, cada uno con su propio subtotal), NO los separes en varios ítems -- devuelve siempre un arreglo con UN SOLO elemento por el valor TOTAL de la factura (todos los servicios sumados), \"descripcion\": 'Servicios públicos' seguido de cuáles servicios incluye (ej. 'Servicios públicos (acueducto, alcantarillado, energía, aseo)'), \"categoria_concepto\": 'servicios_publicos'. Nunca inventes ítems que no estén realmente en el documento."
 }
 
 REGLA DE FORMATO PARA LOS CAMPOS DE VALOR (los 3 de arriba, y también valor_unitario/subtotal de cada ítem del arreglo "items" -- muy importante, es el error más común):
@@ -1445,7 +1482,7 @@ Muchas facturas electrónicas colombianas incluyen una sección "Retenciones" o 
 
 Si algún campo no se puede determinar con certeza, usa una cadena vacía "" para ese campo (excepto valor_iva, rete_fuente, rete_iva y rete_ica, que en ese caso van en 0). No inventes datos. Verifica que valor_sin_iva + valor_iva sea igual (o muy cercano, por redondeo de centavos) a valor_con_iva antes de responder.
 
-Si documento_valido es false (el documento no es factura de venta ni cuenta de cobro), igual completa nombre_razon_social y concepto con lo que alcances a leer si es evidente (ayuda a que el contador entienda qué era el archivo), pero deja los campos de valores en 0 y el resto en cadena vacía -- no hace falta forzar una lectura completa de un documento que de todos modos se va a rechazar.`;
+Si documento_valido es false (el documento no es factura de venta, cuenta de cobro, ni factura de servicios públicos), igual completa nombre_razon_social y concepto con lo que alcances a leer si es evidente (ayuda a que el contador entienda qué era el archivo), pero deja los campos de valores en 0 y el resto en cadena vacía -- no hace falta forzar una lectura completa de un documento que de todos modos se va a rechazar.`;
 
 // Endpoint que recibe el archivo (imagen o PDF) de una factura y llama a la API gratuita de Gemini
 // Misma lógica que usaba /api/extract directamente -- ahora vive
@@ -1468,11 +1505,12 @@ async function procesarExtraccionFactura(userId, base64, effectiveMediaType, isP
   const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
   parsed.file_hash = fileHash;
 
-  if (parsed.documento_valido === false || (parsed.tipo_documento && parsed.tipo_documento !== 'factura_venta' && parsed.tipo_documento !== 'cuenta_cobro')) {
-    const err = new Error('Documento rechazado -- no es factura ni cuenta de cobro (tipo detectado: ' + (parsed.tipo_documento || 'desconocido') + ').');
+  const TIPOS_DOCUMENTO_VALIDOS = ['factura_venta', 'cuenta_cobro', 'factura_servicios_publicos'];
+  if (parsed.documento_valido === false || (parsed.tipo_documento && !TIPOS_DOCUMENTO_VALIDOS.includes(parsed.tipo_documento))) {
+    const err = new Error('Documento rechazado -- no es factura, cuenta de cobro, ni factura de servicios públicos (tipo detectado: ' + (parsed.tipo_documento || 'desconocido') + ').');
     err.status = 422;
     const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
-    err.publicMessage = `Este archivo no parece ser una factura de venta ni una cuenta de cobro.${motivo} Kárdex IA solo procesa esos dos tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`;
+    err.publicMessage = `Este archivo no parece ser una factura de venta, una cuenta de cobro, ni una factura de servicios públicos.${motivo} Enlaza solo procesa esos tres tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`;
     throw err;
   }
 
@@ -1993,7 +2031,7 @@ function normalizarNit(nit) {
 app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, notas, updated_at
+      `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at
        FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
       [req.userId]
     );
@@ -2014,24 +2052,26 @@ app.post('/api/terceros-fiscales', requireAuth, async (req, res) => {
     const autorretenedor = !!req.body.autorretenedor;
     const regimenSimple = !!req.body.regimen_simple;
     const agenteRetencionIva = !!req.body.agente_retencion_iva;
+    const declaranteRenta = !!req.body.declarante_renta;
 
     // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
     // sentido guardar una fila vacía -- se borra en vez de guardar.
-    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !nombre && !notas) {
+    if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !nombre && !notas) {
       await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.userId, nit]);
-      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, notas: '', borrado: true });
+      return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, notas: '', borrado: true });
     }
 
     const id = crypto.randomUUID();
     const { rows } = await pool.query(
-      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, notas)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO terceros_fiscales (id, contador_id, nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (contador_id, nit) DO UPDATE SET
          nombre = EXCLUDED.nombre, gran_contribuyente = EXCLUDED.gran_contribuyente,
          autorretenedor = EXCLUDED.autorretenedor, regimen_simple = EXCLUDED.regimen_simple,
-         agente_retencion_iva = EXCLUDED.agente_retencion_iva, notas = EXCLUDED.notas, updated_at = now()
-       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, notas, updated_at`,
-      [id, req.userId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, notas]
+         agente_retencion_iva = EXCLUDED.agente_retencion_iva, declarante_renta = EXCLUDED.declarante_renta,
+         notas = EXCLUDED.notas, updated_at = now()
+       RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at`,
+      [id, req.userId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, notas]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -2209,7 +2249,7 @@ app.listen(PORT, async () => {
     lotes.init({ pool, crypto, procesarExtraccionFactura, detectarClienteYMovimientoServidor });
     await lotes.asegurarSchemaLotes();
     lotes.dispararProcesamiento(); // por si el servidor se reinició con un lote a medias
-    console.log(`\n✔ Kárdex IA corriendo en http://localhost:${PORT}`);
+    console.log(`\n✔ Enlaza corriendo en http://localhost:${PORT}`);
     console.log(`✔ Base de datos conectada y lista\n`);
   } catch (err) {
     console.error('\n[ERROR] No se pudo conectar/preparar la base de datos:', err.message);

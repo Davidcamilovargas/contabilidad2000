@@ -38,11 +38,21 @@
   #summaryWrap{ display:none; }
   #summaryWrap.show{ display:block; }
 
+  /* En pantallas angostas la tabla no se aplasta ni desborda la página --
+     mantiene un ancho mínimo legible y el que se mueve es el contenedor,
+     con scroll horizontal propio (la página nunca se desplaza a los
+     lados, solo la tabla). */
+  #summaryTableWrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:12px; }
   #summaryTable{
     --paper-raised:#FFFFFF; --ink:#1D2A32; --ink-soft:#4A5E68; --ink-faint:#8AA0AC; --line:#DCE7EC;
-    width:100%; border-collapse:collapse; background:var(--paper-raised);
+    width:100%; min-width:760px; border-collapse:collapse; background:var(--paper-raised);
     border:1px solid var(--line); border-radius:12px; overflow:hidden;
     box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+  }
+  @media (max-width:640px){
+    #summaryTable thead th{ padding:9px 10px; font-size:9.5px; }
+    #summaryTable tbody td{ padding:10px 10px; font-size:12.5px; }
+    #summaryTable select{ max-width:130px; }
   }
   #summaryTable thead th{
     font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
@@ -291,6 +301,7 @@
   </div>
 
   <div id="summaryWrap">
+    <div id="summaryTableWrap">
     <table id="summaryTable">
       <thead>
         <tr>
@@ -300,12 +311,14 @@
           <th style="text-align:right">Valor</th>
           <th>Categoría</th>
           <th>Subcuenta (PUC)</th>
+          <th>N.° digitación</th>
           <th>Movimiento / Cliente</th>
           <th>Estado</th>
         </tr>
       </thead>
       <tbody id="summaryBody"></tbody>
     </table>
+    </div>
 
     <div id="saveAllBar">
       <span class="info"><b id="countListas">0</b> listas para guardar · <b id="countRevisar">0</b> necesitan revisión · <b id="countDuplicadas">0</b> ya existían (no se leyeron de nuevo)</span>
@@ -360,6 +373,7 @@ const CATEGORIAS = [
   ["vigilancia_aseo","Vigilancia y aseo"],
   ["servicios_temporales","Servicios temporales (EST)"],
   ["hoteles_restaurantes","Hoteles y restaurantes"],
+  ["servicios_publicos","Servicios públicos (agua, energía, gas, aseo)"],
   ["otro","Otro"],
 ];
 const CATEGORIA_LABELS = Object.fromEntries(CATEGORIAS);
@@ -499,7 +513,7 @@ function renderFichaMovimiento(item){
 const RETE_KEYS_EDITABLES = ['rete_fuente', 'rete_iva', 'rete_ica'];
 const RETE_ESTIMADO_ID = { rete_fuente: 'masivoEstimadoFuente', rete_iva: 'masivoEstimadoIva', rete_ica: 'masivoEstimadoIca' };
 
-function renderFichaCompleta(item){
+function renderFichaCompleta(item, modoEdicion){
   const modalDatos = document.getElementById('modalDatos');
   itemAbierto = item;
 
@@ -509,6 +523,12 @@ function renderFichaCompleta(item){
   }
 
   const d = item.data;
+  // En modo edición (se abrió con el botón "Revisar"), TODOS los campos
+  // de la ficha quedan editables -- no solo Rete Fuente/IVA/ICA como
+  // antes. Esto es lo que permite corregir una factura completa desde
+  // acá, con el mismo nivel de acceso que ya tenía Escanear, en vez de
+  // depender únicamente de los selectores sueltos de categoría/subcuenta
+  // en la fila de la tabla.
   const filasCampos = FICHA_CAMPOS.map((f) => {
     if (RETE_KEYS_EDITABLES.includes(f.key)) {
       const valorActual = Number(d[f.key]) || 0;
@@ -518,6 +538,15 @@ function renderFichaCompleta(item){
           <div class="fd-value money"><input type="text" data-rete-key="${f.key}" value="${valorActual.toLocaleString('es-CO')}"></div>
         </div>
         <div class="rete-estimado" id="${RETE_ESTIMADO_ID[f.key]}"></div>
+      `;
+    }
+    if (modoEdicion) {
+      const valorEdit = f.money ? (Number(d[f.key]) || 0).toLocaleString('es-CO') : (d[f.key] || '');
+      return `
+        <div class="fd-row">
+          <div class="fd-label">${escapeHtml(f.label)}</div>
+          <div class="fd-value${f.money ? ' money' : ''}"><input type="text" data-campo-key="${f.key}" data-campo-money="${f.money ? '1' : '0'}" value="${escapeHtml(valorEdit)}"></div>
+        </div>
       `;
     }
     let valor = d[f.key];
@@ -603,9 +632,25 @@ function renderFichaCompleta(item){
     `;
   }
 
+  // Avisos informativos que la IA detectó en el documento (saldo
+  // vencido de un periodo anterior, o un anticipo/avance ya descontado)
+  // -- no cambian ningún cálculo, solo alertan para que el contador
+  // revise a mano si el valor a registrar necesita ajuste.
+  const avisosDoc = [];
+  if (d.saldo_vencido_detectado === true || d.saldo_vencido_detectado === 'true') {
+    avisosDoc.push('⚠ El documento muestra un <b>saldo vencido</b> -- puede incluir deuda de un periodo anterior ya pagado. Ajusta "Valor Sin IVA"/"Valor Con IVA" arriba si hace falta.');
+  }
+  if (d.anticipo_detectado === true || d.anticipo_detectado === 'true') {
+    avisosDoc.push('⚠ El documento menciona un <b>anticipo/avance</b> ya descontado -- confirma que el valor a registrar es el correcto.');
+  }
+  const filaAvisos = avisosDoc.length > 0
+    ? `<div class="fd-row" style="background:#F6ECE7;border-radius:6px;padding:8px 10px;">${avisosDoc.map(a => `<div style="color:#7A2E1B;font-size:12px;">${a}</div>`).join('')}</div>`
+    : '';
+
   modalDatos.innerHTML = `
     <div class="factura-detalle">
       ${renderFichaMovimiento(item)}
+      ${filaAvisos}
       <div class="fd-table">${filasCampos}${filaCategoria}${filaRetencion}${filaReteIva}</div>
       <div id="itemsMiniPanel"></div>
     </div>
@@ -882,9 +927,21 @@ function mostrarFormNuevaTarifaIcaMasivo(estIcaEl, d, icaInput){
 // item (innerHTML nuevo), así que en vez de re-enganchar listeners en
 // cada render, se escucha una sola vez aquí arriba.
 document.getElementById('modalDatos').addEventListener('input', (e) => {
-  if (!e.target.dataset || !e.target.dataset.reteKey || !itemAbierto) return;
-  itemAbierto.data[e.target.dataset.reteKey] = parseMoneyValue(e.target.value);
-  actualizarEstimadosRetencionMasivo();
+  if (!e.target.dataset || !itemAbierto) return;
+  if (e.target.dataset.reteKey) {
+    itemAbierto.data[e.target.dataset.reteKey] = parseMoneyValue(e.target.value);
+    actualizarEstimadosRetencionMasivo();
+    return;
+  }
+  // Campos de la ficha editables en modo "Revisar" -- se guardan
+  // directo en item.data (igual que category/subcuenta en la fila), sin
+  // un botón "Guardar" aparte: la fila y el resumen se refrescan al
+  // cerrar el modal.
+  if (e.target.dataset.campoKey) {
+    const key = e.target.dataset.campoKey;
+    const esMoneda = e.target.dataset.campoMoney === '1';
+    itemAbierto.data[key] = esMoneda ? parseMoneyValue(e.target.value) : e.target.value;
+  }
 });
 document.getElementById('modalDatos').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-usar-rete]');
@@ -895,12 +952,12 @@ document.getElementById('modalDatos').addEventListener('click', (e) => {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
-async function abrirVistaCompleta(item){
+async function abrirVistaCompleta(item, modoEdicion){
   if (!item || !item.id) return;
   fileModal.classList.add('show');
   modalImg.style.display = 'none';
   modalPdf.style.display = 'none';
-  renderFichaCompleta(item);
+  renderFichaCompleta(item, !!modoEdicion);
 
   try {
     const res = await fetch(`/api/lotes/items/${item.id}/archivo`);
@@ -924,6 +981,9 @@ function cerrarVistaCompleta(){
   modalPdf.src = '';
   modalImg.src = '';
   itemAbierto = null;
+  // Si se editaron campos en modo "Revisar", la fila de la tabla (nombre,
+  // valor, etc.) puede haber cambiado -- se refresca al cerrar.
+  renderSummary();
 }
 btnCloseModal.addEventListener('click', cerrarVistaCompleta);
 fileModalBackdrop.addEventListener('click', cerrarVistaCompleta);
@@ -1186,7 +1246,7 @@ function renderSummary(){
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
         <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="5" style="color:var(--ink-soft);">En cola -- todavía no le toca el turno.</td>
+        <td colspan="6" style="color:var(--ink-soft);">En cola -- todavía no le toca el turno.</td>
         <td><span class="status-badge pendiente">⏳ En cola</span></td>
       `;
       summaryBody.appendChild(tr);
@@ -1197,7 +1257,7 @@ function renderSummary(){
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
         <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="5" style="color:var(--ink-soft);">Leyendo con IA…</td>
+        <td colspan="6" style="color:var(--ink-soft);">Leyendo con IA…</td>
         <td><span class="status-badge procesando">⏳ Procesando</span></td>
       `;
       summaryBody.appendChild(tr);
@@ -1208,7 +1268,7 @@ function renderSummary(){
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
         <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="5" style="color:#B0402D;">
+        <td colspan="6" style="color:#B0402D;">
           ${escapeHtml(item.errorMsg || 'No se pudo procesar')}
           <button type="button" class="btn-reintentar" data-role="reintentar" data-idx="${idx}">🔄 Reintentar</button>
           <button type="button" class="btn-eliminar" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑 Eliminar</button>
@@ -1227,7 +1287,7 @@ function renderSummary(){
       tr.innerHTML = `
         <td>${escapeHtml(item.nombre)}</td>
         <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="5" style="color:#8B5245;">
+        <td colspan="6" style="color:#8B5245;">
           Ya está guardado como <b>${escapeHtml(nombre)}</b>${numero ? ` (factura ${escapeHtml(numero)})` : ''} — ${valor}. No se volvió a leer con IA.
           <button type="button" class="btn-forzar-lectura" data-role="forzar-lectura" data-idx="${idx}">Leer de todas formas</button>
         </td>
@@ -1281,6 +1341,15 @@ function renderSummary(){
       `;
     }
 
+    // El botón "Revisar" abre la MISMA ficha completa que el ojito (Ver),
+    // con el mismo estilo -- la diferencia es que para un ítem en estado
+    // "revisar" esa ficha ahora permite editar todos los campos (no solo
+    // Rete Fuente/IVA/ICA), para no obligar al contador a corregir todo
+    // desde los selectores sueltos de la fila.
+    const estadoBadge = item.estado === 'listo'
+      ? '<span class="status-badge listo">✓ Listo</span>'
+      : `<button type="button" class="btn-ver btn-revisar" data-role="revisar" data-idx="${idx}" title="Revisar y editar todos los datos de esta factura">⚠ Revisar</button>`;
+
     tr.innerHTML = `
       <td>${escapeHtml(item.nombre)}</td>
       <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
@@ -1288,9 +1357,10 @@ function renderSummary(){
       <td class="money">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</td>
       <td><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></td>
       <td><select data-idx="${idx}" data-role="subcuenta" style="min-width:170px;">${subcuentaOpts}</select></td>
+      <td><input type="text" class="digitacion-input" data-idx="${idx}" data-role="digitacion" value="${escapeHtml(d.numero_digitacion || '')}" placeholder="N.° comprobante" style="width:110px;" title="Número de digitación -- obligatorio antes de poder guardar esta factura"></td>
       <td>${movimientoHtml}</td>
       <td>
-        <span class="status-badge ${item.estado}">${item.estado === 'listo' ? '✓ Listo' : '⚠ Revisar'}</span>
+        ${estadoBadge}
         <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
       </td>
     `;
@@ -1316,6 +1386,10 @@ summaryBody.addEventListener('change', (e) => {
 
   if (e.target.dataset.role === 'subcuenta') {
     item.data.subcuenta_gasto = e.target.value;
+  }
+
+  if (e.target.dataset.role === 'digitacion') {
+    item.data.numero_digitacion = e.target.value.trim();
   }
 
   if (e.target.dataset.role === 'cliente-manual') {
@@ -1345,6 +1419,13 @@ summaryBody.addEventListener('click', (e) => {
   if (btnVer) {
     const idx = Number(btnVer.dataset.idx);
     if (!isNaN(idx)) abrirVistaCompleta(lote[idx]);
+    return;
+  }
+
+  const btnRevisar = e.target.closest('[data-role="revisar"]');
+  if (btnRevisar) {
+    const idx = Number(btnRevisar.dataset.idx);
+    if (!isNaN(idx)) abrirVistaCompleta(lote[idx], true);
     return;
   }
 
@@ -1385,11 +1466,19 @@ btnGuardarTodas.addEventListener('click', async () => {
   btnGuardarTodas.textContent = 'Guardando...';
 
   const listas = lote.filter(i => i.estado === 'listo');
+  // El número de digitación se exige ANTES de guardar (igual que en
+  // Escanear) -- una factura "lista" pero sin ese número se salta en
+  // este guardado masivo, en vez de guardarse sin él.
+  const sinDigitacion = listas.filter(i => !(i.data && String(i.data.numero_digitacion || '').trim()));
+  const paraGuardar = listas.filter(i => i.data && String(i.data.numero_digitacion || '').trim());
   let guardadas = 0;
-  for (const item of listas) {
+  for (const item of paraGuardar) {
     try {
       const d = item.data;
       const payload = {
+        numero_digitacion: String(d.numero_digitacion || '').trim(),
+        saldo_vencido_detectado: d.saldo_vencido_detectado === true || d.saldo_vencido_detectado === 'true',
+        anticipo_detectado: d.anticipo_detectado === true || d.anticipo_detectado === 'true',
         tipo_doc: d.tipo_doc || '', nit_cc: d.nit_cc || '', dv: d.dv || '',
         nombre_razon_social: d.nombre_razon_social || '',
         letras_fe: d.letras_fe || '', numeros_fe: d.numeros_fe || '',
@@ -1401,6 +1490,7 @@ btnGuardarTodas.addEventListener('click', async () => {
         tipo_movimiento: item.tipoMovimiento, adquiriente_nit: d.adquiriente_nit || '', adquiriente_nombre: d.adquiriente_nombre || '',
         cliente_id: item.clienteId || '',
         regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
+        autorretenedor: d.autorretenedor === true || d.autorretenedor === 'true',
         desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
         desglose_aiu: JSON.stringify(d.desglose_aiu || (typeof desgloseAiuDesdeItems === 'function' ? desgloseAiuDesdeItems(d.items || []) : {})),
         subcuenta_gasto: d.subcuenta_gasto || '',
@@ -1429,11 +1519,13 @@ btnGuardarTodas.addEventListener('click', async () => {
     } catch (e) { /* se deja como estaba, no bloquea el resto del lote */ }
   }
 
-  btnGuardarTodas.textContent = `✓ ${guardadas} facturas guardadas`;
+  btnGuardarTodas.textContent = sinDigitacion.length > 0
+    ? `✓ ${guardadas} guardadas -- ${sinDigitacion.length} sin número de digitación, no se guardaron`
+    : `✓ ${guardadas} facturas guardadas`;
   renderSummary();
   setTimeout(() => {
     btnGuardarTodas.textContent = 'Guardar facturas listas';
-  }, 2500);
+  }, sinDigitacion.length > 0 ? 4500 : 2500);
 });
 
 async function requireAuthAndInit(){

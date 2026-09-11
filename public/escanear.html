@@ -80,6 +80,22 @@
     font-size:10.5px; letter-spacing:1px; text-transform:uppercase;
     color:var(--ink-faint);
   }
+
+  /* Cola de subida -- cuando el contador selecciona varios archivos de
+     una vez, se procesan uno por uno (mismo flujo de siempre: leer,
+     revisar, guardar) y este aviso muestra cuántos quedan pendientes. */
+  #colaInfo{ display:none; margin-top:14px; }
+  #colaInfo.show{
+    display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--petroleo-deep);
+    background:var(--petroleo-tint, rgba(11,79,108,0.08)); border:1px solid rgba(11,79,108,0.25);
+    padding:9px 14px; border-radius:8px;
+  }
+  #colaInfo button{
+    font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600;
+    padding:5px 10px; border-radius:6px; border:1px solid var(--petroleo);
+    background:#fff; color:var(--petroleo-deep); cursor:pointer;
+  }
   .actions{
     display:flex;gap:10px;margin-top:8px;
     flex-wrap:wrap;justify-content:center;
@@ -150,6 +166,20 @@
     border-radius:8px;
   }
   #savedMsg.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
+
+  #scanConfirmMsg{
+    margin-top:18px;border:1px solid #5B8072;background:#E9F0EB;
+    color:#3E6053;padding:10px 14px;font-size:13px;display:none;
+    border-radius:8px; font-weight:600;
+  }
+  #scanConfirmMsg.show{display:block; animation:fadeUp .4s var(--ease) forwards;}
+
+  #avisosDocumento{ margin-top:14px; display:flex; flex-direction:column; gap:10px; }
+  #avisosDocumento .aviso-doc{
+    border:1px solid #AA6B5C;background:#F6ECE7;color:#8B5245;
+    padding:12px 14px;font-size:12.5px;line-height:1.55;border-radius:8px;
+  }
+  #avisosDocumento .aviso-doc b{display:block;font-size:13px;margin-bottom:3px;color:#7A2E1B;}
 
   /* Aviso de documento duplicado -- ni error (el archivo se leyó bien
      antes) ni "guardado" (todavía no se guardó nada en esta subida), así
@@ -477,8 +507,9 @@
       </div>
       <span class="drag-hint">o arrastra el archivo aquí</span>
       <input type="file" id="fileCamera" accept="image/*" capture="environment">
-      <input type="file" id="fileUpload" accept="image/*,application/pdf">
+      <input type="file" id="fileUpload" accept="image/*,application/pdf" multiple>
     </div>
+    <div id="colaInfo"></div>
   </div>
 
   <div id="previewWrap">
@@ -510,6 +541,8 @@
   <div id="err"></div>
   <div id="savedMsg"></div>
   <div id="dupWarn"></div>
+  <div id="scanConfirmMsg"></div>
+  <div id="avisosDocumento"></div>
 
   <div id="result">
     <div class="result-head">
@@ -577,6 +610,7 @@ const FIELDS = [
   {key:"rete_iva", label:"Rete IVA", money:true},
   {key:"rete_ica", label:"Rete ICA", money:true},
   {key:"concepto", label:"Concepto"},
+  {key:"numero_digitacion", label:"Número de digitación (comprobante contable)"},
   {key:"categoria_concepto", label:"Categoría (retención)", select:[
     ["compras","Compras (bienes)"],
     ["compras_tarjeta","Compras con tarjeta débito/crédito"],
@@ -591,6 +625,7 @@ const FIELDS = [
     ["vigilancia_aseo","Vigilancia y aseo"],
     ["servicios_temporales","Servicios temporales (EST)"],
     ["hoteles_restaurantes","Hoteles y restaurantes"],
+    ["servicios_publicos","Servicios públicos (agua, energía, gas, aseo)"],
     ["otro","Otro"],
   ]}
 ];
@@ -616,6 +651,7 @@ const CATEGORIA_TEXTOS_RETENCION = {
   vigilancia_aseo:          'vigilancia/aseo (2 UVT, sobre AIU)',
   servicios_temporales:     'servicios temporales -- EST (2 UVT, sobre AIU)',
   hoteles_restaurantes:     'hoteles/restaurantes (2 UVT)',
+  servicios_publicos:      'servicios públicos -- no aplica retención (el proveedor es autorretenedor)',
 };
 
 (function animateTitle(){
@@ -647,6 +683,8 @@ const errEl = document.getElementById('err');
 const savedMsg = document.getElementById('savedMsg');
 const dupWarnEl = document.getElementById('dupWarn');
 const resultEl = document.getElementById('result');
+const scanConfirmMsgEl = document.getElementById('scanConfirmMsg');
+const avisosDocumentoEl = document.getElementById('avisosDocumento');
 const ledger = document.getElementById('ledger');
 const btnAgain = document.getElementById('btnAgain');
 const btnSave = document.getElementById('btnSave');
@@ -663,6 +701,7 @@ let currentIsPdf = false;
 let currentTipoMovimiento = 'egreso';
 let currentClienteId = '';
 let currentRegimenSimple = false;
+let currentAutorretenedor = false;
 let currentCategoriaConceptoIA = '';
 let currentDesgloseCategorias = {};
 let currentItems = []; // ítems línea por línea de la factura actual (Fase 4) -- ver normalizarItemsDesdeIA()
@@ -955,10 +994,47 @@ function detectClient(data){
   }
 }
 
+// ---------- Cola de subida -- varios archivos, uno a la vez ----------
+// Si el contador selecciona (o arrastra) más de un archivo, el primero
+// se abre de inmediato como siempre; el resto queda en esta cola y se
+// va abriendo automáticamente cada vez que el actual se guarda, para no
+// obligar a volver a "Subir archivo" documento por documento. Nunca se
+// guarda nada solo -- cada uno pasa por la misma revisión de siempre.
+let colaArchivos = [];
+const colaInfoEl = document.getElementById('colaInfo');
+
+function iniciarColaDesdeArchivos(files){
+  const lista = Array.from(files || []);
+  if (lista.length === 0) return;
+  colaArchivos = lista.slice(1);
+  handleFile(lista[0]);
+  actualizarColaInfo();
+}
+
+function actualizarColaInfo(){
+  if (colaArchivos.length === 0) {
+    colaInfoEl.classList.remove('show');
+    colaInfoEl.innerHTML = '';
+    return;
+  }
+  colaInfoEl.innerHTML = `📥 ${colaArchivos.length} archivo(s) más en cola -- se abre el siguiente automáticamente al guardar. <button type="button" id="btnSaltarCola">Saltar este documento</button>`;
+  colaInfoEl.classList.add('show');
+  document.getElementById('btnSaltarCola').addEventListener('click', avanzarCola);
+}
+
+// Se llama al guardar con éxito, o al saltar un documento a mano --
+// abre el siguiente de la cola si queda alguno.
+function avanzarCola(){
+  if (colaArchivos.length === 0) { actualizarColaInfo(); return; }
+  const siguiente = colaArchivos.shift();
+  handleFile(siguiente);
+  actualizarColaInfo();
+}
+
 btnCamera.addEventListener('click', () => fileCamera.click());
 btnUpload.addEventListener('click', () => fileUpload.click());
-fileCamera.addEventListener('change', e => handleFile(e.target.files[0]));
-fileUpload.addEventListener('change', e => handleFile(e.target.files[0]));
+fileCamera.addEventListener('change', e => iniciarColaDesdeArchivos(e.target.files));
+fileUpload.addEventListener('change', e => iniciarColaDesdeArchivos(e.target.files));
 
 ['dragenter','dragover'].forEach(evt =>
   intake.addEventListener(evt, e => { e.preventDefault(); intake.classList.add('dragover'); })
@@ -967,8 +1043,7 @@ fileUpload.addEventListener('change', e => handleFile(e.target.files[0]));
   intake.addEventListener(evt, e => { e.preventDefault(); intake.classList.remove('dragover'); })
 );
 intake.addEventListener('drop', e => {
-  const file = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (file) handleFile(file);
+  iniciarColaDesdeArchivos(e.dataTransfer.files);
 });
 
 function humanSize(bytes){
@@ -983,6 +1058,8 @@ function handleFile(file){
   savedMsg.classList.remove('show');
   dupWarnEl.classList.remove('show');
   resultEl.classList.remove('show');
+  scanConfirmMsgEl.classList.remove('show');
+  avisosDocumentoEl.innerHTML = '';
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');
   currentFileHash = ''; // es un archivo distinto -- se recalcula al leerlo
@@ -1049,6 +1126,8 @@ function resetAll(){
   errEl.classList.remove('show');
   savedMsg.classList.remove('show');
   dupWarnEl.classList.remove('show');
+  colaArchivos = [];
+  actualizarColaInfo();
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');
   fileCamera.value = '';
@@ -1057,6 +1136,7 @@ function resetAll(){
   currentTipoMovimiento = 'egreso';
   currentClienteId = '';
   currentRegimenSimple = false;
+  currentAutorretenedor = false;
   currentDesgloseCategorias = {};
   currentItems = [];
   currentInvoiceData = null;
@@ -1161,6 +1241,8 @@ async function extractInvoice(forzar){
   savedMsg.classList.remove('show');
   dupWarnEl.classList.remove('show');
   resultEl.classList.remove('show');
+  scanConfirmMsgEl.classList.remove('show');
+  avisosDocumentoEl.innerHTML = '';
   document.getElementById('retencionHint').classList.remove('show');
   statusEl.classList.add('show');
   scanBeam.classList.add('active');
@@ -1283,6 +1365,7 @@ function renderResult(data){
   currentInvoiceData = data;
   detectClient(data);
   currentRegimenSimple = data.regimen_simple === true || data.regimen_simple === 'true';
+  currentAutorretenedor = data.autorretenedor === true || data.autorretenedor === 'true';
   currentCategoriaConceptoIA = data.categoria_concepto_ia || data.categoria_concepto || '';
   currentTarifaIcaId = ''; // factura nueva -- no arrastrar el municipio de ICA elegido en la anterior
   reteFuenteTocado = false; // factura nueva -- el estimado se puede volver a aplicar solo
@@ -1485,6 +1568,28 @@ function renderResult(data){
   resultEl.classList.add('show');
   resultEl.scrollIntoView({behavior:'smooth', block:'start'});
 
+  // Confirmación de que el documento sí se leyó -- separada del aviso de
+  // "guardada" (eso pasa después, cuando el contador confirma y guarda).
+  scanConfirmMsgEl.textContent = '✓ Documento leído correctamente -- revisa los datos antes de guardar.';
+  scanConfirmMsgEl.classList.add('show');
+
+  // Avisos informativos que la IA detectó en el documento (no afectan
+  // ningún cálculo, solo alertan para que el contador revise a mano).
+  const avisos = [];
+  if (data.saldo_vencido_detectado === true || data.saldo_vencido_detectado === 'true') {
+    avisos.push({
+      titulo: '⚠ El documento muestra un saldo vencido',
+      texto: 'Este total puede incluir una deuda de un periodo anterior, no solo el consumo/servicio actual -- revisa si ese saldo anterior ya fue pagado antes de registrar el valor. Puedes editar "Valor Sin IVA" y "Valor Con IVA" arriba si necesitas descontarlo.',
+    });
+  }
+  if (data.anticipo_detectado === true || data.anticipo_detectado === 'true') {
+    avisos.push({
+      titulo: '⚠ El documento menciona un anticipo/avance',
+      texto: 'El proveedor parece haber descontado ya un anticipo del total -- confirma que el valor que vas a registrar es el que realmente falta por pagar (o el gasto real, según cómo lo manejes).',
+    });
+  }
+  avisosDocumentoEl.innerHTML = avisos.map(a => `<div class="aviso-doc"><b>${escapeHtml(a.titulo)}</b>${escapeHtml(a.texto)}</div>`).join('');
+
   renderItemsPanel();
   showRetencionHint(data);
   actualizarEstimadosRetencion();
@@ -1502,6 +1607,7 @@ const CAMPOS_PERFIL_FISCAL = [
   ['autorretenedor', 'Autorretenedor (renta)', 'Se autorretiene renta -- fuerza Rete Fuente a $0 en las facturas de este proveedor.'],
   ['regimen_simple', 'Régimen Simple (RST)', 'Fuerza Rete Fuente y Rete ICA a $0. No exime de Rete IVA -- esa regla no cambia.'],
   ['agente_retencion_iva', 'Agente de retención de IVA', 'Informativo -- revisa si a este proveedor NO le corresponde que tu cliente le practique Rete IVA.'],
+  ['declarante_renta', 'Declarante de renta', 'Cuando lo marcas, Enlaza usa la tarifa exacta de declarante en vez del rango bajo-alto en las categorías donde la tarifa depende de esto.'],
 ];
 
 function renderPerfilTerceroPanel(nit, nombreSugerido){
@@ -1608,6 +1714,7 @@ function actualizarEstimadosRetencion(){
     nit_cc: nitProveedor,
     fecha_factura: fechaInput ? fechaInput.value : '',
     regimen_simple: currentRegimenSimple,
+    autorretenedor: currentAutorretenedor,
     desglose_categorias: currentDesgloseCategorias,
     desglose_aiu: (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {},
   };
@@ -1706,6 +1813,7 @@ function renderEstimadoIca(estIcaEl, invParaCalculo){
   const select = document.createElement('select');
   select.className = 'ica-select';
   select.innerHTML = '<option value="">— Elegir municipio / actividad —</option>' +
+    '<option value="__no_aplica__">No aplica a esta factura</option>' +
     tarifasIca.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.municipio)}${t.actividad ? ' — ' + escapeHtml(t.actividad) : ''} (${t.tarifa_por_mil}‰)</option>`).join('') +
     '<option value="__nueva__">+ Agregar tarifa nueva…</option>';
   select.value = currentTarifaIcaId || '';
@@ -1719,6 +1827,10 @@ function renderEstimadoIca(estIcaEl, invParaCalculo){
 
   function actualizarResultado(){
     resultSpan.innerHTML = '';
+    if (currentTarifaIcaId === '__no_aplica__') {
+      resultSpan.innerHTML = '<span class="fine">✓ Marcado como que no aplica ICA para esta factura.</span>';
+      return;
+    }
     if (!currentTarifaIcaId) {
       if (tarifasIca.length === 0) {
         resultSpan.innerHTML = '<span class="fine">Todavía no tienes ninguna tarifa de ICA configurada -- usa "+ Agregar tarifa nueva".</span>';
@@ -1958,7 +2070,8 @@ function showRetencionHint(data){
   }
 
   if (esAutorretenedor) {
-    html += `<b>ℹ Proveedor autorretenedor (marcado en su perfil fiscal)</b>` +
+    const origenAutorretenedor = perfilTercero && perfilTercero.autorretenedor;
+    html += `<b>ℹ Proveedor autorretenedor${origenAutorretenedor ? ' (marcado en su perfil fiscal)' : ' detectado'}</b>` +
       `Este tercero se autorretiene renta -- por norma, tu cliente NO debe practicarle Rete Fuente ordinaria (el proveedor ya se retiene a sí mismo). `;
     if (reteIvaAplicaAviso) {
       html += `Aun así, revisa si corresponde <b>Rete IVA</b> aparte -- ser autorretenedor de renta no exime de eso.${reteIvaTexto} `;
@@ -2000,9 +2113,17 @@ function showRetencionHint(data){
     const montoTexto = sugerido.mismaTarifa
       ? `$${sugerido.bajo.toLocaleString('es-CO')}`
       : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
+    // Cuando la factura mezcla más de una categoría (desglose por ítems),
+    // el estimado de arriba es la SUMA de varias líneas con tarifas
+    // distintas -- hay que dejar claro que no es un solo número plano,
+    // para que el contador no espere que un solo ítem explique todo el
+    // total.
+    const varianPorItem = (currentItems && currentItems.length > 1) ||
+      (currentDesgloseCategorias && Object.keys(currentDesgloseCategorias).length > 1);
     html = `<b>⚠ Retención en la fuente sugerida: ${montoTexto}</b>` +
       `Calculada sobre ${tipoTexto} para ${escapeHtml(cliente.nombre || 'este cliente')} (agente retenedor). ` +
       (sugerido.mismaTarifa ? '' : 'El rango depende de si el proveedor es declarante de renta o no — confírmalo para saber cuál de los dos valores aplica. ') +
+      (varianPorItem ? 'Esta factura tiene más de un ítem/categoría -- la retención está calculada sumando cada ítem por separado, y las retenciones varían según el ítem (revisa el detalle en la tabla de ítems abajo). ' : '') +
       (reteIvaAplicaAviso ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
       (exentoPorCalidadVendedor ? `No corresponde Rete IVA aparte -- el proveedor ya es ${perfilTercero.gran_contribuyente ? 'Gran Contribuyente' : 'agente de retención de IVA'}. ` : '') +
       `<span class="fine">Estimado con la tarifa vigente conocida al construir esta app — la base de retención cambió varias veces en 2026 por decisiones judiciales. Verifica la norma actual antes de aplicar este valor. No es asesoría tributaria.</span>`;
@@ -2088,6 +2209,7 @@ function renderItemsPanel(){
     nit_cc: nitInput ? nitInput.value : '',
     fecha_factura: fechaInput ? fechaInput.value : '',
     regimen_simple: currentRegimenSimple,
+    autorretenedor: currentAutorretenedor,
   };
   const cliente = myClients.find(c => c.id === currentClienteId);
   const perfilTercero = perfilFiscalDelNit(invParaCalculo.nit_cc);
@@ -2103,6 +2225,15 @@ function renderItemsPanel(){
   const filas = currentItems.map((item, idx) => {
     const opciones = CATEGORIA_OPCIONES_ITEM.map(([val, label]) =>
       `<option value="${val}"${item.categoria_concepto === val ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    // Subcuenta PUC de ESTE ítem puntual -- por defecto la primera de su
+    // categoría (ver normalizarItemsDesdeIA), pero el contador la puede
+    // corregir línea por línea, igual que ya puede hacerlo a nivel de
+    // toda la factura en el selector de arriba.
+    const opcionesSubcuenta = (typeof SUBCUENTAS_GASTO !== 'undefined')
+      ? (SUBCUENTAS_GASTO[item.categoria_concepto] || SUBCUENTAS_GASTO['otro'])
+      : [];
+    const subcuentaOpts = opcionesSubcuenta.map(([codigo, nombre]) =>
+      `<option value="${codigo}"${item.subcuenta_gasto === codigo ? ' selected' : ''}>${codigo === 'inventario' ? escapeHtml(nombre) : escapeHtml(codigo + ' — ' + nombre)}</option>`).join('');
     const est = estimadoPorItem ? estimadoPorItem.porItem[idx] : null;
     const estTexto = est
       ? (est.requiereAiu
@@ -2121,6 +2252,7 @@ function renderItemsPanel(){
       <td><input type="text" class="it-descripcion" value="${escapeHtml(item.descripcion)}" placeholder="Descripción del ítem"></td>
       <td><input type="text" inputmode="numeric" class="money it-subtotal" value="${(Number(item.subtotal) || 0).toLocaleString('es-CO')}"></td>
       <td><select class="it-categoria">${opciones}</select></td>
+      <td><select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select></td>
       <td class="item-aiu-col" title="Componente de AIU (Administración + Imprevistos + Utilidad) de esta línea, solo si la factura lo desglosa -- deja vacío si no se sabe.">${aiuCelda}</td>
       <td class="item-estimado" title="Retención en la fuente estimada para esta línea, informativa -- el valor real se registra una sola vez en Rete Fuente arriba.">${estTexto}</td>
       <td><label class="item-iva-mv"><input type="checkbox" class="it-iva-mv" ${item.iva_mayor_valor ? 'checked' : ''}> IVA no descontable</label></td>
@@ -2135,7 +2267,7 @@ function renderItemsPanel(){
       <div class="items-table-wrap">
         <table class="items-table">
           <thead><tr>
-            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>AIU</th><th>Rete Fuente est.</th><th>IVA mayor valor</th><th></th>
+            <th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>Subcuenta (PUC)</th><th>AIU</th><th>Rete Fuente est.</th><th>IVA mayor valor</th><th></th>
           </tr></thead>
           <tbody id="itemsTbody">${filas}</tbody>
         </table>
@@ -2171,6 +2303,9 @@ function renderItemsPanel(){
     const idx = Number(e.target.closest('tr').dataset.idx);
     if (e.target.classList.contains('it-categoria')) {
       currentItems[idx].categoria_concepto = e.target.value;
+      // Cambiar la categoría reinicia la subcuenta a la primera opción
+      // de esa categoría -- el contador la puede corregir después con el
+      // selector de subcuenta de al lado, que queda editable aparte.
       const opciones = (typeof SUBCUENTAS_GASTO !== 'undefined') ? (SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro']) : null;
       currentItems[idx].subcuenta_gasto = opciones ? opciones[0][0] : '';
       // Si la nueva categoría ya no se calcula sobre AIU, el valor que
@@ -2180,6 +2315,8 @@ function renderItemsPanel(){
         currentItems[idx].aiu = '';
       }
       onItemsChanged();
+    } else if (e.target.classList.contains('it-subcuenta')) {
+      currentItems[idx].subcuenta_gasto = e.target.value;
     } else if (e.target.classList.contains('it-iva-mv')) {
       currentItems[idx].iva_mayor_valor = e.target.checked;
     }
@@ -2215,23 +2352,85 @@ function currentFieldValues(){
   out.tipo_movimiento = currentTipoMovimiento;
   out.cliente_id = currentClienteId || '';
   out.regimen_simple = currentRegimenSimple;
+  out.autorretenedor = currentAutorretenedor;
+  // Se guardan tal cual los detectó la IA -- son solo avisos informativos
+  // (ver banner arriba), no cambian ningún cálculo, pero conviene que
+  // queden en el historial de la factura por si se necesita revisar después.
+  out.saldo_vencido_detectado = !!(currentInvoiceData && (currentInvoiceData.saldo_vencido_detectado === true || currentInvoiceData.saldo_vencido_detectado === 'true'));
+  out.anticipo_detectado = !!(currentInvoiceData && (currentInvoiceData.anticipo_detectado === true || currentInvoiceData.anticipo_detectado === 'true'));
   out.categoria_concepto_ia = currentCategoriaConceptoIA;
   out.desglose_categorias = JSON.stringify(currentDesgloseCategorias || {});
   out.desglose_aiu = JSON.stringify((typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {});
   out.subcuenta_gasto = currentSubcuentaGasto || '';
   out.file_hash = currentFileHash || '';
-  out.tarifa_ica_id = currentTarifaIcaId || '';
+  // "__no_aplica__" es un estado solo de interfaz (el contador marcó a
+  // propósito que el ICA no aplica) -- no corresponde a ninguna tarifa
+  // real guardada, así que nunca se manda como tarifa_ica_id (esa
+  // columna es UUID en la base de datos).
+  out.tarifa_ica_id = (currentTarifaIcaId && currentTarifaIcaId !== '__no_aplica__') ? currentTarifaIcaId : '';
   const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
   out.items = itemsParaGuardar(currentItems, ivaInput ? parseMoneyValue(ivaInput.value) : 0);
   return out;
 }
 
+// Campos que DEBEN quedar como números (en pesos enteros, ya limpios de
+// puntos/comas) antes de guardar -- si algo quedó vacío después de
+// quitarle cualquier texto que no fuera dígito, es que la IA (o una
+// edición manual) dejó ahí algo que no era realmente un valor numérico.
+// "Vacío" se trata distinto de "0": un campo de retención vacío no es un
+// error (nunca viene impreso), pero valor_sin_iva/valor_con_iva vacíos sí
+// lo son -- una factura sin esos dos números no se puede registrar.
+const CAMPOS_VALOR_OBLIGATORIOS = ['valor_sin_iva', 'valor_con_iva'];
+function detectarInconsistenciasValores(payload){
+  const problemas = [];
+  for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
+    const raw = payload[key];
+    if (raw === '' || raw === undefined || raw === null) {
+      if (CAMPOS_VALOR_OBLIGATORIOS.includes(key)) problemas.push(`"${key}" quedó vacío -- revisa ese campo.`);
+      continue;
+    }
+    if (!/^-?\d+$/.test(String(raw))) {
+      problemas.push(`"${key}" tiene un valor que no es un número entero (${raw}) -- revisa que no haya quedado texto mezclado.`);
+    }
+  }
+  const sinIva = Number(payload.valor_sin_iva) || 0;
+  const iva = Number(payload.valor_iva) || 0;
+  const conIva = Number(payload.valor_con_iva) || 0;
+  if (sinIva > 0 && conIva > 0 && Math.abs((sinIva + iva) - conIva) > 5) {
+    problemas.push(`Valor sin IVA + IVA (${(sinIva + iva).toLocaleString('es-CO')}) no coincide con Valor con IVA (${conIva.toLocaleString('es-CO')}) -- revisa los tres valores.`);
+  }
+  return problemas;
+}
+
 async function guardarFactura(forzar){
-  btnSave.disabled = true;
   errEl.classList.remove('show');
+
+  // El número de digitación se exige ANTES de poder guardar -- así nunca
+  // queda una factura "lista" sin que el contador haya anotado que ya la
+  // registró (o va a registrar) con ese comprobante en su software contable.
+  const digitacionInput = ledger.querySelector('input[data-key="numero_digitacion"]');
+  const numeroDigitacion = digitacionInput ? digitacionInput.value.trim() : '';
+  if (!numeroDigitacion) {
+    errEl.textContent = 'Falta el número de digitación -- anota el número de comprobante con el que vas a registrar (o ya registraste) esta factura en tu software contable antes de guardarla.';
+    errEl.classList.add('show');
+    if (digitacionInput) digitacionInput.focus();
+    return;
+  }
+
+  const payloadPreview = currentFieldValues();
+  const problemas = detectarInconsistenciasValores(payloadPreview);
+  if (problemas.length > 0 && !forzar) {
+    errEl.innerHTML = `⚠ Revisa antes de guardar:<br>${problemas.map(p => escapeHtml(p)).join('<br>')} ` +
+      `<button type="button" id="btnGuardarPeseAInconsistencia" style="margin-top:6px;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;border:1px solid #B0402D;background:#fff;color:#7A2E1B;cursor:pointer;">Guardar de todas formas</button>`;
+    errEl.classList.add('show');
+    document.getElementById('btnGuardarPeseAInconsistencia').addEventListener('click', () => guardarFactura('forzar_inconsistencia'));
+    return;
+  }
+
+  btnSave.disabled = true;
   try {
     const payload = currentFieldValues();
-    if (forzar) payload.forzar_duplicado = true;
+    if (forzar === true) payload.forzar_duplicado = true;
     const response = await fetch('/api/invoices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2256,6 +2455,10 @@ async function guardarFactura(forzar){
     savedMsg.textContent = '✓ Guardada en el kárdex — puedes verla en la pestaña Facturas.';
     savedMsg.classList.add('show');
     btnSave.textContent = '✓ Guardada';
+    // Si venía de una cola de varios archivos, sigue con el próximo
+    // automáticamente -- un pequeño respiro para que el contador alcance
+    // a ver el "Guardada" antes de que cambie la pantalla.
+    if (colaArchivos.length > 0) setTimeout(avanzarCola, 900);
   } catch (e) {
     errEl.textContent = 'No se pudo guardar la factura: ' + e.message;
     errEl.classList.add('show');
