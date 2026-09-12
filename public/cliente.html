@@ -300,6 +300,7 @@ async function cargarYRenderizar(){
   if (cliente.telefono) metaPartes.push(`<span>${escapeHtml(cliente.telefono)}</span>`);
   if (cliente.correo) metaPartes.push(`<span>${escapeHtml(cliente.correo)}</span>`);
   if (cliente.agente_retenedor) metaPartes.push('<span class="badge-retenedor">● Agente retenedor</span>');
+  if (cliente.agente_retenedor_ica) metaPartes.push('<span class="badge-retenedor">● Agente retenedor ICA</span>');
   document.getElementById('clienteMeta').innerHTML = metaPartes.join('');
 
   // ---- Tarjetas ----
@@ -374,6 +375,7 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/soporte-chat.js"></script>
+<script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>
 </body>
 </html>

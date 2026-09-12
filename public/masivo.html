@@ -11,7 +11,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="/retenciones.js"></script>
 <style>
-  .wrap{ max-width:1240px; }
+  /* En pantallas grandes el lote antes se quedaba angosto (una sola
+     tarjeta enorme, con las 4 casillas de siempre estiradas y medio
+     recuadro de sobra en blanco a la derecha). Se amplía el ancho
+     máximo de la página para que quepan varias tarjetas por fila. */
+  .wrap{ max-width:1600px; }
 
   #uploadZone{
     border:2px dashed var(--line); border-radius:12px; background:var(--paper-raised);
@@ -38,53 +42,90 @@
   #summaryWrap{ display:none; }
   #summaryWrap.show{ display:block; }
 
-  /* En pantallas angostas la tabla no se aplasta ni desborda la página --
-     mantiene un ancho mínimo legible y el que se mueve es el contenedor,
-     con scroll horizontal propio (la página nunca se desplaza a los
-     lados, solo la tabla). */
-  #summaryTableWrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:12px; }
-  #summaryTable{
+  /* Antes esto era una tabla de 9 columnas -- en cualquier pantalla que
+     no fuera muy ancha, tocaba desplazarla de lado a lado para ver todo
+     el dato de UNA sola factura, que quedaba repartido entre columnas
+     lejanas. Ahora cada factura vive en su propia tarjeta autocontenida
+     (todo su dato en un solo recuadro, de arriba a abajo, sin scroll
+     horizontal) -- los campos se acomodan solos según el ancho
+     disponible (grid con auto-fit), así que en el celular se apilan en
+     una columna y en escritorio se ven en fila, sin que el contador
+     tenga que mover nada de lado para leer su propia información. */
+  /* Una tarjeta por fila, de arriba a abajo (lineal) -- en vez de
+     varias tarjetas chiquitas repartidas en columnas. El ancho extra
+     de .wrap en pantallas grandes no se llena con MÁS tarjetas por
+     fila, sino que cada tarjeta se estira y sus campos (fc-campos,
+     abajo) se acomodan en más columnas dentro de ella misma. */
+  #summaryBody{ display:flex; flex-direction:column; gap:10px; }
+  .factura-card{
     --paper-raised:#FFFFFF; --ink:#1D2A32; --ink-soft:#4A5E68; --ink-faint:#8AA0AC; --line:#DCE7EC;
-    width:100%; min-width:760px; border-collapse:collapse; background:var(--paper-raised);
-    border:1px solid var(--line); border-radius:12px; overflow:hidden;
-    box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:14px 16px; box-shadow:0 20px 40px -28px rgba(13,30,40,0.18);
   }
-  @media (max-width:640px){
-    #summaryTable thead th{ padding:9px 10px; font-size:9.5px; }
-    #summaryTable tbody td{ padding:10px 10px; font-size:12.5px; }
-    #summaryTable select{ max-width:130px; }
+  .fc-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .fc-archivo{ display:flex; align-items:flex-start; gap:10px; min-width:0; flex:1 1 260px; }
+  .fc-archivo-info{ min-width:0; }
+  .fc-nombre-archivo{
+    font-size:13px; font-weight:600; color:var(--ink);
+    overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical;
   }
-  #summaryTable thead th{
-    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-    color:var(--ink-soft); text-align:left; padding:12px 16px; background:#EAF3F7; border-bottom:1px solid var(--line);
+  .fc-proveedor{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
+  .fc-top-derecha{ display:flex; align-items:center; gap:10px; flex:0 0 auto; margin-left:auto; }
+  .fc-valor{ font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:600; color:var(--ink); white-space:nowrap; }
+  .fc-mensaje{ font-size:12.5px; color:var(--ink-soft); margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .fc-mensaje-error{ color:#B0402D; }
+  .fc-acciones{ margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; }
+  .fc-campos{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px 14px;
+    margin-top:12px; padding-top:12px; border-top:1px solid var(--line);
   }
-  #summaryTable tbody td{ padding:14px 16px; font-size:13px; color:var(--ink); border-bottom:1px solid var(--line); vertical-align:middle; }
-  #summaryTable tbody tr:last-child td{ border-bottom:none; }
-  #summaryTable .money{ font-family:'JetBrains Mono',monospace; text-align:right; white-space:nowrap; }
-  #summaryTable select{
-    font-family:inherit; font-size:12.5px; padding:6px 8px; border:1px solid var(--line); border-radius:5px; background:#fff;
+  .fc-campo{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .fc-campo > span{
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-faint);
+  }
+  .factura-card select, .factura-card input[type="text"]{
+    font-family:inherit; font-size:12.5px; padding:6px 8px; border:1px solid var(--line); border-radius:6px;
+    background:#fff; color:var(--ink); width:100%;
+  }
+  @media (max-width:520px){
+    .fc-campos{ grid-template-columns:1fr 1fr; }
+    /* En celular, el nombre del archivo necesita el ancho completo para
+       sus 2 líneas -- si el valor/estado/borrar se quedan a su lado se
+       lo comen. Se bajan a su propia fila, ocupando todo el ancho.
+       OJO: flex-basis:260px de .fc-archivo es un ancho en fila, pero en
+       columna se vuelve un ALTO mínimo -- por eso se resetea a "auto"
+       acá, si no deja un hueco enorme antes de la fila de abajo. */
+    .fc-top{ flex-direction:column; align-items:stretch; }
+    .fc-archivo{ flex:1 1 auto; }
+    .fc-top-derecha{ margin-left:0; justify-content:space-between; }
   }
   .btn-ver{
     background:none; border:1px solid var(--line); border-radius:6px; color:var(--ink-soft);
     font-size:14px; padding:5px 9px; cursor:pointer; transition:border-color .15s ease, color .15s ease;
+    flex:0 0 auto;
   }
   .btn-reintentar{
     background:none; border:1px solid #E8A38F; border-radius:6px; color:#B0402D;
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:5px 10px; margin-left:10px;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:5px 10px;
     cursor:pointer; white-space:nowrap; transition:background .15s ease;
   }
   .btn-reintentar:hover{ background:#FBE4DE; }
   .btn-eliminar{
     background:none; border:1px solid #C9C4B4; border-radius:6px; color:#4E5A52;
-    font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:5px 10px; margin-left:8px;
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:5px 10px;
     cursor:pointer; white-space:nowrap; transition:background .15s ease;
   }
   .btn-eliminar:hover{ background:#EFEBDD; }
+  /* Antes este botón era texto gris clarito sin borde, sobre fondo
+     blanco -- casi no se veía. Ahora tiene borde y fondo propios (mismo
+     tratamiento visual que btn-ver/btn-reintentar), así se distingue
+     como botón incluso antes de pasarle el mouse por encima. */
   .btn-eliminar-icono{
-    background:none; border:none; color:#8A9289; font-size:13px; padding:2px 5px;
-    margin-left:8px; cursor:pointer; border-radius:4px; vertical-align:middle;
+    background:var(--petroleo-tint, #EAF3F7); border:1px solid var(--petroleo, #0B4F6C); color:var(--petroleo-deep, #083A4F);
+    font-size:16px; line-height:1; padding:8px 12px; cursor:pointer; border-radius:6px; flex:0 0 auto;
   }
-  .btn-eliminar-icono:hover{ background:#FBE4DE; color:#B0402D; }
+  .btn-eliminar-icono:hover{ background:var(--petroleo, #0B4F6C); border-color:var(--petroleo-deep, #083A4F); color:#fff; }
   .btn-ver:hover{ border-color:var(--petroleo); color:var(--petroleo-deep); }
 
   /* El modal de Carga masiva es más ancho que el de Escanear -- muestra
@@ -169,18 +210,33 @@
   .items-mini-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .items-mini-head b{ font-size:12.5px; }
   .items-mini-table-wrap{ overflow-x:auto; }
-  table.items-mini-table{ width:100%; border-collapse:collapse; min-width:520px; }
+  /* table-layout:fixed + un min-width más generoso (antes 520px, muy
+     poco para 7 columnas con selects de texto largo como "Subcuenta
+     (PUC)" o "Tarifa retención" -- eso era lo que dejaba todo apretado
+     y con el texto de los selects cortado). Los anchos de abajo sí
+     suman 100%, así que en una pantalla ancha se reparten proporcional
+     y en una angosta el min-width fuerza scroll horizontal en vez de
+     aplastar las columnas. */
+  table.items-mini-table{ width:100%; min-width:840px; border-collapse:collapse; table-layout:fixed; }
   table.items-mini-table th{
     font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.05em; text-transform:uppercase;
     color:var(--ink-faint); text-align:left; padding:4px 6px; border-bottom:1px solid var(--line);
   }
-  table.items-mini-table td{ padding:4px 6px; border-bottom:1px solid var(--line); }
+  table.items-mini-table td{ padding:4px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
   table.items-mini-table tr:last-child td{ border-bottom:none; }
+  table.items-mini-table th:nth-child(1), table.items-mini-table td:nth-child(1){ width:21%; } /* Descripción */
+  table.items-mini-table th:nth-child(2), table.items-mini-table td:nth-child(2){ width:11%; } /* Subtotal */
+  table.items-mini-table th:nth-child(3), table.items-mini-table td:nth-child(3){ width:15%; } /* Categoría */
+  table.items-mini-table th:nth-child(4), table.items-mini-table td:nth-child(4){ width:23%; } /* Subcuenta (PUC) */
+  table.items-mini-table th:nth-child(5), table.items-mini-table td:nth-child(5){ width:8%; }  /* AIU */
+  table.items-mini-table th:nth-child(6), table.items-mini-table td:nth-child(6){ width:18%; } /* Tarifa retención */
+  table.items-mini-table th:nth-child(7), table.items-mini-table td:nth-child(7){ width:4%; }  /* eliminar */
   table.items-mini-table input, table.items-mini-table select{
     width:100%; box-sizing:border-box; font-family:'Inter',sans-serif; font-size:11.5px;
     padding:5px 6px; border:1px solid var(--line); border-radius:5px; color:var(--ink);
   }
   table.items-mini-table input.money{ font-family:'JetBrains Mono',monospace; text-align:right; }
+  table.items-mini-table .im-tarifa{ font-size:11px !important; padding:4px 4px; }
   .items-mini-del{
     background:none; border:1px solid var(--line); color:var(--ink-faint); border-radius:5px;
     width:22px; height:22px; cursor:pointer; font-size:11px;
@@ -194,6 +250,11 @@
   .items-mini-aiu-na{ display:block; text-align:center; color:var(--ink-faint); font-size:11px; }
   .items-mini-total{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); }
   .items-mini-total.mismatch{ color:#B0402D; }
+  .items-mini-retencion-total{
+    margin-top:6px; padding-top:6px; border-top:1px dashed var(--line);
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft);
+  }
+  .items-mini-retencion-total b{ color:var(--moss-deep, #3E6053); }
 
   .status-badge{
     display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:11px;
@@ -205,6 +266,28 @@
   .status-badge.procesando{ background:#EAF3F7; color:var(--ink-soft); }
   .status-badge.pendiente{ background:#EFEBDD; color:#8A9289; }
   .status-badge.duplicado{ background:#F6ECE7; color:#8B5245; }
+  .status-badge.guardada{ background:#E9F0EB; color:#3E6053; }
+
+  /* Botón de guardado individual -- reemplaza a la insignia pasiva
+     "✓ Listo": ahora es un botón real para guardar esa sola factura,
+     sin tener que esperar/usar el botón masivo de abajo. */
+  .btn-guardar-individual{
+    display:inline-flex; align-items:center; gap:5px; font-family:'Inter',sans-serif;
+    font-size:11.5px; font-weight:700; padding:6px 12px; border-radius:100px;
+    cursor:pointer; white-space:nowrap; border:1px solid var(--moss); background:var(--moss-tint);
+    color:var(--moss-deep); transition:background .15s var(--ease), border-color .15s var(--ease);
+  }
+  .btn-guardar-individual:hover{ background:var(--moss); color:#fff; }
+  .btn-guardar-individual:disabled{ opacity:.65; cursor:default; background:var(--moss-tint); color:var(--moss-deep); }
+
+  /* Tarjeta ya guardada: se deja visible (como confirmación / alerta de
+     "guardada"), pero atenuada para que las que faltan por guardar
+     sigan llamando la atención primero. */
+  .factura-card-guardada{ opacity:.78; }
+
+  /* Resalta el campo de N.° digitación cuando el guardado individual se
+     bloqueó por faltar ese dato -- mismo rojo que fc-mensaje-error. */
+  .input-error{ border-color:#D8431F !important; box-shadow:0 0 0 2px rgba(216,67,31,0.15); }
 
   .btn-forzar-lectura{
     font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600;
@@ -301,24 +384,7 @@
   </div>
 
   <div id="summaryWrap">
-    <div id="summaryTableWrap">
-    <table id="summaryTable">
-      <thead>
-        <tr>
-          <th>Archivo</th>
-          <th>Ver</th>
-          <th>Proveedor</th>
-          <th style="text-align:right">Valor</th>
-          <th>Categoría</th>
-          <th>Subcuenta (PUC)</th>
-          <th>N.° digitación</th>
-          <th>Movimiento / Cliente</th>
-          <th>Estado</th>
-        </tr>
-      </thead>
-      <tbody id="summaryBody"></tbody>
-    </table>
-    </div>
+    <div id="summaryBody" class="summary-list"></div>
 
     <div id="saveAllBar">
       <span class="info"><b id="countListas">0</b> listas para guardar · <b id="countRevisar">0</b> necesitan revisión · <b id="countDuplicadas">0</b> ya existían (no se leyeron de nuevo)</span>
@@ -395,6 +461,7 @@ const FICHA_CAMPOS = [
   {key:'valor_sin_iva', label:'Valor Sin IVA', money:true},
   {key:'valor_iva', label:'Valor IVA', money:true},
   {key:'valor_con_iva', label:'Valor Con IVA', money:true},
+  {key:'valor_abonado', label:'Valor ya abonado (anticipo)', money:true},
   {key:'rete_fuente', label:'Rete Fuente', money:true},
   {key:'rete_iva', label:'Rete IVA', money:true},
   {key:'rete_ica', label:'Rete ICA', money:true},
@@ -433,6 +500,36 @@ function soloDigitos(nit){
 }
 function perfilFiscalDelNit(nit){ return terceroFiscalPorNit[soloDigitos(nit)] || null; }
 let lote = []; // cada item: { file, nombre, data, clienteId, tipoMovimiento, estado: 'procesando'|'listo'|'revisar'|'error'|'guardada' }
+
+// ---------- Persistencia local de correcciones a medio hacer ----------
+// El documento que la IA leyó ya vive en el servidor (lote_items), pero
+// cualquier corrección manual (categoría, cliente, número de digitación,
+// ítems de la factura, etc.) solo vivía en la memoria de esta pestaña --
+// si el contador se iba a otra pantalla (ej. Editar clientes) y volvía,
+// refrescarLoteActivo() la pisaba con los datos originales de la IA. Se
+// guarda una copia de cada corrección en el navegador y se vuelve a
+// aplicar encima de lo que llegue del servidor, hasta que esa factura
+// quede guardada o se quite del lote.
+const EDICIONES_LOTE_KEY = 'masivoEdicionesPendientes';
+function leerEdicionesPendientes(){
+  try { return JSON.parse(localStorage.getItem(EDICIONES_LOTE_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function guardarEdicionesPendientes(mapa){
+  try { localStorage.setItem(EDICIONES_LOTE_KEY, JSON.stringify(mapa)); }
+  catch (e) { console.warn('No se pudo guardar la corrección localmente:', e); }
+}
+function guardarEdicionItem(item){
+  if (!item || !item.id) return;
+  const mapa = leerEdicionesPendientes();
+  mapa[item.id] = { data: item.data, clienteId: item.clienteId, tipoMovimiento: item.tipoMovimiento, estado: item.estado };
+  guardarEdicionesPendientes(mapa);
+}
+function borrarEdicionItem(id){
+  if (id === undefined || id === null) return;
+  const mapa = leerEdicionesPendientes();
+  if (mapa[id] !== undefined) { delete mapa[id]; guardarEdicionesPendientes(mapa); }
+}
 
 // Si se llegó aquí desde la ficha de un cliente (Inicio → cliente →
 // "Carga masiva para este cliente"), el cliente viene fijo en la URL
@@ -530,6 +627,21 @@ function renderFichaCompleta(item, modoEdicion){
   // depender únicamente de los selectores sueltos de categoría/subcuenta
   // en la fila de la tabla.
   const filasCampos = FICHA_CAMPOS.map((f) => {
+    // "Valor ya abonado" es editable SIEMPRE (no solo en modo "Revisar")
+    // -- igual que los campos de retención de abajo, para que ajustarlo
+    // no exija abrir la factura en modo edición completa. El saldo
+    // pendiente de abajo es solo informativo -- no cambia ningún cálculo
+    // de retención, que sigue siendo sobre el valor total causado.
+    if (f.key === 'valor_abonado') {
+      const valorActual = Number(d[f.key]) || 0;
+      return `
+        <div class="fd-row">
+          <div class="fd-label">${escapeHtml(f.label)}</div>
+          <div class="fd-value money"><input type="text" data-campo-key="valor_abonado" data-campo-money="1" value="${valorActual.toLocaleString('es-CO')}"></div>
+        </div>
+        <div class="rete-estimado" id="masivoSaldoPendiente"></div>
+      `;
+    }
     if (RETE_KEYS_EDITABLES.includes(f.key)) {
       const valorActual = Number(d[f.key]) || 0;
       return `
@@ -568,6 +680,19 @@ function renderFichaCompleta(item, modoEdicion){
     <div class="fd-row">
       <div class="fd-label">Categoría (retención)</div>
       <div class="fd-value">${escapeHtml(categoriaLabel)}</div>
+    </div>
+  `;
+
+  // Hay documentos que de verdad no traen NIT/cédula del emisor (cuentas
+  // de cobro de propiedad horizontal, recibos de persona natural, etc.)
+  // -- no se bloquea la lectura ni la edición por esto, solo se avisa
+  // para que el contador confirme que el dato realmente no aparece. El
+  // div queda siempre en el DOM (se muestra/oculta desde
+  // actualizarAvisoSinNitMasivo) para que escribir en el campo NIT no
+  // tenga que reconstruir toda la ficha.
+  const filaAvisoNit = `
+    <div class="fd-row aviso-sin-nit" id="avisoSinNitMasivo" style="background:#F6ECE7;border-radius:6px;padding:8px 10px;${soloDigitos(d.nit_cc) ? 'display:none;' : ''}">
+      <div style="color:#7A2E1B;font-size:12px;">⚠ Este documento no trae NIT/cédula del emisor (o el campo quedó vacío). Corrígelo arriba si en realidad sí aparece en el documento -- si lo guardas así, la responsabilidad de esa falta queda contigo.</div>
     </div>
   `;
 
@@ -640,8 +765,20 @@ function renderFichaCompleta(item, modoEdicion){
   if (d.saldo_vencido_detectado === true || d.saldo_vencido_detectado === 'true') {
     avisosDoc.push('⚠ El documento muestra un <b>saldo vencido</b> -- puede incluir deuda de un periodo anterior ya pagado. Ajusta "Valor Sin IVA"/"Valor Con IVA" arriba si hace falta.');
   }
-  if (d.anticipo_detectado === true || d.anticipo_detectado === 'true') {
+  if ((d.anticipo_detectado === true || d.anticipo_detectado === 'true') && !(Number(d.valor_abonado) > 0)) {
+    // Si el documento sí daba un valor exacto de abono, ya está prellenado
+    // en "Valor ya abonado" y su saldo pendiente -- este aviso genérico
+    // solo hace falta cuando no hay un valor concreto que mostrar.
     avisosDoc.push('⚠ El documento menciona un <b>anticipo/avance</b> ya descontado -- confirma que el valor a registrar es el correcto.');
+  }
+  // Valor en letras vs. valor en números -- mismo chequeo que Escanear:
+  // se avisa ANTES de seguir con cualquier cálculo si el valor escrito en
+  // palabras no coincide con el escrito en cifras (error de digitación
+  // o de imprenta frecuente en documentos físicos).
+  const valorLetrasNumeroFicha = Number(d.valor_letras_numero) || 0;
+  const valorConIvaFicha = Number(d.valor_con_iva) || 0;
+  if (d.valor_letras_texto && valorLetrasNumeroFicha > 0 && Math.abs(valorLetrasNumeroFicha - valorConIvaFicha) > 1) {
+    avisosDoc.push(`⚠ El <b>valor en letras</b> no coincide con el valor en números -- el documento escribe "${escapeHtml(d.valor_letras_texto)}" (≈ $${valorLetrasNumeroFicha.toLocaleString('es-CO')}), pero en números dice $${valorConIvaFicha.toLocaleString('es-CO')}. Verifica el documento original antes de guardar.`);
   }
   const filaAvisos = avisosDoc.length > 0
     ? `<div class="fd-row" style="background:#F6ECE7;border-radius:6px;padding:8px 10px;">${avisosDoc.map(a => `<div style="color:#7A2E1B;font-size:12px;">${a}</div>`).join('')}</div>`
@@ -651,13 +788,38 @@ function renderFichaCompleta(item, modoEdicion){
     <div class="factura-detalle">
       ${renderFichaMovimiento(item)}
       ${filaAvisos}
-      <div class="fd-table">${filasCampos}${filaCategoria}${filaRetencion}${filaReteIva}</div>
+      <div class="fd-table">${filasCampos}${filaAvisoNit}${filaCategoria}${filaRetencion}${filaReteIva}</div>
       <div id="itemsMiniPanel"></div>
     </div>
     <div style="font-size:11px;color:var(--ink-faint);margin-top:10px;">Retención estimada, no leída del documento -- no es asesoría tributaria, verifica la norma vigente.</div>
   `;
   renderItemsMiniPanel(item);
   actualizarEstimadosRetencionMasivo();
+  actualizarSaldoPendienteMasivo();
+}
+
+// Recalcula "saldo pendiente por pagar" (Valor Con IVA menos lo ya
+// abonado) sin reconstruir toda la ficha -- mismo criterio que Escanear.
+// Puramente informativo, no cambia ningún cálculo de retención.
+function actualizarSaldoPendienteMasivo(){
+  const saldoEl = document.getElementById('masivoSaldoPendiente');
+  if (!saldoEl || !itemAbierto || !itemAbierto.data) return;
+  const d = itemAbierto.data;
+  const abonado = Number(d.valor_abonado) || 0;
+  if (abonado <= 0) { saldoEl.classList.remove('show'); saldoEl.innerHTML = ''; return; }
+  const total = Number(d.valor_con_iva) || 0;
+  const saldo = total - abonado;
+  saldoEl.innerHTML = `ℹ Saldo pendiente por pagar: <b>$${saldo.toLocaleString('es-CO')}</b> (total $${total.toLocaleString('es-CO')} menos lo ya abonado). No cambia la retención -- se calcula sobre el valor total causado.`;
+  saldoEl.classList.add('show');
+}
+
+// Muestra/oculta el aviso de "sin NIT" sin reconstruir toda la ficha --
+// así corregir el campo NIT a mano no pierde el foco ni el cursor en
+// cada tecla, igual que el resto de campos editables de la ficha.
+function actualizarAvisoSinNitMasivo(){
+  const avisoEl = document.getElementById('avisoSinNitMasivo');
+  if (!avisoEl || !itemAbierto || !itemAbierto.data) return;
+  avisoEl.style.display = soloDigitos(itemAbierto.data.nit_cc) ? 'none' : '';
 }
 
 // ---------- Ítems de la factura, línea por línea (Fase 4) ----------
@@ -675,9 +837,31 @@ function renderItemsMiniPanel(item){
   const totalFactura = Number(d.valor_sin_iva) || 0;
   const coincide = Math.abs(totalFactura - totalItems) <= 1;
 
+  // Suma de la retención "según ítems" -- lo que daría la retención en la
+  // fuente si se calculara línea por línea con la tarifa que el contador
+  // fue seleccionando en cada una (columna "Tarifa retención" de abajo),
+  // en vez de una sola tarifa para toda la factura. Puramente informativo,
+  // mismo criterio que Escanear -- no reemplaza ni alimenta Rete Fuente de
+  // la ficha, que sigue siendo un solo valor por factura.
+  let totalRetencionItems = 0;
+
   const filas = d.items.map((it, idx) => {
     const opciones = CATEGORIAS.map(([val, label]) =>
       `<option value="${val}"${it.categoria_concepto === val ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    // Subcuenta PUC de ESTE ítem puntual -- mismo patrón que ya tiene
+    // Escanear: por defecto la primera de su categoría, el contador la
+    // puede corregir línea por línea.
+    const opcionesSubcuenta = (SUBCUENTAS_GASTO[it.categoria_concepto] || SUBCUENTAS_GASTO['otro']);
+    const subcuentaOpts = opcionesSubcuenta.map(([codigo, nombre]) =>
+      `<option value="${codigo}"${it.subcuenta_gasto === codigo ? ' selected' : ''}>${codigo === 'inventario' ? escapeHtml(nombre) : escapeHtml(codigo + ' — ' + nombre)}</option>`).join('');
+    // Tarifa de retención recomendada para este ítem, según su categoría
+    // (misma tabla que usa el estimado de arriba) -- informativa, el
+    // valor real de Rete Fuente se registra una sola vez en la ficha.
+    const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(it.categoria_concepto) : [{ valor: 0, label: 'Ninguno' }];
+    const tarifaActualItem = it.tarifa_retencion !== undefined ? Number(it.tarifa_retencion) : (tarifaOpts[1] ? tarifaOpts[1].valor : 0);
+    const tarifaSelectOpts = tarifaOpts.map((o) => `<option value="${o.valor}"${o.valor === tarifaActualItem ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+    const montoTarifaItem = Math.round((Number(it.subtotal) || 0) * tarifaActualItem);
+    if (tarifaActualItem > 0) totalRetencionItems += montoTarifaItem;
     // AIU solo aplica a categorías con base especial (vigilancia_aseo/
     // servicios_temporales) -- mismo criterio que Escanear, para que la
     // retención de esas categorías no se calcule sobre el subtotal
@@ -690,7 +874,12 @@ function renderItemsMiniPanel(item){
       <td><input type="text" class="im-descripcion" value="${escapeHtml(it.descripcion)}" placeholder="Descripción"></td>
       <td><input type="text" inputmode="numeric" class="money im-subtotal" value="${(Number(it.subtotal) || 0).toLocaleString('es-CO')}"></td>
       <td><select class="im-categoria">${opciones}</select></td>
+      <td><select class="im-subcuenta" style="min-width:160px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select></td>
       <td title="Componente de AIU (Administración + Imprevistos + Utilidad), solo si la factura lo desglosa -- deja vacío si no se sabe.">${aiuCelda}</td>
+      <td title="Tarifa de retención recomendada para esta línea, según su categoría -- informativa.">
+        <select class="im-tarifa" style="font-size:11px;">${tarifaSelectOpts}</select>
+        <div style="margin-top:2px;font-size:10.5px;font-style:italic;color:var(--ink-faint);">${tarifaActualItem > 0 ? '≈ $' + montoTarifaItem.toLocaleString('es-CO') : '—'}</div>
+      </td>
       <td><button type="button" class="items-mini-del" title="Quitar" ${d.items.length <= 1 ? 'disabled' : ''}>✕</button></td>
     </tr>`;
   }).join('');
@@ -700,7 +889,7 @@ function renderItemsMiniPanel(item){
       <div class="items-mini-head"><b>Ítems de la factura (${d.items.length})</b></div>
       <div class="items-mini-table-wrap">
         <table class="items-mini-table">
-          <thead><tr><th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>AIU</th><th></th></tr></thead>
+          <thead><tr><th>Descripción</th><th>Subtotal</th><th>Categoría</th><th>Subcuenta (PUC)</th><th>AIU</th><th>Tarifa retención</th><th></th></tr></thead>
           <tbody id="itemsMiniTbody">${filas}</tbody>
         </table>
       </div>
@@ -711,12 +900,16 @@ function renderItemsMiniPanel(item){
           ${coincide ? '' : ' ⚠ no coinciden'}
         </span>
       </div>
+      <div class="items-mini-retencion-total" title="Suma de la retención de cada línea, según la tarifa que seleccionaste ítem por ítem arriba -- informativo, no reemplaza el valor de Rete Fuente de la ficha.">
+        Retención según tarifas por ítem: <b>$${totalRetencionItems.toLocaleString('es-CO')}</b>
+      </div>
     </div>
   `;
 
   function onCambioItems(){
     d.desglose_categorias = (typeof desgloseDesdeItems === 'function') ? desgloseDesdeItems(d.items) : {};
     d.desglose_aiu = (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(d.items) : {};
+    guardarEdicionItem(item);
     renderFichaCompleta(item); // re-renderiza todo el modal -- así el estimado de retención de arriba también se refresca
   }
 
@@ -736,15 +929,26 @@ function renderItemsMiniPanel(item){
     }
   });
   tbody.addEventListener('change', (e) => {
-    if (!e.target.classList.contains('im-categoria')) return;
     const idx = Number(e.target.closest('tr').dataset.idx);
-    d.items[idx].categoria_concepto = e.target.value;
-    const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
-    d.items[idx].subcuenta_gasto = opciones[0][0];
-    if (!((typeof esCategoriaBaseAiu === 'function') && esCategoriaBaseAiu(e.target.value))) {
-      d.items[idx].aiu = '';
+    if (e.target.classList.contains('im-categoria')) {
+      d.items[idx].categoria_concepto = e.target.value;
+      const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
+      d.items[idx].subcuenta_gasto = opciones[0][0];
+      // La tarifa de retención recomendada también se recalcula para la
+      // categoría nueva -- mismo criterio que la subcuenta de arriba.
+      const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(e.target.value) : null;
+      d.items[idx].tarifa_retencion = tarifaOpts && tarifaOpts[1] ? tarifaOpts[1].valor : 0;
+      if (!((typeof esCategoriaBaseAiu === 'function') && esCategoriaBaseAiu(e.target.value))) {
+        d.items[idx].aiu = '';
+      }
+      onCambioItems();
+    } else if (e.target.classList.contains('im-subcuenta')) {
+      d.items[idx].subcuenta_gasto = e.target.value;
+      guardarEdicionItem(item);
+    } else if (e.target.classList.contains('im-tarifa')) {
+      d.items[idx].tarifa_retencion = Number(e.target.value) || 0;
+      onCambioItems();
     }
-    onCambioItems();
   });
   tbody.addEventListener('click', (e) => {
     if (!e.target.classList.contains('items-mini-del') || e.target.disabled) return;
@@ -756,6 +960,7 @@ function renderItemsMiniPanel(item){
     d.items.push({
       descripcion: '', cantidad: '', valor_unitario: '', subtotal: '0',
       categoria_concepto: 'otro', subcuenta_gasto: (SUBCUENTAS_GASTO['otro'] || [['', '']])[0][0],
+      tarifa_retencion: 0,
       iva_mayor_valor: false, aiu: '',
     });
     onCambioItems();
@@ -785,15 +990,22 @@ function actualizarEstimadosRetencionMasivo(){
 
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
-  if (parseMoneyValue(fuenteInput.value) === 0 && typeof calcularRetencionSugerida === 'function') {
+  if (typeof calcularRetencionSugerida === 'function') {
     const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc));
+    const categoriasEnDesglose = Object.keys(d.desglose_categorias || {});
+    const facturaEsUnaSolaCategoria = categoriasEnDesglose.length <= 1;
     if (sugerido && sugerido.requiereAiu) {
       // Nunca se ofrece un botón "Usar" acá -- bajo/alto son un total
       // PARCIAL mientras falte el AIU de alguna categoría.
       const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_LABELS[f.categoria] || f.categoria).join(', ');
       estFuenteEl.innerHTML = `⚠ Falta el AIU de ${escapeHtml(faltantes)} para calcular la retención -- ingrésalo abajo en "Ítems de la factura".`;
       estFuenteEl.classList.add('show');
-    } else if (sugerido) {
+    } else if (sugerido && facturaEsUnaSolaCategoria && typeof renderSelectorTarifaFuente === 'function') {
+      // Factura de una sola categoría -- selector con las tarifas legales
+      // reales (según el PUC / la norma vigente) en vez de solo un texto
+      // "≈ rango" -- mismo criterio y misma tabla que usa Escanear.
+      renderSelectorTarifaFuente(estFuenteEl, d.categoria_concepto, sugerido, fuenteInput, false);
+    } else if (sugerido && parseMoneyValue(fuenteInput.value) === 0) {
       const texto = sugerido.mismaTarifa
         ? `$${sugerido.bajo.toLocaleString('es-CO')}`
         : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')}`;
@@ -812,10 +1024,20 @@ function actualizarEstimadosRetencionMasivo(){
     }
   }
 
+  // A diferencia de Rete Fuente (que usa "agente_retenedor", derivado de
+  // las responsabilidades del RUT), ICA es municipal y se marca aparte
+  // en la ficha del cliente ("agente_retenedor_ica") -- si no está
+  // marcado, se asume por defecto que ICA no aplica, en vez de dejar la
+  // sección vacía sin explicar por qué.
   estIcaEl.classList.remove('show');
   estIcaEl.innerHTML = '';
-  if (parseMoneyValue(icaInput.value) === 0 && cliente && cliente.agente_retenedor) {
-    renderEstimadoIcaMasivo(estIcaEl, d, icaInput);
+  if (cliente && cliente.agente_retenedor_ica) {
+    if (parseMoneyValue(icaInput.value) === 0) {
+      renderEstimadoIcaMasivo(estIcaEl, d, icaInput);
+    }
+  } else {
+    estIcaEl.innerHTML = '<span class="fine">No aplica ICA -- este cliente no está configurado como agente retenedor de ICA (ver ficha del cliente).</span>';
+    estIcaEl.classList.add('show');
   }
 }
 
@@ -931,6 +1153,7 @@ document.getElementById('modalDatos').addEventListener('input', (e) => {
   if (e.target.dataset.reteKey) {
     itemAbierto.data[e.target.dataset.reteKey] = parseMoneyValue(e.target.value);
     actualizarEstimadosRetencionMasivo();
+    guardarEdicionItem(itemAbierto);
     return;
   }
   // Campos de la ficha editables en modo "Revisar" -- se guardan
@@ -941,6 +1164,9 @@ document.getElementById('modalDatos').addEventListener('input', (e) => {
     const key = e.target.dataset.campoKey;
     const esMoneda = e.target.dataset.campoMoney === '1';
     itemAbierto.data[key] = esMoneda ? parseMoneyValue(e.target.value) : e.target.value;
+    guardarEdicionItem(itemAbierto);
+    if (key === 'nit_cc') actualizarAvisoSinNitMasivo();
+    if (key === 'valor_abonado' || key === 'valor_con_iva') actualizarSaldoPendienteMasivo();
   }
 });
 document.getElementById('modalDatos').addEventListener('click', (e) => {
@@ -1116,6 +1342,13 @@ function mapearItemsServidor(itemsServidor){
   return itemsServidor.map((it) => {
     let data = {};
     try { data = JSON.parse(it.data || '{}'); } catch (e) { data = {}; }
+    // La IA reporta el abono/anticipo detectado en "valor_abonado_detectado"
+    // (para no confundirlo con el campo editable de la ficha) -- se copia
+    // acá al nombre real del campo ("valor_abonado", el mismo que se
+    // guarda en la base de datos), igual que hace Escanear.
+    if (data.valor_abonado === undefined) {
+      data.valor_abonado = Number(data.valor_abonado_detectado) || 0;
+    }
     // Mismo paso que antes hacía procesarLote() apenas llegaba la
     // respuesta de la IA -- los ítems línea por línea y el desglose
     // agregado se derivan aquí, en el navegador, no en el servidor.
@@ -1184,6 +1417,32 @@ async function refrescarLoteActivo(){
     loteId = data.id;
     lote = mapearItemsServidor(data.items || []);
 
+    // Vuelve a aplicar encima cualquier corrección manual que el
+    // contador ya hubiera hecho en esta factura antes de irse a otra
+    // pantalla (ver EDICIONES_LOTE_KEY más arriba) -- si no, este mismo
+    // refresco (que se llama, entre otras veces, apenas se vuelve a
+    // esta página) borraría justo lo que se quiere conservar.
+    const edicionesPendientes = leerEdicionesPendientes();
+    const idsEnLoteActual = new Set(lote.map((it) => String(it.id)));
+    lote.forEach((it) => {
+      const edicion = edicionesPendientes[it.id];
+      if (edicion && it.estado !== 'guardada') {
+        it.data = edicion.data;
+        it.clienteId = edicion.clienteId;
+        it.tipoMovimiento = edicion.tipoMovimiento;
+        it.estado = edicion.estado;
+      }
+    });
+    // Limpieza: una corrección guardada localmente para un ítem que ya
+    // no aparece en el lote (se guardó, se quitó, o cambió de lote) no
+    // sirve para nada -- si no se descarta, se iría acumulando para
+    // siempre en el navegador.
+    let seModificaronEdiciones = false;
+    Object.keys(edicionesPendientes).forEach((id) => {
+      if (!idsEnLoteActual.has(String(id))) { delete edicionesPendientes[id]; seModificaronEdiciones = true; }
+    });
+    if (seModificaronEdiciones) guardarEdicionesPendientes(edicionesPendientes);
+
     const enCurso = data.estado === 'en_cola' || data.estado === 'procesando';
     progressArea.classList.toggle('show', enCurso);
     if (enCurso) {
@@ -1233,49 +1492,65 @@ async function eliminarItemServidor(idx){
   try {
     await fetch(`/api/lotes/items/${item.id}`, { method: 'DELETE' });
   } catch (err) { /* el próximo refresco lo refleja igual */ }
+  borrarEdicionItem(item.id);
   await refrescarLoteActivo();
 }
 
 function renderSummary(){
   summaryBody.innerHTML = '';
   lote.forEach((item, idx) => {
-    const tr = document.createElement('tr');
-    tr.dataset.idx = idx;
+    const card = document.createElement('div');
+    card.className = 'factura-card';
+    card.dataset.idx = idx;
 
     if (item.estado === 'pendiente') {
-      tr.innerHTML = `
-        <td>${escapeHtml(item.nombre)}</td>
-        <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="6" style="color:var(--ink-soft);">En cola -- todavía no le toca el turno.</td>
-        <td><span class="status-badge pendiente">⏳ En cola</span></td>
+      card.innerHTML = `
+        <div class="fc-top">
+          <div class="fc-archivo">
+            <button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button>
+            <div class="fc-archivo-info"><div class="fc-nombre-archivo" title="${escapeHtml(item.nombre)}">${escapeHtml(item.nombre)}</div></div>
+          </div>
+          <span class="status-badge pendiente">⏳ En cola</span>
+        </div>
+        <div class="fc-mensaje">En cola -- todavía no le toca el turno.</div>
       `;
-      summaryBody.appendChild(tr);
+      summaryBody.appendChild(card);
       return;
     }
 
     if (item.estado === 'procesando') {
-      tr.innerHTML = `
-        <td>${escapeHtml(item.nombre)}</td>
-        <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="6" style="color:var(--ink-soft);">Leyendo con IA…</td>
-        <td><span class="status-badge procesando">⏳ Procesando</span></td>
+      card.innerHTML = `
+        <div class="fc-top">
+          <div class="fc-archivo">
+            <button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button>
+            <div class="fc-archivo-info"><div class="fc-nombre-archivo" title="${escapeHtml(item.nombre)}">${escapeHtml(item.nombre)}</div></div>
+          </div>
+          <span class="status-badge procesando">⏳ Procesando</span>
+        </div>
+        <div class="fc-mensaje">Leyendo con IA…</div>
       `;
-      summaryBody.appendChild(tr);
+      summaryBody.appendChild(card);
       return;
     }
 
     if (item.estado === 'error') {
-      tr.innerHTML = `
-        <td>${escapeHtml(item.nombre)}</td>
-        <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="6" style="color:#B0402D;">
+      card.innerHTML = `
+        <div class="fc-top">
+          <div class="fc-archivo">
+            <button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button>
+            <div class="fc-archivo-info"><div class="fc-nombre-archivo" title="${escapeHtml(item.nombre)}">${escapeHtml(item.nombre)}</div></div>
+          </div>
+          <span class="status-badge error">✕ Error</span>
+        </div>
+        <div class="fc-mensaje fc-mensaje-error">
           ${escapeHtml(item.errorMsg || 'No se pudo procesar')}
-          <button type="button" class="btn-reintentar" data-role="reintentar" data-idx="${idx}">🔄 Reintentar</button>
-          <button type="button" class="btn-eliminar" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑 Eliminar</button>
-        </td>
-        <td><span class="status-badge error">✕ Error</span></td>
+          <div class="fc-acciones">
+            <button type="button" class="btn-reintentar" data-role="reintentar" data-idx="${idx}">🔄 Reintentar</button>
+            <button type="button" class="btn-eliminar" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑 Eliminar</button>
+          </div>
+        </div>
       `;
-      summaryBody.appendChild(tr);
+      summaryBody.appendChild(card);
       return;
     }
 
@@ -1284,19 +1559,47 @@ function renderSummary(){
       const nombre = existente.nombre_razon_social || '(sin nombre)';
       const numero = [existente.letras_fe, existente.numeros_fe].filter(Boolean).join('-');
       const valor = existente.valor_con_iva ? `$${Number(existente.valor_con_iva).toLocaleString('es-CO')}` : '—';
-      tr.innerHTML = `
-        <td>${escapeHtml(item.nombre)}</td>
-        <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-        <td colspan="6" style="color:#8B5245;">
+      card.innerHTML = `
+        <div class="fc-top">
+          <div class="fc-archivo">
+            <button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button>
+            <div class="fc-archivo-info"><div class="fc-nombre-archivo" title="${escapeHtml(item.nombre)}">${escapeHtml(item.nombre)}</div></div>
+          </div>
+          <div class="fc-top-derecha">
+            <span class="status-badge duplicado">📋 Ya existe</span>
+            <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
+          </div>
+        </div>
+        <div class="fc-mensaje">
           Ya está guardado como <b>${escapeHtml(nombre)}</b>${numero ? ` (factura ${escapeHtml(numero)})` : ''} — ${valor}. No se volvió a leer con IA.
-          <button type="button" class="btn-forzar-lectura" data-role="forzar-lectura" data-idx="${idx}">Leer de todas formas</button>
-        </td>
-        <td>
-          <span class="status-badge duplicado">📋 Ya existe</span>
-          <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
-        </td>
+          <div class="fc-acciones">
+            <button type="button" class="btn-forzar-lectura" data-role="forzar-lectura" data-idx="${idx}">Leer de todas formas</button>
+          </div>
+        </div>
       `;
-      summaryBody.appendChild(tr);
+      summaryBody.appendChild(card);
+      return;
+    }
+
+    if (item.estado === 'guardada') {
+      const dg = item.data || {};
+      card.classList.add('factura-card-guardada');
+      card.innerHTML = `
+        <div class="fc-top">
+          <div class="fc-archivo">
+            <button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button>
+            <div class="fc-archivo-info">
+              <div class="fc-nombre-archivo" title="${escapeHtml(item.nombre)}">${escapeHtml(item.nombre)}</div>
+              <div class="fc-proveedor">${escapeHtml(dg.nombre_razon_social || '—')}</div>
+            </div>
+          </div>
+          <div class="fc-top-derecha">
+            <span class="fc-valor">$${(Number(dg.valor_sin_iva) || 0).toLocaleString('es-CO')}</span>
+            <span class="status-badge guardada">✓ Guardada</span>
+          </div>
+        </div>
+      `;
+      summaryBody.appendChild(card);
       return;
     }
 
@@ -1345,26 +1648,56 @@ function renderSummary(){
     // con el mismo estilo -- la diferencia es que para un ítem en estado
     // "revisar" esa ficha ahora permite editar todos los campos (no solo
     // Rete Fuente/IVA/ICA), para no obligar al contador a corregir todo
-    // desde los selectores sueltos de la fila.
+    // desde los selectores sueltos de la tarjeta.
+    //
+    // Antes, "listo" solo mostraba un badge pasivo ("✓ Listo") y la
+    // única forma de guardarla era el botón masivo de abajo. Ahora cada
+    // tarjeta lista trae su propio botón "Guardar" -- el contador puede
+    // ir guardando una por una, a su ritmo, sin tener que esperar a
+    // juntar todo el lote (el botón masivo sigue funcionando igual para
+    // quien prefiera guardar todas de una vez).
     const estadoBadge = item.estado === 'listo'
-      ? '<span class="status-badge listo">✓ Listo</span>'
+      ? `<button type="button" class="btn-guardar-individual" data-role="guardar-individual" data-idx="${idx}" title="Guardar solo esta factura">💾 Guardar</button>`
       : `<button type="button" class="btn-ver btn-revisar" data-role="revisar" data-idx="${idx}" title="Revisar y editar todos los datos de esta factura">⚠ Revisar</button>`;
 
-    tr.innerHTML = `
-      <td>${escapeHtml(item.nombre)}</td>
-      <td><button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button></td>
-      <td>${escapeHtml(d.nombre_razon_social || '—')}</td>
-      <td class="money">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</td>
-      <td><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></td>
-      <td><select data-idx="${idx}" data-role="subcuenta" style="min-width:170px;">${subcuentaOpts}</select></td>
-      <td><input type="text" class="digitacion-input" data-idx="${idx}" data-role="digitacion" value="${escapeHtml(d.numero_digitacion || '')}" placeholder="N.° comprobante" style="width:110px;" title="Número de digitación -- obligatorio antes de poder guardar esta factura"></td>
-      <td>${movimientoHtml}</td>
-      <td>
-        ${estadoBadge}
-        <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
-      </td>
+    // Todo el dato de ESTA factura queda en UN solo recuadro: arriba el
+    // archivo/proveedor/valor/estado, abajo una cuadrícula con los
+    // campos editables -- se acomodan solos según el espacio (auto-fit),
+    // nunca hace falta desplazar nada de lado para verlos todos.
+    card.innerHTML = `
+      <div class="fc-top">
+        <div class="fc-archivo">
+          <button type="button" class="btn-ver" data-role="ver" data-idx="${idx}" title="Ver archivo original">👁</button>
+          <div class="fc-archivo-info">
+            <div class="fc-nombre-archivo" title="${escapeHtml(item.nombre)}">${escapeHtml(item.nombre)}</div>
+            <div class="fc-proveedor">${escapeHtml(d.nombre_razon_social || '—')}</div>
+          </div>
+        </div>
+        <div class="fc-top-derecha">
+          <span class="fc-valor">$${(Number(d.valor_sin_iva) || 0).toLocaleString('es-CO')}</span>
+          ${estadoBadge}
+          <button type="button" class="btn-eliminar-icono" data-role="eliminar" data-idx="${idx}" title="Quitar del lote">🗑</button>
+        </div>
+      </div>
+      <div class="fc-campos">
+        <label class="fc-campo"><span>Categoría</span><select data-idx="${idx}" data-role="categoria">${categoriaOpts}</select></label>
+        <label class="fc-campo"><span>Subcuenta (PUC)</span><select data-idx="${idx}" data-role="subcuenta">${subcuentaOpts}</select></label>
+        <label class="fc-campo"><span>N.° digitación</span><input type="text" class="digitacion-input" data-idx="${idx}" data-role="digitacion" value="${escapeHtml(d.numero_digitacion || '')}" placeholder="N.° comprobante" title="Número de digitación -- obligatorio antes de poder guardar esta factura"></label>
+        <label class="fc-campo"><span>Movimiento / Cliente</span>${movimientoHtml}</label>
+      </div>
+      ${item.errorGuardado ? `<div class="fc-mensaje fc-mensaje-error">${escapeHtml(item.errorGuardado)}</div>` : ''}
+      ${item.pendienteConfirmarSinNit && !(item.data && soloDigitos(item.data.nit_cc)) ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:#F6ECE7;border-radius:6px;">
+          <div style="color:#7A2E1B;font-size:12.5px;">⚠ Este documento no trae NIT/cédula del emisor -- verifica si en realidad no aparece (ábrela con "Revisar" para corregirlo). <button type="button" data-role="guardar-sin-nit" data-idx="${idx}" style="margin-left:4px;font-size:12px;font-weight:600;padding:4px 9px;border-radius:6px;border:1px solid #B0402D;background:#fff;color:#7A2E1B;cursor:pointer;">Guardar de todas formas</button></div>
+        </div>
+      ` : ''}
+      ${item.pendienteConfirmarLetras && letrasNoCoincideItem(item.data) ? `
+        <div class="fc-mensaje" style="border-top:none;margin-top:8px;padding:8px 10px;background:#F6ECE7;border-radius:6px;">
+          <div style="color:#7A2E1B;font-size:12.5px;">⚠ El valor en letras ("${escapeHtml(item.data.valor_letras_texto)}") no coincide con el valor en números ($${(Number(item.data.valor_con_iva) || 0).toLocaleString('es-CO')}) -- verifica contra el documento original (ábrela con "Revisar" para corregirlo). <button type="button" data-role="guardar-sin-letras" data-idx="${idx}" style="margin-left:4px;font-size:12px;font-weight:600;padding:4px 9px;border-radius:6px;border:1px solid #B0402D;background:#fff;color:#7A2E1B;cursor:pointer;">Guardar de todas formas</button></div>
+        </div>
+      ` : ''}
     `;
-    summaryBody.appendChild(tr);
+    summaryBody.appendChild(card);
   });
 
   actualizarContadores();
@@ -1412,7 +1745,141 @@ summaryBody.addEventListener('change', (e) => {
     item.estado = 'listo';
     renderSummary();
   }
+
+  // Cualquiera de los cambios de arriba se guarda de una vez -- así no
+  // se pierde si el contador se va a otra pantalla antes de guardar
+  // esta factura en el kárdex.
+  guardarEdicionItem(item);
 });
+
+// Arma el payload que espera POST /api/invoices a partir de un item del
+// lote -- se extrajo como función propia para que el guardado masivo
+// (botón "Guardar facturas listas") y el guardado individual (botón
+// "💾 Guardar" en cada tarjeta) usen exactamente la misma lógica y no se
+// desincronicen si mañana cambia un campo.
+function construirPayloadFactura(item){
+  const d = item.data;
+  return {
+    numero_digitacion: String(d.numero_digitacion || '').trim(),
+    saldo_vencido_detectado: d.saldo_vencido_detectado === true || d.saldo_vencido_detectado === 'true',
+    anticipo_detectado: d.anticipo_detectado === true || d.anticipo_detectado === 'true',
+    tipo_doc: d.tipo_doc || '', nit_cc: d.nit_cc || '', dv: d.dv || '',
+    nombre_razon_social: d.nombre_razon_social || '',
+    letras_fe: d.letras_fe || '', numeros_fe: d.numeros_fe || '',
+    fecha_factura: d.fecha_factura || '',
+    valor_sin_iva: String(d.valor_sin_iva || ''), valor_iva: String(d.valor_iva || ''), valor_con_iva: String(d.valor_con_iva || ''),
+    valor_abonado: String(d.valor_abonado || ''),
+    rete_fuente: String(d.rete_fuente || ''), rete_iva: String(d.rete_iva || ''), rete_ica: String(d.rete_ica || ''),
+    concepto: d.concepto || '', categoria_concepto: d.categoria_concepto || '',
+    categoria_concepto_ia: d.categoria_concepto_ia || d.categoria_concepto || '',
+    tipo_movimiento: item.tipoMovimiento, adquiriente_nit: d.adquiriente_nit || '', adquiriente_nombre: d.adquiriente_nombre || '',
+    cliente_id: item.clienteId || '',
+    regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
+    autorretenedor: d.autorretenedor === true || d.autorretenedor === 'true',
+    desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
+    desglose_aiu: JSON.stringify(d.desglose_aiu || (typeof desgloseAiuDesdeItems === 'function' ? desgloseAiuDesdeItems(d.items || []) : {})),
+    subcuenta_gasto: d.subcuenta_gasto || '',
+    file_hash: d.file_hash || '',
+    tarifa_ica_id: d.tarifa_ica_id || '',
+    items: (typeof itemsParaGuardar === 'function') ? itemsParaGuardar(d.items || [], Number(d.valor_iva) || 0) : (d.items || []),
+  };
+}
+
+// Guarda una sola factura contra el servidor -- usada tanto por el botón
+// masivo (en un loop) como por el botón individual de cada tarjeta.
+// Deja el resultado marcado directamente en el item (estado/errorGuardado)
+// para que renderSummary() solo tenga que pintar lo que ya quedó decidido.
+async function guardarUnaFactura(item){
+  try {
+    const res = await fetch('/api/invoices', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(construirPayloadFactura(item))
+    });
+    if (res.ok) {
+      item.estado = 'guardada';
+      delete item.errorGuardado;
+      // Se quita del lote en el servidor -- si no, la próxima vez que se
+      // consulte /api/lotes/activo esta factura volvería a aparecer como
+      // "lista" y se podría guardar dos veces por accidente.
+      fetch(`/api/lotes/items/${item.id}`, { method: 'DELETE' }).catch(() => {});
+      // Ya quedó en el kárdex -- no hace falta seguir guardando su
+      // corrección localmente.
+      borrarEdicionItem(item.id);
+      return { ok: true };
+    }
+    if (res.status === 409) {
+      // Se coló como "lista" pero justo antes de guardarla resultó que ya
+      // existía (ej. dos archivos idénticos en el mismo lote) -- se
+      // reclasifica como duplicada en vez de fallar en silencio.
+      const errData = await res.json().catch(() => null);
+      item.estado = 'duplicado';
+      item.data = { ...item.data, factura_existente: errData?.factura_existente || {} };
+      return { ok: false, duplicado: true };
+    }
+    const errData = await res.json().catch(() => null);
+    item.errorGuardado = errData?.error || 'No se pudo guardar -- intenta de nuevo.';
+    return { ok: false, error: item.errorGuardado };
+  } catch (e) {
+    item.errorGuardado = 'No se pudo conectar con el servidor -- intenta de nuevo.';
+    return { ok: false, error: item.errorGuardado };
+  }
+}
+
+// Guardado individual: valida que tenga número de digitación (igual que
+// el masivo, pero aquí se lo señala directamente al usuario en vez de
+// saltarla en silencio) y guarda solo esa factura.
+//
+// Valor en letras vs. valor en números -- true cuando el documento sí
+// escribió el total en palabras y ese valor no coincide con el valor en
+// números (posible error de digitación/imprenta del proveedor).
+function letrasNoCoincideItem(data){
+  if (!data || !data.valor_letras_texto) return false;
+  const letrasNumero = Number(data.valor_letras_numero) || 0;
+  const conIva = Number(data.valor_con_iva) || 0;
+  return letrasNumero > 0 && Math.abs(letrasNumero - conIva) > 1;
+}
+
+// `forzarSinNit` viene en true solo cuando el contador ya vio el aviso
+// de "sin NIT" y le dio clic explícito a "Guardar de todas formas" --
+// igual `forzarLetras` para el aviso de valor en letras vs. en números.
+// Ninguno de los dos bloquea la lectura ni la edición, solo exigen esta
+// confirmación puntual antes de guardar así.
+async function guardarFacturaIndividual(idx, btn, forzarSinNit, forzarLetras){
+  const item = lote[idx];
+  if (!item) return;
+  const numero = item.data && String(item.data.numero_digitacion || '').trim();
+  if (!numero) {
+    const card = btn.closest('.factura-card');
+    const inputDigitacion = card ? card.querySelector('[data-role="digitacion"]') : null;
+    if (inputDigitacion) {
+      inputDigitacion.classList.add('input-error');
+      inputDigitacion.focus();
+      inputDigitacion.addEventListener('input', () => inputDigitacion.classList.remove('input-error'), { once: true });
+    }
+    item.errorGuardado = 'Falta el número de digitación -- complétalo antes de guardar.';
+    renderSummary();
+    return;
+  }
+
+  const sinNit = !(item.data && soloDigitos(item.data.nit_cc));
+  if (sinNit && !forzarSinNit) {
+    item.pendienteConfirmarSinNit = true;
+    renderSummary();
+    return;
+  }
+  item.pendienteConfirmarSinNit = false;
+
+  if (letrasNoCoincideItem(item.data) && !forzarLetras) {
+    item.pendienteConfirmarLetras = true;
+    renderSummary();
+    return;
+  }
+  item.pendienteConfirmarLetras = false;
+
+  btn.disabled = true;
+  btn.textContent = 'Guardando...';
+  await guardarUnaFactura(item);
+  renderSummary();
+}
 
 summaryBody.addEventListener('click', (e) => {
   const btnVer = e.target.closest('[data-role="ver"]');
@@ -1448,6 +1915,30 @@ summaryBody.addEventListener('click', (e) => {
     const idx = Number(btnEliminar.dataset.idx);
     if (isNaN(idx)) return;
     eliminarItemServidor(idx);
+    return;
+  }
+
+  const btnGuardarInd = e.target.closest('[data-role="guardar-individual"]');
+  if (btnGuardarInd) {
+    const idx = Number(btnGuardarInd.dataset.idx);
+    if (isNaN(idx)) return;
+    guardarFacturaIndividual(idx, btnGuardarInd);
+    return;
+  }
+
+  const btnGuardarSinNit = e.target.closest('[data-role="guardar-sin-nit"]');
+  if (btnGuardarSinNit) {
+    const idx = Number(btnGuardarSinNit.dataset.idx);
+    if (isNaN(idx)) return;
+    guardarFacturaIndividual(idx, btnGuardarSinNit, true);
+    return;
+  }
+
+  const btnGuardarSinLetras = e.target.closest('[data-role="guardar-sin-letras"]');
+  if (btnGuardarSinLetras) {
+    const idx = Number(btnGuardarSinLetras.dataset.idx);
+    if (isNaN(idx)) return;
+    guardarFacturaIndividual(idx, btnGuardarSinLetras, false, true);
   }
 });
 
@@ -1470,62 +1961,37 @@ btnGuardarTodas.addEventListener('click', async () => {
   // Escanear) -- una factura "lista" pero sin ese número se salta en
   // este guardado masivo, en vez de guardarse sin él.
   const sinDigitacion = listas.filter(i => !(i.data && String(i.data.numero_digitacion || '').trim()));
-  const paraGuardar = listas.filter(i => i.data && String(i.data.numero_digitacion || '').trim());
+  const conDigitacion = listas.filter(i => i.data && String(i.data.numero_digitacion || '').trim());
+  // La falta de NIT/cédula del emisor tampoco se guarda en silencio en
+  // el masivo -- se salta aquí (igual que la digitación) y queda
+  // marcada en su tarjeta con el aviso + "Guardar de todas formas", así
+  // el contador confirma una por una cuál de verdad no tiene ese dato.
+  const sinNit = conDigitacion.filter(i => !(i.data && soloDigitos(i.data.nit_cc)));
+  const conNit = conDigitacion.filter(i => i.data && soloDigitos(i.data.nit_cc));
+  sinNit.forEach((i) => { i.pendienteConfirmarSinNit = true; });
+  // Igual criterio para el valor en letras que no coincide con el valor
+  // en números -- se salta y queda marcada en su tarjeta, en vez de
+  // registrar de una vez un valor que puede estar mal.
+  const sinLetrasOk = conNit.filter((i) => letrasNoCoincideItem(i.data));
+  const paraGuardar = conNit.filter((i) => !letrasNoCoincideItem(i.data));
+  sinLetrasOk.forEach((i) => { i.pendienteConfirmarLetras = true; });
   let guardadas = 0;
   for (const item of paraGuardar) {
-    try {
-      const d = item.data;
-      const payload = {
-        numero_digitacion: String(d.numero_digitacion || '').trim(),
-        saldo_vencido_detectado: d.saldo_vencido_detectado === true || d.saldo_vencido_detectado === 'true',
-        anticipo_detectado: d.anticipo_detectado === true || d.anticipo_detectado === 'true',
-        tipo_doc: d.tipo_doc || '', nit_cc: d.nit_cc || '', dv: d.dv || '',
-        nombre_razon_social: d.nombre_razon_social || '',
-        letras_fe: d.letras_fe || '', numeros_fe: d.numeros_fe || '',
-        fecha_factura: d.fecha_factura || '',
-        valor_sin_iva: String(d.valor_sin_iva || ''), valor_iva: String(d.valor_iva || ''), valor_con_iva: String(d.valor_con_iva || ''),
-        rete_fuente: String(d.rete_fuente || ''), rete_iva: String(d.rete_iva || ''), rete_ica: String(d.rete_ica || ''),
-        concepto: d.concepto || '', categoria_concepto: d.categoria_concepto || '',
-        categoria_concepto_ia: d.categoria_concepto_ia || d.categoria_concepto || '',
-        tipo_movimiento: item.tipoMovimiento, adquiriente_nit: d.adquiriente_nit || '', adquiriente_nombre: d.adquiriente_nombre || '',
-        cliente_id: item.clienteId || '',
-        regimen_simple: d.regimen_simple === true || d.regimen_simple === 'true',
-        autorretenedor: d.autorretenedor === true || d.autorretenedor === 'true',
-        desglose_categorias: JSON.stringify(d.desglose_categorias || {}),
-        desglose_aiu: JSON.stringify(d.desglose_aiu || (typeof desgloseAiuDesdeItems === 'function' ? desgloseAiuDesdeItems(d.items || []) : {})),
-        subcuenta_gasto: d.subcuenta_gasto || '',
-        file_hash: d.file_hash || '',
-        tarifa_ica_id: d.tarifa_ica_id || '',
-        items: (typeof itemsParaGuardar === 'function') ? itemsParaGuardar(d.items || [], Number(d.valor_iva) || 0) : (d.items || []),
-      };
-      const res = await fetch('/api/invoices', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        item.estado = 'guardada'; guardadas++;
-        // Se quita del lote en el servidor -- si no, la próxima vez que
-        // se consulte /api/lotes/activo (ej. al eliminar otra fila),
-        // esta factura volvería a aparecer como "lista" y se podría
-        // guardar dos veces por accidente.
-        fetch(`/api/lotes/items/${item.id}`, { method: 'DELETE' }).catch(() => {});
-      } else if (res.status === 409) {
-        // Se coló como "lista" pero justo antes de guardarla resultó que
-        // ya existía (ej. dos archivos idénticos en el mismo lote) --
-        // se reclasifica como duplicada en vez de fallar en silencio.
-        const errData = await res.json().catch(() => null);
-        item.estado = 'duplicado';
-        item.data = { ...item.data, factura_existente: errData?.factura_existente || {} };
-      }
-    } catch (e) { /* se deja como estaba, no bloquea el resto del lote */ }
+    const resultado = await guardarUnaFactura(item);
+    if (resultado.ok) guardadas++;
   }
 
-  btnGuardarTodas.textContent = sinDigitacion.length > 0
-    ? `✓ ${guardadas} guardadas -- ${sinDigitacion.length} sin número de digitación, no se guardaron`
+  const avisos = [];
+  if (sinDigitacion.length > 0) avisos.push(`${sinDigitacion.length} sin número de digitación`);
+  if (sinNit.length > 0) avisos.push(`${sinNit.length} sin NIT/cédula del emisor`);
+  if (sinLetrasOk.length > 0) avisos.push(`${sinLetrasOk.length} con el valor en letras distinto al de números`);
+  btnGuardarTodas.textContent = avisos.length > 0
+    ? `✓ ${guardadas} guardadas -- ${avisos.join(', ')}, no se guardaron`
     : `✓ ${guardadas} facturas guardadas`;
   renderSummary();
   setTimeout(() => {
     btnGuardarTodas.textContent = 'Guardar facturas listas';
-  }, sinDigitacion.length > 0 ? 4500 : 2500);
+  }, avisos.length > 0 ? 4500 : 2500);
 });
 
 async function requireAuthAndInit(){
@@ -1582,5 +2048,6 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/soporte-chat.js"></script>
+<script src="/nav-mobile.js"></script>
 </body>
 </html>

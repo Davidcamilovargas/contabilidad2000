@@ -297,6 +297,18 @@
           </label>
         </div>
       </div>
+
+      <div style="margin-top:18px;">
+        <label style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); display:block; margin-bottom:10px;">
+          ICA (Industria y Comercio)
+        </label>
+        <div class="resp-grid">
+          <label class="resp-check">
+            <input type="checkbox" id="inputAgenteRetenedorIca">
+            <span>Agente retenedor de ICA<span class="resp-desc">Registro municipal -- no viene en las responsabilidades del RUT de arriba, se marca aparte. Si no se marca, Escanear y Carga masiva asumen por defecto que ICA no aplica para este cliente.</span></span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <div class="form-section">
@@ -383,6 +395,7 @@ const inputTelefono = document.getElementById('inputTelefono');
 const inputCorreo = document.getElementById('inputCorreo');
 const inputCiiu = document.getElementById('inputCiiu');
 const inputCiiuOtro = document.getElementById('inputCiiuOtro');
+const inputAgenteRetenedorIca = document.getElementById('inputAgenteRetenedorIca');
 const ciiuOtroWrap = document.getElementById('ciiuOtroWrap');
 const inputRutArchivo = document.getElementById('inputRutArchivo');
 const rutFilename = document.getElementById('rutFilename');
@@ -615,6 +628,7 @@ function renderClients(){
     if (c.ciudad) chips.push(`<span class="client-chip">${escapeHtml(c.ciudad)}</span>`);
     if (c.ciiu) chips.push(`<span class="client-chip">CIIU ${escapeHtml(c.ciiu)}${CIIU_LABELS[c.ciiu] ? ' · ' + CIIU_LABELS[c.ciiu] : ''}</span>`);
     if (c.agente_retenedor) chips.push(`<span class="client-chip retenedor">Agente retenedor</span>`);
+    if (c.agente_retenedor_ica) chips.push(`<span class="client-chip retenedor">Agente retenedor ICA</span>`);
     if (c.rut_archivo) chips.push(`<span class="client-chip">RUT cargado</span>`);
 
     row.innerHTML = `
@@ -679,6 +693,7 @@ function resetForm(){
   inputCiiuOtro.value = '';
   ciiuOtroWrap.style.display = 'none';
   document.querySelectorAll('.resp-code').forEach(cb => cb.checked = false);
+  if (inputAgenteRetenedorIca) inputAgenteRetenedorIca.checked = false;
   inputRutArchivo.value = '';
   rutFilename.textContent = '';
   currentRutBase64 = '';
@@ -717,6 +732,7 @@ function iniciarEdicion(id){
 
   const respGuardadas = (c.responsabilidades || '').split(',').map((s) => s.trim());
   document.querySelectorAll('.resp-code').forEach((cb) => { cb.checked = respGuardadas.includes(cb.value); });
+  if (inputAgenteRetenedorIca) inputAgenteRetenedorIca.checked = !!c.agente_retenedor_ica;
 
   if (c.ciiu && [...inputCiiu.options].some((o) => o.value === c.ciiu)) {
     inputCiiu.value = c.ciiu;
@@ -787,6 +803,7 @@ btnAdd.addEventListener('click', async () => {
     correo: inputCorreo.value.trim(),
     ciiu: ciiuFinal,
     responsabilidades,
+    agente_retenedor_ica: inputAgenteRetenedorIca ? !!inputAgenteRetenedorIca.checked : false,
     contacto_nombre: inputContactoNombre.value.trim(),
     contacto_cargo: inputContactoCargo.value.trim(),
     contacto_telefono: inputContactoTelefono.value.trim(),
@@ -916,6 +933,7 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/soporte-chat.js"></script>
+<script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>
 </body>
 </html>

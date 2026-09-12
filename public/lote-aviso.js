@@ -27,7 +27,11 @@
 
   const ESTILOS = `
     #loteAvisoGlobal{
-      position:fixed; right:20px; bottom:20px; z-index:9998;
+      /* bottom:82px a propósito -- el botón flotante "Ayuda" de
+         soporte-chat.js vive en esta misma esquina (bottom:22px,
+         alto 42px, hasta ~64px), así que este aviso se acomoda arriba
+         de él en vez de superponerse (se veía encimado/recortado). */
+      position:fixed; right:22px; bottom:82px; z-index:9998;
       width:min(300px, calc(100vw - 32px));
       background:#fff; border:1px solid #E6DECA; border-radius:12px;
       box-shadow:0 20px 44px -18px rgba(46,34,20,0.28);
@@ -61,7 +65,7 @@
       padding:4px 10px; transition:background .15s ease;
     }
     #loteAvisoGlobal .la-link:hover{ background:#E9F0EB; }
-    @media (max-width:640px){ #loteAvisoGlobal{ left:16px; right:16px; bottom:16px; width:auto; } }
+    @media (max-width:640px){ #loteAvisoGlobal{ left:16px; right:16px; bottom:82px; width:auto; } }
   `;
   const style = document.createElement('style');
   style.textContent = ESTILOS;

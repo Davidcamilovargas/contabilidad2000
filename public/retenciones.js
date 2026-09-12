@@ -524,6 +524,15 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
     return opciones ? opciones[0][0] : '';
   };
+  // Tarifa de retención recomendada por defecto para esta categoría --
+  // la tarifa baja (declarante), o 0 ("Ninguno") si la categoría no
+  // tiene tarifa confirmada. Es solo el punto de partida que se muestra
+  // en el selector de la tabla de ítems -- el contador la puede cambiar
+  // línea por línea (ver renderSelectorTarifaFuente / tarifaFuenteOpciones).
+  const tarifaPorDefecto = (categoria) => {
+    const config = TARIFAS_RETENCION[categoria];
+    return config ? config.tarifaBaja : 0;
+  };
   const validarCategoria = (categoria) => {
     const cat = categoria || 'otro';
     if (!categoriasValidas) return cat;
@@ -538,6 +547,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       subtotal: String(data.valor_sin_iva ?? '0'),
       categoria_concepto: categoria,
       subcuenta_gasto: subcuentaPorDefecto(categoria),
+      tarifa_retencion: tarifaPorDefecto(categoria),
       iva_mayor_valor: false,
       // AIU (Administración+Imprevistos+Utilidad) -- solo tiene sentido
       // para vigilancia_aseo/servicios_temporales (ver esCategoriaBaseAiu
@@ -556,10 +566,29 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       subtotal: it.subtotal !== undefined && it.subtotal !== null ? String(it.subtotal) : '0',
       categoria_concepto: categoria,
       subcuenta_gasto: subcuentaPorDefecto(categoria),
+      tarifa_retencion: tarifaPorDefecto(categoria),
       iva_mayor_valor: false,
       aiu: it.aiu !== undefined && it.aiu !== null && it.aiu !== '' ? String(it.aiu) : '',
     };
   });
+}
+
+// Opciones de tarifa (%) seleccionables para UNA categoría, para el
+// selector por ítem -- siempre incluye "Ninguno" primero. A diferencia
+// de renderSelectorTarifaFuente() (que arma el selector completo a
+// nivel de toda la factura, con el peso ya calculado y el flag
+// "tocado"), esto es solo la lista de opciones -- lo usa la tabla de
+// ítems para que cada línea pueda tener su propia tarifa marcada,
+// aparte de la que se usa para toda la factura.
+function tarifaFuenteOpciones(categoria){
+  const config = TARIFAS_RETENCION[String(categoria || '').toLowerCase()];
+  const opciones = [{ valor: 0, label: 'Ninguno' }];
+  if (!config) return opciones;
+  opciones.push({ valor: config.tarifaBaja, label: formatearPorcentajeTarifa(config.tarifaBaja) + (config.tarifaBaja !== config.tarifaAlta ? ' (declarante)' : '') });
+  if (config.tarifaAlta !== config.tarifaBaja) {
+    opciones.push({ valor: config.tarifaAlta, label: formatearPorcentajeTarifa(config.tarifaAlta) + ' (no declarante)' });
+  }
+  return opciones;
 }
 
 // Ítems ya editados -> listos para mandar en el POST /api/invoices, con
@@ -707,4 +736,97 @@ function calcularReteIcaSugerido(inv, tarifaIca){
     cuentaPUC: tarifaIca.cuenta_puc || CUENTAS_PUC_FIJAS.rete_ica.cuentaPUC,
     nombrePUC: tarifaIca.cuenta_puc ? `ICA retenido -- ${tarifaIca.municipio}` : CUENTAS_PUC_FIJAS.rete_ica.nombrePUC,
   };
+}
+
+// ---------- Selector de tarifa de Rete Fuente por categoría ----------
+//
+// Antes, cuando una factura tenía una sola categoría, lo único que se
+// ofrecía era un texto "≈ rango bajo–alto" con un botón "Usar $bajo" --
+// el contador nunca veía la TARIFA real (%), solo el peso ya calculado.
+// Esta función arma, en su lugar, un <select> con las tarifas legales
+// de esa categoría (TARIFAS_RETENCION de arriba -- las mismas que ya
+// alimentan el cálculo, nunca una tabla aparte), preseleccionando la
+// recomendada, para que el contador confirme o cambie la tarifa con un
+// clic -- viendo el % y el PUC, no solo el peso resultante.
+//
+// Vive aquí (no en cada página) porque Escanear y Carga masiva deben
+// mostrar exactamente el mismo criterio de recomendación -- igual
+// principio que el resto de este archivo.
+//
+// `sugerido` es el resultado de calcularRetencionSugerida() para una
+// factura de una sola categoría (no un desglose de varias). `fuenteInput`
+// es el <input> real de Rete Fuente donde se aplica el valor elegido.
+// `tocado` es el mismo flag "reteFuenteTocado" que ya usa cada página --
+// si el contador ya vació el campo a propósito, no se le vuelve a
+// rellenar solo, se preselecciona "Ninguno" en su lugar.
+function formatearPorcentajeTarifa(frac){
+  const pct = frac * 100;
+  const texto = Number.isInteger(pct) ? String(pct) : pct.toFixed(1).replace(/\.0$/, '');
+  return texto + '%';
+}
+
+function renderSelectorTarifaFuente(contenedorEl, categoria, sugerido, fuenteInput, tocado){
+  if (!sugerido) return;
+  const configCategoria = TARIFAS_RETENCION[String(categoria || '').toLowerCase()] || null;
+  const esc = (typeof escapeHtml === 'function') ? escapeHtml : (s) => String(s);
+  const parseVal = (typeof parseMoneyValue === 'function') ? parseMoneyValue : (v) => Number(String(v).replace(/[^\d-]/g, '')) || 0;
+
+  const opciones = [{ valor: 0, label: 'Ninguno -- no aplica retención en este caso' }];
+  if (sugerido.mismaTarifa) {
+    const pct = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaBaja) + ' — ' : '';
+    opciones.push({ valor: sugerido.bajo, label: `${pct}$${sugerido.bajo.toLocaleString('es-CO')}` });
+  } else {
+    const pctBaja = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaBaja) + ' ' : '';
+    const pctAlta = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaAlta) + ' ' : '';
+    opciones.push({ valor: sugerido.bajo, label: `${pctBaja}(declarante de renta) — $${sugerido.bajo.toLocaleString('es-CO')}` });
+    opciones.push({ valor: sugerido.alto, label: `${pctAlta}(no declarante / no se sabe) — $${sugerido.alto.toLocaleString('es-CO')}` });
+  }
+
+  // OJO -- "Ninguno" también vale 0, igual que un campo todavía vacío,
+  // así que no basta con buscar qué opción coincide con el valor actual:
+  // si el campo está en $0 y el contador nunca lo tocó, eso NO es una
+  // elección deliberada de "Ninguno", es que todavía no se ha calculado
+  // nada -- en ese caso se recomienda la tarifa baja y se aplica de una,
+  // igual que ya hacía el flujo anterior. Solo se respeta "Ninguno" como
+  // elección real cuando el campo está en $0 Y el contador ya lo había
+  // tocado antes (lo vació a propósito).
+  const valorActual = parseVal(fuenteInput.value);
+  let coincide = null;
+  if (valorActual > 0) {
+    coincide = opciones.find((o) => o.valor === valorActual) || null;
+    if (!coincide) {
+      coincide = { valor: valorActual, label: `Otro valor ya escrito — $${valorActual.toLocaleString('es-CO')}` };
+      opciones.push(coincide);
+    }
+  } else if (tocado) {
+    coincide = opciones[0]; // el contador ya lo había dejado en $0 a propósito -- respeta "Ninguno"
+  }
+  const recomendado = opciones[1];
+  const preseleccionado = coincide ? coincide.valor : recomendado.valor;
+
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.flexDirection = 'column';
+  wrap.style.gap = '4px';
+  const titulo = document.createElement('div');
+  titulo.className = 'fine';
+  titulo.textContent = 'Tarifa de retención recomendada según la categoría (verifica antes de guardar -- no es asesoría tributaria):';
+  wrap.appendChild(titulo);
+
+  const select = document.createElement('select');
+  select.className = 'tarifa-retencion-select';
+  select.innerHTML = opciones.map((o) => `<option value="${o.valor}"${o.valor === preseleccionado ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  select.addEventListener('change', () => {
+    const monto = Number(select.value) || 0;
+    fuenteInput.value = monto.toLocaleString('es-CO');
+    fuenteInput.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  wrap.appendChild(select);
+
+  contenedorEl.appendChild(wrap);
+  contenedorEl.classList.add('show');
+
+  if (!coincide) {
+    fuenteInput.value = preseleccionado.toLocaleString('es-CO');
+  }
 }

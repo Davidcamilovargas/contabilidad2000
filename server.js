@@ -147,6 +147,15 @@ async function ensureSchema() {
   // un anticipo/avance que el proveedor ya descontó del total).
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS saldo_vencido_detectado BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS anticipo_detectado BOOLEAN DEFAULT false;`);
+  // Valor que el documento indica que YA fue abonado/anticipado sobre el
+  // total (ej. una cuenta de cobro que dice "de los cuales se abonaron
+  // $X") -- se guarda aparte del total de la factura para que el
+  // contador sepa cuánto queda realmente pendiente de pago, sin que
+  // esto afecte el valor sobre el que se calcula la retención (la
+  // retención se calcula sobre el valor causado/facturado completo, no
+  // sobre lo efectivamente desembolsado). Vacío/'0' = no se detectó ni
+  // se registró ningún abono.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valor_abonado TEXT DEFAULT '';`);
   // Desglose del subtotal por categoría, para facturas que mezclan
   // ítems de distinta naturaleza (ej. productos + mano de obra en la
   // misma factura) -- se guarda como texto JSON, ej: '{"compras":442000,"servicios":140000}'.
@@ -292,6 +301,12 @@ async function ensureSchema() {
   // calcular ninguna retención sugerida (si no es agente retenedor,
   // nunca le corresponde retener, sin importar el monto).
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS agente_retenedor BOOLEAN DEFAULT false;`);
+  // Aparte de lo anterior -- el ICA es municipal, no viene en las
+  // responsabilidades del RUT que ya se leen arriba, así que no se
+  // puede derivar solo: el contador lo marca a mano, una vez, en la
+  // ficha del cliente. Si no está marcado, la app asume por defecto
+  // que ICA no aplica y no ofrece calcularlo.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS agente_retenedor_ica BOOLEAN DEFAULT false;`);
   // Expansión del modelo de clientes: datos básicos, tributarios, RUT,
   // contacto principal, e información bancaria (para conectar pagos
   // más adelante y hacer relación con la cartera del cliente).
@@ -690,7 +705,7 @@ const SAVED_FIELDS = [
   'rete_fuente', 'rete_iva', 'rete_ica', 'concepto', 'categoria_concepto',
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
   'regimen_simple', 'autorretenedor', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
-  'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado',
+  'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado', 'valor_abonado',
 ];
 
 function rowToInvoice(row) {
@@ -745,7 +760,7 @@ app.post('/api/clients', requireAuth, async (req, res) => {
       nombre, nit, dv, tipo_persona, direccion, ciudad, telefono, correo,
       ciiu, responsabilidades, rut_archivo, rut_archivo_nombre,
       contacto_nombre, contacto_cargo, contacto_telefono, contacto_correo,
-      banco, tipo_cuenta, numero_cuenta,
+      banco, tipo_cuenta, numero_cuenta, agente_retenedor_ica,
     } = req.body;
     if (!nombre || !nit) {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
@@ -779,15 +794,15 @@ app.post('/api/clients', requireAuth, async (req, res) => {
         tipo_persona, direccion, ciudad, telefono, correo, ciiu, responsabilidades,
         rut_archivo, rut_archivo_nombre,
         contacto_nombre, contacto_cargo, contacto_telefono, contacto_correo,
-        banco, tipo_cuenta, numero_cuenta
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        banco, tipo_cuenta, numero_cuenta, agente_retenedor_ica
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
       RETURNING *`,
       [
         id, nombre, nit, dv || '', req.userId, agenteRetenedorCalculado,
         tipo_persona || '', direccion || '', ciudad || '', telefono || '', correo || '', ciiu || '', responsabilidadesStr,
         rut_archivo || '', rut_archivo_nombre || '',
         contacto_nombre || '', contacto_cargo || '', contacto_telefono || '', contacto_correo || '',
-        banco || '', tipo_cuenta || '', numero_cuenta || '',
+        banco || '', tipo_cuenta || '', numero_cuenta || '', !!agente_retenedor_ica,
       ]
     );
     res.status(201).json(rows[0]);
@@ -821,6 +836,11 @@ const CLIENT_EDITABLE_FIELDS = [
   'ciiu', 'responsabilidades', 'rut_archivo', 'rut_archivo_nombre',
   'contacto_nombre', 'contacto_cargo', 'contacto_telefono', 'contacto_correo',
   'banco', 'tipo_cuenta', 'numero_cuenta',
+  // A diferencia de "agente_retenedor" (Renta -- se calcula solo de las
+  // responsabilidades del RUT), el ICA es municipal y no viene en esa
+  // lista -- este sí lo marca el contador a mano, así que sí se acepta
+  // directo del cliente.
+  'agente_retenedor_ica',
 ];
 
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
@@ -833,6 +853,9 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
     // agente_retenedor a partir de ellas (código 07 = agente retenedor).
     if (updates.responsabilidades !== undefined) {
       updates.agente_retenedor = updates.responsabilidades.split(',').includes('07');
+    }
+    if (updates.agente_retenedor_ica !== undefined) {
+      updates.agente_retenedor_ica = !!updates.agente_retenedor_ica;
     }
 
     const keys = Object.keys(updates);
@@ -1389,8 +1412,8 @@ REGLAS IMPORTANTES QUE SIEMPRE DEBES SEGUIR:
 1. Responde siempre en español, con un tono cercano y claro -- como el resto de la aplicación (nunca uses jerga técnica sin explicarla).
 2. Responde corto -- 2 a 4 frases normalmente, no un ensayo. El contador está buscando ayuda rápida, no un documento.
 3. NUNCA das asesoría tributaria específica (no calcules ni confirmes si a un cliente le corresponde una retención particular, ni interpretes normas). Para eso, remite a que confirme con su propio criterio profesional o su contador -- tú solo explicas CÓMO FUNCIONA la aplicación, no qué dice la ley en su caso.
-4. Si la pregunta es sobre algo que de verdad no puedes resolver (un bug real, algo que suena a error del servidor, o algo muy específico de su cuenta), dilo con honestidad y sugiere contactar soporte humano -- no inventes una solución.
-5. Nunca inventes funciones que la aplicación no tiene.`;
+4. Si la pregunta es sobre algo que de verdad no puedes resolver (un bug real, algo que suena a error del servidor, o algo muy específico de su cuenta), dilo con honestidad y sugiere que hable directo con soporte humano por WhatsApp -- justo debajo de tu respuesta le va a aparecer un botón para eso, así que NUNCA inventes un correo, un formulario, un "chat en vivo" en otra esquina de la página, ni ningún otro canal de contacto -- solo di algo como "contacta a soporte humano por WhatsApp" y confía en que el botón aparece solo.
+5. Nunca inventes funciones que la aplicación no tiene, ni canales de contacto (correos, formularios, chats) que no existen.`;
 
 app.post('/api/soporte-chat', requireAuth, async (req, res) => {
   const { mensaje, historial } = req.body;
@@ -1409,9 +1432,12 @@ app.post('/api/soporte-chat', requireAuth, async (req, res) => {
   }
 });
 
-const INVOICE_PROMPT = `Eres un asistente contable colombiano. Antes de extraer ningún dato, tu PRIMERA tarea es identificar qué tipo de documento es la imagen o archivo que recibiste, porque Enlaza SOLO debe procesar los tres únicos documentos que se pueden causar contablemente en Colombia: la factura de venta, la cuenta de cobro y la factura de servicios públicos domiciliarios (agua, energía, gas, aseo -- es un "documento equivalente electrónico" con la misma validez legal que una factura, según el artículo 130 de la Ley 142 de 1994). Cualquier otro tipo de documento debe rechazarse, aunque tenga valores y NIT parecidos a una factura.
-
-CÓMO IDENTIFICAR CADA TIPO (usa estas señales, no solo el título del documento):
+// Bloque de criterios para distinguir los tres tipos de documento
+// causables -- compartido, sin cambios, entre INVOICE_PROMPT (un solo
+// documento por archivo) y PAQUETE_PROMPT (el archivo puede traer
+// varios documentos distintos): así nunca se desalinean los criterios
+// entre los dos casos.
+const CRITERIOS_IDENTIFICACION_DOCUMENTO = `CÓMO IDENTIFICAR CADA TIPO (usa estas señales, no solo el título del documento):
 
 FACTURA DE VENTA (electrónica o física) -- tipo_documento = "factura_venta":
 - Dice explícitamente "Factura de Venta", "Factura Electrónica de Venta" o "Invoice".
@@ -1438,16 +1464,18 @@ CUALQUIER OTRO DOCUMENTO -- tipo_documento = "otro" (SIEMPRE rechazar, documento
 - Contratos, recibos de consignación, tickets no fiscales, reportes o resúmenes de pagos.
 - Capturas de pantalla de apps de pago, comprobantes de Nequi/Daviplata/PSE, o cualquier documento que no sea una factura de venta, una cuenta de cobro, ni una factura de servicios públicos.
 
-Si tienes dudas genuinas entre estos tres tipos válidos, elige el que mejor encaje y sigue adelante -- el rechazo (tipo_documento = "otro") es solo para documentos que claramente NO son ninguno de los tres.
+Si tienes dudas genuinas entre estos tres tipos válidos, elige el que mejor encaje y sigue adelante -- el rechazo (tipo_documento = "otro") es solo para documentos que claramente NO son ninguno de los tres.`;
 
-Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
-
-{
+// El objeto de campos a extraer POR CADA documento -- también
+// compartido entre INVOICE_PROMPT y PAQUETE_PROMPT por la misma razón:
+// un documento individual dentro de un paquete se lee EXACTAMENTE con
+// las mismas reglas que un documento que llega solo.
+const CAMPOS_FACTURA_JSON = `{
   "tipo_documento": "'factura_venta' si es una factura de venta (electrónica o física), 'cuenta_cobro' si es una cuenta de cobro, 'factura_servicios_publicos' si es una factura de servicios públicos domiciliarios (agua/energía/gas/aseo), 'otro' para cualquier otro documento (comprobantes de pago, extractos, cotizaciones, contratos, etc.) -- ver criterios arriba",
   "documento_valido": "true SOLO si tipo_documento es 'factura_venta', 'cuenta_cobro' o 'factura_servicios_publicos'. false para 'otro'",
   "motivo_rechazo": "si documento_valido es false, una frase breve en español explicando qué parece ser el documento en su lugar (ej: 'Este documento parece ser un comprobante de transferencia bancaria, no una factura ni una cuenta de cobro'). Si documento_valido es true, cadena vacía",
   "tipo_doc": "13 si el proveedor se identifica con cédula, 31 si es NIT. Si no es claro, usa el que aplique según el número.",
-  "nit_cc": "número de identificación del proveedor/emisor, solo dígitos",
+  "nit_cc": "número de identificación (NIT o cédula) del proveedor/emisor, solo dígitos. Hay documentos reales que NO traen este número (ej. cuentas de cobro de una propiedad horizontal/conjunto residencial, donde en vez de un NIT aparece algo como 'Propiedad Horizontal' o el nombre del edificio) -- en esos casos deja este campo como cadena vacía. Nunca inventes un número ni tomes prestado uno de otra parte del documento (el consecutivo de la cuenta de cobro, la fecha, el NIT del adquiriente, etc.) -- si no hay un número de identificación real y propio del emisor, va vacío.",
   "dv": "dígito de verificación si aparece, si no aparece pon una cadena vacía",
   "nombre_razon_social": "nombre o razón social del proveedor/emisor de la factura",
   "letras_fe": "prefijo alfabético de la factura electrónica si existe (ej: FE, SETP), si no existe cadena vacía",
@@ -1466,12 +1494,17 @@ Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO 
   "autorretenedor": "true si el documento menciona explícitamente que el emisor es 'Autorretenedor' (de renta y/o de ICA) -- es muy común en facturas de servicios públicos (EPM y similares suelen imprimirlo en letra pequeña cerca del NIT del emisor, ej. 'Autorretenedor Renta -- Res. ...'). false en cualquier otro caso, incluido cuando no estés seguro. Cuando es true, el comprador NO debe practicar retención en la fuente ni ReteICA sobre esta factura -- el proveedor ya se autorretiene y se la gira directamente a la DIAN/municipio.",
   "saldo_vencido_detectado": "true SOLO si el documento muestra explícitamente un 'saldo vencido', 'deuda anterior', 'saldo anterior pendiente' o similar (frecuente en facturas de servicios públicos que arrastran periodos sin pagar) -- es decir, el 'total a pagar' del documento incluye algo más que el consumo/servicio de ESTE periodo. false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si ese saldo anterior ya fue pagado antes de registrar el gasto.",
   "anticipo_detectado": "true SOLO si el documento menciona explícitamente un anticipo o avance ya entregado/descontado (ej. 'anticipo del 50% ya cancelado', 'menos avance recibido'). false en cualquier otro caso, incluido cuando no estés seguro. No cambia ningún valor extraído -- solo avisa al contador para que revise si el total de la factura ya descuenta ese anticipo.",
+  "valor_abonado_detectado": "SOLO si el documento indica un valor EXACTO ya abonado/anticipado/pagado sobre el total (ej. 'de los cuales se han abonado $20.000.000', 'anticipo recibido: $5.000.000'), ese valor en pesos ENTEROS. Si el documento menciona un anticipo pero SIN dar el valor exacto, o no menciona ningún abono, usa 0 -- no calcules ni asumas un porcentaje.",
+  "valor_letras_texto": "el valor total de la factura (el mismo que valor_con_iva) tal como aparece escrito EN PALABRAS/LETRAS en el documento (ej. 'Setenta y dos millones novecientos ochenta y cuatro mil quinientos setenta y ocho pesos M/CTE'), copiado tal cual. Muchas cuentas de cobro y facturas físicas lo traen debajo o al lado del valor en números. Si el documento NO escribe el valor en letras en ninguna parte, deja una cadena vacía -- no lo inventes.",
+  "valor_letras_numero": "SOLO si llenaste valor_letras_texto: convierte ESAS PALABRAS a un número entero (ej. si el texto dice 'un millón cien mil pesos', este campo es 1100000), para que el sistema pueda comparar si coincide con el valor en números del documento -- esto es clave porque a veces el valor escrito en letras NO coincide con el valor escrito en números (un error de digitación o de imprenta en el documento original), y detectar esa diferencia es importante. Conviértelo con cuidado, palabra por palabra, sin asumir que necesariamente es igual a valor_con_iva. Si valor_letras_texto quedó vacío, usa 0 en este campo.",
   "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'servicios_temporales' (suministro de personal temporal por una Empresa de Servicios Temporales -- EST -- legalmente constituida, distinto de una simple prestación de servicios), 'hoteles_restaurantes' (alojamiento o alimentación), 'servicios_publicos' (usa SIEMPRE esta categoría cuando tipo_documento es 'factura_servicios_publicos', sin importar cuántos servicios distintos venga combinando el documento -- acueducto, alcantarillado, energía, aseo, etc. son todos 'servicios_publicos'), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
   "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás.",
   "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). EXCEPCIÓN -- factura de servicios públicos: cuando tipo_documento es 'factura_servicios_publicos' y el documento combina varios servicios (ej. acueducto + alcantarillado + energía + aseo, cada uno con su propio subtotal), NO los separes en varios ítems -- devuelve siempre un arreglo con UN SOLO elemento por el valor TOTAL de la factura (todos los servicios sumados), \"descripcion\": 'Servicios públicos' seguido de cuáles servicios incluye (ej. 'Servicios públicos (acueducto, alcantarillado, energía, aseo)'), \"categoria_concepto\": 'servicios_publicos'. Nunca inventes ítems que no estén realmente en el documento."
-}
+}`;
 
-REGLA DE FORMATO PARA LOS CAMPOS DE VALOR (los 3 de arriba, y también valor_unitario/subtotal de cada ítem del arreglo "items" -- muy importante, es el error más común):
+// Reglas de formato/validación de valores -- también compartidas, se
+// aplican por igual a cada documento, esté solo o dentro de un paquete.
+const REGLAS_FORMATO_VALORES = `REGLA DE FORMATO PARA LOS CAMPOS DE VALOR (los 3 de arriba, y también valor_unitario/subtotal de cada ítem del arreglo "items" -- muy importante, es el error más común):
 Los documentos colombianos escriben los montos con PUNTO como separador de miles y COMA para los centavos (ej: "39.915,96" significa treinta y nueve mil novecientos quince pesos con noventa y seis centavos). Debes devolver el valor como un ENTERO en pesos, redondeando los centavos, SIN puntos, SIN comas, SIN concatenar los dígitos tal cual aparecen escritos.
 
 Ejemplo correcto: si el documento muestra "39.915,96", el JSON debe llevar 39916 (no 3991596, no 39915.96, no 39915).
@@ -1484,34 +1517,80 @@ Si algún campo no se puede determinar con certeza, usa una cadena vacía "" par
 
 Si documento_valido es false (el documento no es factura de venta, cuenta de cobro, ni factura de servicios públicos), igual completa nombre_razon_social y concepto con lo que alcances a leer si es evidente (ayuda a que el contador entienda qué era el archivo), pero deja los campos de valores en 0 y el resto en cadena vacía -- no hace falta forzar una lectura completa de un documento que de todos modos se va a rechazar.`;
 
+const INVOICE_PROMPT = `Eres un asistente contable colombiano. Antes de extraer ningún dato, tu PRIMERA tarea es identificar qué tipo de documento es la imagen o archivo que recibiste, porque Enlaza SOLO debe procesar los tres únicos documentos que se pueden causar contablemente en Colombia: la factura de venta, la cuenta de cobro y la factura de servicios públicos domiciliarios (agua, energía, gas, aseo -- es un "documento equivalente electrónico" con la misma validez legal que una factura, según el artículo 130 de la Ley 142 de 1994). Cualquier otro tipo de documento debe rechazarse, aunque tenga valores y NIT parecidos a una factura.
+
+${CRITERIOS_IDENTIFICACION_DOCUMENTO}
+
+Una vez identificado el tipo, extrae EXACTAMENTE estos campos, devolviendo SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks:
+
+${CAMPOS_FACTURA_JSON}
+
+${REGLAS_FORMATO_VALORES}`;
+
+// Prompt para archivos que pueden traer VARIOS documentos distintos
+// concatenados en un mismo PDF -- por ejemplo, varias facturas
+// escaneadas una tras otra, o una factura seguida de otros soportes.
+// Reutiliza EXACTAMENTE los mismos criterios de identificación y el
+// mismo esquema de campos que INVOICE_PROMPT (arriba) para que un
+// documento no se lea distinto solo por venir acompañado de otros --
+// lo único que cambia es que primero hay que SEGMENTAR el archivo en
+// documentos individuales, y devolver un arreglo con uno por cada uno.
+const PAQUETE_PROMPT = `Eres un asistente contable colombiano. Vas a recibir un archivo (normalmente un PDF) que puede traer UN SOLO documento (el caso más común, incluso si ocupa varias páginas) o VARIOS documentos distintos concatenados uno tras otro en el mismo archivo -- por ejemplo, varias facturas de proveedores distintos escaneadas y unidas en un solo PDF, o una factura seguida de un extracto bancario o de otros soportes.
+
+Tu PRIMERA tarea es SEGMENTAR el archivo: decidir cuántos documentos distintos hay en realidad, antes de extraer ningún dato. Usa estas señales para saber cuándo empieza un documento NUEVO (no bases el corte solo en el número de página):
+- Aparece un encabezado o membrete distinto (otro logo, otro nombre de empresa emisora).
+- Aparece un NIT/cédula del emisor distinto al del documento anterior.
+- Aparece un nuevo consecutivo de factura, CUFE, o número de "Cuenta de Cobro" distinto.
+- Aparece una nueva fecha de emisión y un nuevo total a pagar, sin que el documento anterior haya seguido en esa misma página con más ítems de la misma factura.
+- Cambia el TIPO de documento (ej. termina una factura y empieza un extracto bancario o un comprobante de pago).
+
+NO cortes un documento en varios solo porque tenga varias páginas: una factura de dos o tres páginas donde la tabla de ítems continúa de una página a la siguiente (mismo emisor, mismo consecutivo, mismo total) sigue siendo UN SOLO documento. La gran mayoría de los archivos que vas a recibir traen un solo documento -- solo segmenta en varios cuando de verdad encuentres las señales de arriba.
+
+Para cada documento que identifiques, decide primero su tipo con el mismo criterio que usarías si viniera solo:
+
+${CRITERIOS_IDENTIFICACION_DOCUMENTO}
+
+Después, para CADA documento que hayas segmentado (esté solo o acompañado de otros), extrae EXACTAMENTE los mismos campos que extraerías si ese documento hubiera llegado solo en su propio archivo -- ni más, ni menos -- con esta forma exacta:
+
+${CAMPOS_FACTURA_JSON}
+
+Incluye en el arreglo TANTO los documentos válidos (factura de venta, cuenta de cobro, factura de servicios públicos) COMO los que hay que rechazar (tipo_documento "otro", documento_valido false) -- no omitas ninguno, el sistema decide después qué hacer con cada uno.
+
+Devuelve SOLO un objeto JSON válido, sin texto adicional, sin markdown, sin backticks, con esta forma exacta:
+
+{
+  "documentos": [ /* un elemento con la forma de arriba por cada documento distinto que identificaste, EN EL MISMO ORDEN en que aparecen en el archivo (de principio a fin) */ ]
+}
+
+Si el archivo trae un solo documento (el caso más frecuente), "documentos" debe tener exactamente un elemento.
+
+${REGLAS_FORMATO_VALORES}
+
+Aplica estas reglas de formato de forma independiente a CADA documento del arreglo -- los valores de un documento nunca deben mezclarse ni sumarse con los de otro.`;
+
 // Endpoint que recibe el archivo (imagen o PDF) de una factura y llama a la API gratuita de Gemini
 // Misma lógica que usaba /api/extract directamente -- ahora vive
 // aparte para que el procesamiento en segundo plano de lotes.js
 // también pueda usarla, sin duplicar el código.
-async function procesarExtraccionFactura(userId, base64, effectiveMediaType, isPdf, forzar) {
-  const fileHash = calcularFileHash(base64);
+const TIPOS_DOCUMENTO_VALIDOS = ['factura_venta', 'cuenta_cobro', 'factura_servicios_publicos'];
 
-  if (!forzar) {
-    try {
-      const existente = await buscarFacturaPorHash(userId, fileHash);
-      if (existente) {
-        return { duplicado: true, file_hash: fileHash, factura_existente: existente };
-      }
-    } catch (err) {
-      console.error('No se pudo revisar duplicados antes de leer con IA:', err.message);
-    }
-  }
-
-  const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
-  parsed.file_hash = fileHash;
-
-  const TIPOS_DOCUMENTO_VALIDOS = ['factura_venta', 'cuenta_cobro', 'factura_servicios_publicos'];
+// Post-procesamiento que se le aplica a CUALQUIER documento ya leído por
+// Gemini -- tanto si vino solo (INVOICE_PROMPT) como si es uno de los
+// elementos del arreglo que devuelve PAQUETE_PROMPT. Valida el tipo de
+// documento, redondea los valores numéricos, y aplica la categoría
+// aprendida (si el proveedor ya tiene una corrección guardada). Nunca
+// lanza error -- si el documento debe rechazarse, devuelve { ok: false,
+// ... } para que cada llamador decida qué hacer con eso (procesar UN
+// documento aborta con un 422; procesar un PAQUETE solo marca ESE
+// documento puntual como rechazado y sigue con los demás).
+async function posprocesarDocumentoExtraido(userId, parsed) {
   if (parsed.documento_valido === false || (parsed.tipo_documento && !TIPOS_DOCUMENTO_VALIDOS.includes(parsed.tipo_documento))) {
-    const err = new Error('Documento rechazado -- no es factura, cuenta de cobro, ni factura de servicios públicos (tipo detectado: ' + (parsed.tipo_documento || 'desconocido') + ').');
-    err.status = 422;
     const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
-    err.publicMessage = `Este archivo no parece ser una factura de venta, una cuenta de cobro, ni una factura de servicios públicos.${motivo} Enlaza solo procesa esos tres tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`;
-    throw err;
+    return {
+      ok: false,
+      tipoDocumento: parsed.tipo_documento || 'desconocido',
+      publicMessage: `Este archivo no parece ser una factura de venta, una cuenta de cobro, ni una factura de servicios públicos.${motivo} Enlaza solo procesa esos tres tipos de documento, que son los únicos con validez legal para causar un ingreso o egreso.`,
+    };
   }
 
   for (const key of ['valor_sin_iva', 'valor_iva', 'valor_con_iva', 'rete_fuente', 'rete_iva', 'rete_ica']) {
@@ -1531,7 +1610,119 @@ async function procesarExtraccionFactura(userId, base64, effectiveMediaType, isP
     console.error('No se pudo revisar correcciones aprendidas:', err.message);
   }
 
-  return parsed;
+  return { ok: true, data: parsed };
+}
+
+async function procesarExtraccionFactura(userId, base64, effectiveMediaType, isPdf, forzar) {
+  const fileHash = calcularFileHash(base64);
+
+  if (!forzar) {
+    try {
+      const existente = await buscarFacturaPorHash(userId, fileHash);
+      if (existente) {
+        return { duplicado: true, file_hash: fileHash, factura_existente: existente };
+      }
+    } catch (err) {
+      console.error('No se pudo revisar duplicados antes de leer con IA:', err.message);
+    }
+  }
+
+  const parsed = await llamarGeminiJSON(base64, effectiveMediaType, INVOICE_PROMPT);
+  parsed.file_hash = fileHash;
+
+  const resultado = await posprocesarDocumentoExtraido(userId, parsed);
+  if (!resultado.ok) {
+    const err = new Error('Documento rechazado -- no es factura, cuenta de cobro, ni factura de servicios públicos (tipo detectado: ' + resultado.tipoDocumento + ').');
+    err.status = 422;
+    err.publicMessage = resultado.publicMessage;
+    throw err;
+  }
+
+  return resultado.data;
+}
+
+// Igual que procesarExtraccionFactura, pero para un archivo (PDF) que
+// puede traer VARIOS documentos distintos concatenados -- ver
+// PAQUETE_PROMPT más arriba. Llama a Gemini UNA sola vez con ese
+// prompt (le pide segmentar el archivo y devolver un arreglo), y le
+// aplica a CADA documento detectado el mismo post-procesamiento y el
+// mismo chequeo de duplicados que a un documento que llega solo.
+//
+// Devuelve { documentos: [...] }, con un elemento por cada documento
+// que la IA identificó, en el mismo orden en que aparecen en el
+// archivo. Cada elemento tiene una de estas dos formas:
+//   { tipo: 'factura', data: {...} }     -- documento válido y listo
+//         para guardar (data.duplicado puede venir en true, junto con
+//         data.factura_existente, igual que en el flujo de un solo
+//         documento).
+//   { tipo: 'rechazado', mensaje: '...' } -- la IA sí lo leyó, pero no
+//         es factura de venta, cuenta de cobro, ni factura de
+//         servicios públicos.
+//
+// El file_hash de cada documento válido se deriva del hash del
+// archivo completo subido: si el paquete resultó traer un solo
+// documento (el caso normal, con mucha diferencia), se usa ese mismo
+// hash de siempre; si trae varios, cada uno lleva un sufijo "-N" --
+// así cada factura del paquete se puede guardar y detectar como
+// duplicada por separado más adelante, sin que las N facturas de un
+// mismo archivo choquen entre sí por compartir el hash de ese archivo.
+async function procesarPaqueteDocumento(userId, base64, effectiveMediaType, forzar) {
+  const fileHashArchivo = calcularFileHash(base64);
+
+  // Si este archivo EXACTO ya se guardó antes como un solo documento
+  // (el caso más común), no vale la pena gastar otra lectura de IA --
+  // se avisa como duplicado a nivel de todo el paquete, igual que hacía
+  // procesarExtraccionFactura para un documento suelto.
+  if (!forzar) {
+    try {
+      const existente = await buscarFacturaPorHash(userId, fileHashArchivo);
+      if (existente) {
+        return { documentos: [{ tipo: 'factura', data: { duplicado: true, file_hash: fileHashArchivo, factura_existente: existente } }] };
+      }
+    } catch (err) {
+      console.error('No se pudo revisar duplicados antes de leer un paquete con IA:', err.message);
+    }
+  }
+
+  const respuesta = await llamarGeminiJSON(base64, effectiveMediaType, PAQUETE_PROMPT);
+  const crudos = Array.isArray(respuesta.documentos) ? respuesta.documentos : [];
+
+  if (crudos.length === 0) {
+    const err = new Error('La IA no identificó ningún documento en el archivo.');
+    err.status = 422;
+    err.publicMessage = 'No se pudo identificar ningún documento en este archivo. Intenta con un archivo más claro.';
+    throw err;
+  }
+
+  const documentos = [];
+  for (let i = 0; i < crudos.length; i++) {
+    const parsed = crudos[i] && typeof crudos[i] === 'object' ? crudos[i] : {};
+    const resultado = await posprocesarDocumentoExtraido(userId, parsed);
+
+    if (!resultado.ok) {
+      documentos.push({ tipo: 'rechazado', mensaje: resultado.publicMessage });
+      continue;
+    }
+
+    const data = resultado.data;
+    data.file_hash = crudos.length > 1 ? `${fileHashArchivo}-${i + 1}` : fileHashArchivo;
+
+    if (!forzar) {
+      try {
+        const existente = await buscarFacturaPorHash(userId, data.file_hash);
+        if (existente) {
+          documentos.push({ tipo: 'factura', data: { duplicado: true, file_hash: data.file_hash, factura_existente: existente } });
+          continue;
+        }
+      } catch (err) {
+        console.error('No se pudo revisar duplicados de un documento del paquete:', err.message);
+      }
+    }
+
+    documentos.push({ tipo: 'factura', data });
+  }
+
+  return { documentos };
 }
 
 // Versión de servidor de la misma detección que ya hacía el navegador
@@ -1562,6 +1753,48 @@ app.post('/api/extract', requireAuth, async (req, res) => {
     res.json(parsed);
   } catch (err) {
     console.error('Error al llamar a Gemini (factura):', err);
+    res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
+  }
+});
+
+// Escanear sube un PDF a esta ruta (en vez de /api/extract) porque un
+// PDF puede en teoría venir con varios documentos concatenados (un
+// extracto bancario seguido de varios soportes, por ejemplo) -- el
+// frontend está preparado para recibir `{ facturas: [...], otros_grupos:
+// [...] }` y avisar si detecta más de un documento en el archivo.
+//
+// Para un PDF, esta ruta SÍ segmenta de verdad el archivo en varios
+// documentos cuando corresponde (ver procesarPaqueteDocumento /
+// PAQUETE_PROMPT más arriba). Cada documento identificado llega en
+// `facturas` -- ya sea el objeto normal de una factura leída, o
+// `{ error: true, mensaje: '...' }` si la IA lo leyó pero lo rechazó
+// (no es factura/cuenta de cobro/servicios públicos). Escanear solo
+// puede mostrar un formulario a la vez, así que si el total (facturas +
+// otros_grupos) es mayor a 1, el frontend avisa y manda al contador a
+// Carga masiva -- que sí procesa cada documento del paquete como una
+// fila independiente (ver lotes.js).
+app.post('/api/extract-paquete', requireAuth, async (req, res) => {
+  const { base64, mediaType, isPdf, forzar } = req.body;
+
+  if (!base64 || !mediaType) {
+    return res.status(400).json({ error: 'Faltan datos del archivo (base64 o mediaType).' });
+  }
+
+  const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
+
+  try {
+    if (!isPdf) {
+      // Una foto es siempre un solo documento -- no hace falta gastar
+      // el prompt (más largo) de segmentación de paquete.
+      const parsed = await procesarExtraccionFactura(req.userId, base64, effectiveMediaType, isPdf, forzar);
+      return res.json({ facturas: [parsed], otros_grupos: [] });
+    }
+
+    const { documentos } = await procesarPaqueteDocumento(req.userId, base64, effectiveMediaType, forzar);
+    const facturas = documentos.map((doc) => (doc.tipo === 'factura' ? doc.data : { error: true, mensaje: doc.mensaje }));
+    res.json({ facturas, otros_grupos: [] });
+  } catch (err) {
+    console.error('Error al llamar a Gemini (factura, PDF):', err);
     res.status(err.status || 500).json({ error: err.publicMessage || 'Error de conexión con la API de Gemini.' });
   }
 });
@@ -2246,7 +2479,7 @@ app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
 app.listen(PORT, async () => {
   try {
     await ensureSchema();
-    lotes.init({ pool, crypto, procesarExtraccionFactura, detectarClienteYMovimientoServidor });
+    lotes.init({ pool, crypto, procesarExtraccionFactura, procesarPaqueteDocumento, detectarClienteYMovimientoServidor });
     await lotes.asegurarSchemaLotes();
     lotes.dispararProcesamiento(); // por si el servidor se reinició con un lote a medias
     console.log(`\n✔ Enlaza corriendo en http://localhost:${PORT}`);

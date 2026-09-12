@@ -133,16 +133,42 @@ body{
   letter-spacing:.04em; padding-left:8px;
 }
 
+/* Botón de hamburguesa -- lo inserta /nav-mobile.js dentro de
+   .sidebar-brand, en TODAS las páginas que tienen barra lateral. Solo
+   se ve en la franja angosta de abajo; en escritorio no ocupa espacio
+   ni aparece (la barra ya muestra todos los enlaces). */
+.sidebar-hamburger{
+  display:none; align-items:center; justify-content:center;
+  width:36px; height:36px; flex-shrink:0; margin-left:auto;
+  background:none; border:1px solid rgba(255,255,255,0.28); border-radius:8px;
+  color:#fff; cursor:pointer; transition:background .15s var(--ease);
+}
+.sidebar-hamburger:hover{ background:rgba(255,255,255,0.12); }
+
 @media (max-width:900px){
   .app-shell{ flex-direction:column; }
   .sidebar{
-    position:static; width:100%; min-height:0; height:auto;
+    position:relative; width:100%; min-height:0; height:auto;
     flex-direction:row; align-items:center; gap:16px;
-    padding:14px 16px; overflow-x:auto;
+    padding:14px 16px;
     border-right:none; border-bottom:1px solid var(--petroleo-deep);
   }
-  .sidebar-nav{ flex-direction:row; gap:6px; }
-  .sidebar-link{ white-space:nowrap; padding:8px 12px; }
+  /* Antes esta franja se acostaba en una fila de botones con scroll
+     horizontal propio -- se veía amontonada y había que deslizarla de
+     lado para ver los últimos enlaces. Ahora los enlaces se esconden
+     detrás del botón de hamburguesa y se despliegan hacia abajo como
+     un menú normal, sin scroll lateral ni botones apretados. */
+  .sidebar-brand{ flex:1; justify-content:space-between; }
+  .sidebar-hamburger{ display:flex; }
+  .sidebar-nav{
+    display:none; flex-direction:column; gap:3px;
+    position:absolute; top:100%; left:0; right:0; margin-top:1px;
+    background:var(--petroleo); border-bottom:1px solid var(--petroleo-deep);
+    padding:8px 12px 14px; box-shadow:0 24px 44px -20px rgba(0,0,0,0.45);
+    z-index:40; max-height:calc(100vh - 64px); overflow-y:auto;
+  }
+  .sidebar.nav-open .sidebar-nav{ display:flex; }
+  .sidebar-link{ white-space:normal; padding:11px 12px; }
   .sidebar-spacer{ display:none; }
   .sidebar-foot{ display:none; }
 }

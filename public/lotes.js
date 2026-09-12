@@ -21,12 +21,13 @@ let procesandoAhora = false;
 // Se inyectan desde server.js para no duplicar la conexión a la base
 // de datos ni la lógica de extracción -- este módulo no sabe nada de
 // Express, solo de cómo mover un lote de "en_cola" a "completado".
-let pool, crypto, procesarExtraccionFactura, detectarClienteYMovimientoServidor;
+let pool, crypto, procesarExtraccionFactura, procesarPaqueteDocumento, detectarClienteYMovimientoServidor;
 
 function init(deps) {
   pool = deps.pool;
   crypto = deps.crypto;
   procesarExtraccionFactura = deps.procesarExtraccionFactura;
+  procesarPaqueteDocumento = deps.procesarPaqueteDocumento;
   detectarClienteYMovimientoServidor = deps.detectarClienteYMovimientoServidor;
 }
 
@@ -60,10 +61,16 @@ async function asegurarSchemaLotes() {
       cliente_id_detectado UUID,
       tipo_movimiento_detectado TEXT NOT NULL DEFAULT 'egreso',
       eliminado BOOLEAN NOT NULL DEFAULT false,
+      documento_indice INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_lote_items_lote ON lote_items (lote_id, orden);`);
+  // Migración para bases ya existentes de antes de que se agregara este
+  // campo -- marca en qué posición del ARCHIVO ORIGINAL vive cada fila,
+  // cuando ese archivo trajo varios documentos concatenados (ver
+  // procesarUnItem más abajo). NULL para una fila que nunca se desglosó.
+  await pool.query(`ALTER TABLE lote_items ADD COLUMN IF NOT EXISTS documento_indice INTEGER;`);
 }
 
 // Crea un lote nuevo con sus archivos (todavía "en_cola"), y dispara el
@@ -106,7 +113,7 @@ async function dispararProcesamiento() {
       await pool.query(`UPDATE lotes_procesamiento SET estado = 'procesando', updated_at = now() WHERE id = $1`, [lote.id]);
 
       const { rows: items } = await pool.query(
-        `SELECT * FROM lote_items WHERE lote_id = $1 AND estado = 'pendiente' AND eliminado = false ORDER BY orden ASC`,
+        `SELECT * FROM lote_items WHERE lote_id = $1 AND estado = 'pendiente' AND eliminado = false ORDER BY orden ASC, created_at ASC`,
         [lote.id]
       );
 
@@ -192,6 +199,62 @@ async function procesarExtraccionConReintento(contadorId, base64, mediaType, esP
   throw ultimoError;
 }
 
+// Igual que procesarExtraccionConReintento, pero para el prompt de
+// paquete (puede traer varios documentos) -- ver procesarPaqueteDocumento
+// en server.js.
+async function procesarPaqueteConReintento(contadorId, base64, mediaType, forzar) {
+  const MAX_INTENTOS = 3;
+  const ESPERA_MS = 1500;
+  let ultimoError;
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      return await procesarPaqueteDocumento(contadorId, base64, mediaType, forzar);
+    } catch (err) {
+      ultimoError = err;
+      if (err.status === 422) throw err;
+      if (intento < MAX_INTENTOS) await new Promise((r) => setTimeout(r, ESPERA_MS));
+    }
+  }
+  throw ultimoError;
+}
+
+// Guarda en UNA fila de lote_items el resultado de UN documento ya
+// procesado -- ya sea un documento que llegó solo (envuelto como
+// { tipo: 'factura', data }), o uno de los que salieron de desglosar un
+// paquete (ver procesarUnItem). Misma lógica de siempre: duplicado,
+// listo (cliente identificado con confianza) o revisar (no se pudo
+// identificar el cliente/proveedor solo).
+async function guardarResultadoDocumento(itemId, contadorId, doc) {
+  if (doc.tipo === 'rechazado') {
+    await pool.query(
+      `UPDATE lote_items SET estado = 'error', error_msg = $2 WHERE id = $1`,
+      [itemId, doc.mensaje || 'Este documento no parece ser una factura ni cuenta de cobro.']
+    );
+    return;
+  }
+
+  const parsed = doc.data;
+  if (parsed.duplicado) {
+    await pool.query(
+      `UPDATE lote_items SET estado = 'duplicado', data = $2 WHERE id = $1`,
+      [itemId, JSON.stringify(parsed)]
+    );
+    return;
+  }
+
+  const deteccion = await detectarClienteYMovimientoServidor(contadorId, parsed);
+  await pool.query(
+    `UPDATE lote_items SET estado = $2, data = $3, cliente_id_detectado = $4, tipo_movimiento_detectado = $5 WHERE id = $1`,
+    [itemId, deteccion.confiado ? 'listo' : 'revisar', JSON.stringify(parsed), deteccion.clienteId || null, deteccion.tipoMovimiento]
+  );
+}
+
+// Un PDF puede traer varios documentos concatenados (varias facturas
+// escaneadas y unidas en un solo archivo, por ejemplo) -- esta función
+// los detecta y los DESGLOSA en filas independientes del lote, una por
+// cada documento, para que el contador revise y guarde cada uno por su
+// lado (en vez de que Carga masiva trate el archivo completo como una
+// sola factura, que era el comportamiento de antes).
 async function procesarUnItem(item, contadorId) {
   await pool.query(`UPDATE lote_items SET estado = 'procesando' WHERE id = $1`, [item.id]);
 
@@ -204,22 +267,62 @@ async function procesarUnItem(item, contadorId) {
   } catch (e) { /* data no era la marca de reintento, se ignora */ }
 
   try {
-    const effectiveMediaType = item.es_pdf ? 'application/pdf' : item.media_type;
-    const parsed = await procesarExtraccionConReintento(contadorId, item.base64, effectiveMediaType, item.es_pdf, forzar);
-
-    if (parsed.duplicado) {
-      await pool.query(
-        `UPDATE lote_items SET estado = 'duplicado', data = $2 WHERE id = $1`,
-        [item.id, JSON.stringify(parsed)]
-      );
+    if (!item.es_pdf) {
+      // Una foto es siempre un solo documento -- mismo camino de
+      // siempre, sin pasar por el prompt de segmentación de paquete.
+      const parsed = await procesarExtraccionConReintento(contadorId, item.base64, item.media_type, false, forzar);
+      await guardarResultadoDocumento(item.id, contadorId, { tipo: 'factura', data: parsed });
       return;
     }
 
-    const deteccion = await detectarClienteYMovimientoServidor(contadorId, parsed);
-    await pool.query(
-      `UPDATE lote_items SET estado = $2, data = $3, cliente_id_detectado = $4, tipo_movimiento_detectado = $5 WHERE id = $1`,
-      [item.id, deteccion.confiado ? 'listo' : 'revisar', JSON.stringify(parsed), deteccion.clienteId || null, deteccion.tipoMovimiento]
-    );
+    const { documentos } = await procesarPaqueteConReintento(contadorId, item.base64, 'application/pdf', forzar);
+
+    // Este ítem YA sabe en qué posición del archivo original vive (se
+    // le marcó la primera vez que se procesó, ver más abajo) -- eso
+    // pasa cuando se reintenta un documento que salió de desglosar un
+    // paquete: solo hay que volver a guardar SU resultado puntual, sin
+    // volver a insertar (ni tocar) a sus hermanos, o cada reintento
+    // duplicaría todo el paquete de nuevo.
+    if (item.documento_indice !== null && item.documento_indice !== undefined) {
+      const doc = documentos[item.documento_indice] || { tipo: 'rechazado', mensaje: 'No se pudo volver a ubicar este documento dentro del archivo original -- intenta subirlo de nuevo por separado.' };
+      await guardarResultadoDocumento(item.id, contadorId, doc);
+      return;
+    }
+
+    // Primera vez que se procesa este archivo. Si trae un solo
+    // documento (el caso normal, con mucha diferencia) esta fila se
+    // queda igual que siempre. Si trae varios, esta fila se queda con
+    // el PRIMERO y se insertan filas nuevas para cada uno de los demás
+    // -- así el resumen de Carga masiva muestra cada documento como su
+    // propia fila, lista para revisar y guardar de forma individual.
+    if (documentos.length > 1) {
+      await pool.query(
+        `UPDATE lotes_procesamiento SET total_items = total_items + $2, updated_at = now() WHERE id = $1`,
+        [item.lote_id, documentos.length - 1]
+      );
+      await pool.query(
+        `UPDATE lote_items SET documento_indice = 0, nombre_archivo = $2 WHERE id = $1`,
+        [item.id, `${item.nombre_archivo} (documento 1 de ${documentos.length})`]
+      );
+    } else {
+      await pool.query(`UPDATE lote_items SET documento_indice = 0 WHERE id = $1`, [item.id]);
+    }
+    await guardarResultadoDocumento(item.id, contadorId, documentos[0]);
+
+    for (let i = 1; i < documentos.length; i++) {
+      const nuevoId = crypto.randomUUID();
+      const nombreConSufijo = `${item.nombre_archivo} (documento ${i + 1} de ${documentos.length})`;
+      await pool.query(
+        `INSERT INTO lote_items (id, lote_id, orden, nombre_archivo, base64, media_type, es_pdf, estado, documento_indice)
+         VALUES ($1, $2, $3, $4, $5, $6, true, 'procesando', $7)`,
+        [nuevoId, item.lote_id, item.orden, nombreConSufijo, item.base64, item.media_type, i]
+      );
+      await guardarResultadoDocumento(nuevoId, contadorId, documentos[i]);
+      await pool.query(
+        `UPDATE lotes_procesamiento SET items_procesados = items_procesados + 1, updated_at = now() WHERE id = $1`,
+        [item.lote_id]
+      );
+    }
   } catch (err) {
     await pool.query(
       `UPDATE lote_items SET estado = 'error', error_msg = $2 WHERE id = $1`,
@@ -248,7 +351,7 @@ async function obtenerLoteActivoOUltimo(contadorId) {
   const lote = rows[0];
   const { rows: items } = await pool.query(
     `SELECT id, orden, nombre_archivo, media_type, es_pdf, estado, data, error_msg, cliente_id_detectado, tipo_movimiento_detectado
-     FROM lote_items WHERE lote_id = $1 AND eliminado = false ORDER BY orden ASC`,
+     FROM lote_items WHERE lote_id = $1 AND eliminado = false ORDER BY orden ASC, created_at ASC`,
     [lote.id]
   );
   return { ...lote, items };
