@@ -258,6 +258,19 @@
   .pft-actions .pft-guardar{ border-color:var(--moss); background:var(--moss); color:#fff; }
   .pft-saved{ font-size:11.5px; color:var(--moss-deep, #3E6053); }
 
+  /* La columna de contenido (.wrap, definida en styles.css) tiene un
+     max-width:900px fijo para TODAS las páginas -- pensado para que los
+     formularios no queden demasiado anchos. Pero en esta página la tabla
+     de ítems (8 columnas) necesita más espacio, y en un monitor ancho ese
+     900px deja una franja vacía a la derecha mientras la tabla de abajo
+     igual pide scroll horizontal -- exactamente lo que no queremos. Por
+     eso, SOLO en escanear.html y solo cuando el navegador ya está en modo
+     escritorio (mismo punto de quiebre que la barra lateral fija, >900px),
+     ensanchamos un poco esa columna para que la tabla quepa sin scroll. */
+  @media (min-width:901px){
+    .wrap{ max-width:1180px; }
+  }
+
   /* ---------- Ítems de la factura, línea por línea (Fase 4) ---------- */
   #itemsPanel{ margin-top:14px; }
   .items-box{
@@ -268,32 +281,54 @@
   .items-head b{ font-size:13px; }
   .items-sub{ font-size:11.5px; color:var(--ink-faint); margin-bottom:10px; }
   .items-table-wrap{ overflow-x:auto; }
-  table.items-table{ width:100%; border-collapse:collapse; min-width:760px; }
+  /* table-layout:fixed + un ancho explícito por columna (en vez de dejar
+     que el navegador reparta el espacio solo según el contenido) -- sin
+     esto, columnas con poco contenido (ej. AIU, que casi siempre solo
+     muestra "—") se llevaban espacio de sobra mientras Descripción y
+     Categoría quedaban apretadas y con el texto cortado, AUNQUE la
+     pantalla tuviera espacio de sobra para mostrarlas bien. El
+     min-width es apenas el necesario para que las 8 columnas se vean
+     cómodas -- en una pantalla angosta (celular) ahí sí aparece scroll
+     horizontal, pero en un monitor normal la tabla ya no debería
+     necesitarlo. */
+  table.items-table{ width:100%; min-width:820px; border-collapse:collapse; table-layout:fixed; }
   table.items-table th{
     font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase;
     color:var(--ink-faint); text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
   }
   table.items-table td{ padding:6px 8px; vertical-align:top; border-bottom:1px solid var(--line); }
   table.items-table tr:last-child td{ border-bottom:none; }
+  table.items-table th:nth-child(1), table.items-table td:nth-child(1){ width:19%; } /* Descripción */
+  table.items-table th:nth-child(2), table.items-table td:nth-child(2){ width:10%; } /* Subtotal */
+  table.items-table th:nth-child(3), table.items-table td:nth-child(3){ width:13%; } /* Categoría */
+  table.items-table th:nth-child(4), table.items-table td:nth-child(4){ width:19%; } /* Subcuenta (PUC) */
+  table.items-table th:nth-child(5), table.items-table td:nth-child(5){ width:8%; }  /* AIU */
+  table.items-table th:nth-child(6), table.items-table td:nth-child(6){ width:16%; } /* Tarifa retención */
+  table.items-table th:nth-child(7), table.items-table td:nth-child(7){ width:11%; } /* IVA mayor valor */
+  table.items-table th:nth-child(8), table.items-table td:nth-child(8){ width:4%; }  /* eliminar */
   table.items-table input, table.items-table select{
     width:100%; box-sizing:border-box; font-family:'Inter',sans-serif; font-size:12.5px;
     padding:6px 7px; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:#fff;
   }
   table.items-table input.money{ font-family:'JetBrains Mono',monospace; text-align:right; }
   table.items-table input:focus, table.items-table select:focus{ outline:none; border-color:var(--petroleo); }
-  .item-estimado{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
-  .item-aiu-col{ min-width:110px; }
+  /* white-space:nowrap se quitó de estas tres reglas: con table-layout:fixed
+     las columnas ya NO crecen para acomodar texto largo, así que un
+     "no-wrap" aquí forzaba overflow/recorte (justo el problema que se
+     está arreglando) -- ahora el texto se envuelve a una 2da línea si
+     no cabe, en vez de cortarse o desbordar la columna. */
+  .item-estimado{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); }
   .item-aiu-na{ display:block; text-align:center; color:var(--ink-faint); font-size:12px; }
   .item-aiu-pendiente{
     font-family:'Inter',sans-serif; font-size:10px; font-weight:600; color:#B0402D;
-    background:#FBEAE6; border-radius:5px; padding:2px 6px; white-space:nowrap;
+    background:#FBEAE6; border-radius:5px; padding:2px 6px; display:inline-block;
   }
   .item-del-btn{
     background:none; border:1px solid var(--line); color:var(--ink-faint); border-radius:6px;
     width:26px; height:26px; cursor:pointer; font-size:12px;
   }
   .item-del-btn:hover{ border-color:#B0402D; color:#B0402D; }
-  .item-iva-mv{ display:flex; align-items:center; gap:5px; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
+  .item-iva-mv{ display:flex; align-items:center; gap:5px; font-size:10.5px; color:var(--ink-soft); }
   .items-foot{
     display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
     margin-top:10px; padding-top:10px; border-top:1px solid var(--line);
@@ -2012,6 +2047,51 @@ function renderPerfilTerceroPanel(nit, nombreSugerido){
   }
 }
 
+// ---------- Acumulado anual por proveedor (honorarios_natural) ----------
+//
+// Para categorías de criterioTarifa:'acumulado_anual' (ver
+// retenciones.js), la tarifa exacta (10% u 11%) depende de cuánto se le
+// ha pagado a ESE proveedor en el año -- un dato que solo el servidor
+// puede calcular (tiene que sumar las facturas ya guardadas). El cálculo
+// en sí (calcularRetencionCategoriaLinea) es puro y sincrónico, así que
+// esto se resuelve en dos pasos: se pide el acumulado en segundo plano
+// (sin bloquear la pantalla) y, en cuanto llega, se vuelve a calcular y
+// pintar el estimado -- mientras tanto se sigue mostrando el rango 10%-
+// 11%, igual que hacía la app antes de tener este dato.
+let acumuladosCategoriaCache = {};
+let acumuladosCategoriaEnCurso = {};
+
+// Devuelve el mapa {categoria: montoAcumuladoPrevio} con lo que YA está
+// en caché para las categorías de esta factura que lo necesiten, y de
+// paso dispara (sin esperar) la carga de lo que todavía no se sabe.
+function acumuladosParaFactura(nitProveedor, categorias, fechaFactura){
+  const anio = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(fechaFactura) : new Date().getFullYear();
+  const resultado = {};
+  (categorias || []).forEach((categoriaRaw) => {
+    const categoria = String(categoriaRaw || '').toLowerCase();
+    if (!categoria || !nitProveedor) return;
+    if (typeof esCategoriaCriterioAcumulado !== 'function' || !esCategoriaCriterioAcumulado(categoria)) return;
+    const key = `${nitProveedor}|${categoria}|${anio}`;
+    if (acumuladosCategoriaCache[key] !== undefined) {
+      resultado[categoria] = acumuladosCategoriaCache[key];
+      return;
+    }
+    if (acumuladosCategoriaEnCurso[key]) return; // ya se está pidiendo, no duplicar la llamada
+    acumuladosCategoriaEnCurso[key] = true;
+    fetch(`/api/acumulado-categoria?nit=${encodeURIComponent(nitProveedor)}&categoria=${encodeURIComponent(categoria)}&anio=${anio}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((resp) => {
+        if (resp && resp.aplica) {
+          acumuladosCategoriaCache[key] = resp.acumulado;
+          actualizarEstimadosRetencion(); // ya llegó el dato -- repinta con la tarifa resuelta
+        }
+      })
+      .catch(() => {})
+      .finally(() => { delete acumuladosCategoriaEnCurso[key]; });
+  });
+  return resultado;
+}
+
 // Estimado inline, directamente debajo de cada campo de retención
 // (Rete Fuente / Rete IVA / Rete ICA) cuando está en $0 -- usa las
 // mismas funciones/tabla de /retenciones.js que ya alimentan el aviso
@@ -2048,6 +2128,10 @@ function actualizarEstimadosRetencion(){
     desglose_categorias: currentDesgloseCategorias,
     desglose_aiu: (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {},
   };
+  const categoriasEnEstaFactura = Object.keys(currentDesgloseCategorias || {}).length > 0
+    ? Object.keys(currentDesgloseCategorias)
+    : [catSelect.value];
+  const acumuladosCategoria = acumuladosParaFactura(nitProveedor, categoriasEnEstaFactura, invParaCalculo.fecha_factura);
 
   // Rete Fuente -- si el campo sigue en $0 y el contador todavía no lo
   // tocó, el estimado se aplica solo (una sola vez) para que la
@@ -2062,7 +2146,7 @@ function actualizarEstimadosRetencion(){
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
   if (typeof calcularRetencionSugerida === 'function') {
-    const sugerido = calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero);
+    const sugerido = calcularRetencionSugerida(invParaCalculo, cliente, tarifasAprendidas, perfilTercero, acumuladosCategoria);
     const valorActual = parseMoneyValue(fuenteInput.value);
     const categoriasEnDesglose = Object.keys(currentDesgloseCategorias || {});
     const facturaEsUnaSolaCategoria = categoriasEnDesglose.length <= 1;

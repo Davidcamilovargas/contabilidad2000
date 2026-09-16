@@ -610,6 +610,80 @@ function renderFichaMovimiento(item){
 const RETE_KEYS_EDITABLES = ['rete_fuente', 'rete_iva', 'rete_ica'];
 const RETE_ESTIMADO_ID = { rete_fuente: 'masivoEstimadoFuente', rete_iva: 'masivoEstimadoIva', rete_ica: 'masivoEstimadoIca' };
 
+// Calcula el html de la fila "Retención sugerida" (el texto informativo de
+// arriba de la ficha, no el selector editable de Rete Fuente de abajo).
+// Separado de renderFichaCompleta para poder llamarlo también cuando el
+// acumulado anual del proveedor llega desde el servidor DESPUÉS de abrir
+// la ficha -- si no se refresca este texto también, queda mostrando el
+// rango bajo/alto sin resolver aunque el selector de abajo ya haya
+// resuelto la tarifa exacta (ver actualizarFilaRetencionSugeridaMasivo).
+function calcularFilaRetencionSugeridaHtml(item){
+  const d = item.data;
+  const clienteFicha = myClients.find(c => c.id === item.clienteId);
+  const perfilTerceroFicha = perfilFiscalDelNit(d.nit_cc);
+  const categoriasEnDesgloseFicha = Object.keys(d.desglose_categorias || {});
+  const categoriasParaAcumuladoFicha = categoriasEnDesgloseFicha.length > 0 ? categoriasEnDesgloseFicha : [d.categoria_concepto];
+  // Solo lee lo que YA esté en caché (no dispara una petición nueva
+  // acá) -- acumuladosParaFacturaMasivo(), que llama
+  // actualizarEstimadosRetencionMasivo() y actualizarFilaRetencionSugeridaMasivo()
+  // en cuanto el dato llega, es quien pide el dato si todavía falta.
+  const acumuladosFichaCache = {};
+  categoriasParaAcumuladoFicha.forEach((cat) => {
+    const categoria = String(cat || '').toLowerCase();
+    if (!categoria || !d.nit_cc || typeof esCategoriaCriterioAcumulado !== 'function' || !esCategoriaCriterioAcumulado(categoria)) return;
+    const anio = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(d.fecha_factura) : new Date().getFullYear();
+    const key = `${d.nit_cc}|${categoria}|${anio}`;
+    if (acumuladosCategoriaCacheMasivo[key] !== undefined) acumuladosFichaCache[categoria] = acumuladosCategoriaCacheMasivo[key];
+  });
+  const sugerido = (clienteFicha && typeof calcularRetencionSugerida === 'function')
+    ? calcularRetencionSugerida(d, clienteFicha, tarifasAprendidas, perfilTerceroFicha, acumuladosFichaCache)
+    : null;
+  const configCategoriaFicha = (typeof TARIFAS_RETENCION !== 'undefined') ? TARIFAS_RETENCION[String(d.categoria_concepto || '').toLowerCase()] : null;
+  const esAcumuladoFicha = !!(configCategoriaFicha && configCategoriaFicha.criterioTarifa === 'acumulado_anual');
+  let contenido = '';
+  if (sugerido && sugerido.requiereAiu) {
+    // No mostrar bajo/alto -- es un total PARCIAL (falta el AIU de al
+    // menos una categoría). Sin esta rama se corre el riesgo de mostrar
+    // $0 o un valor incompleto como si fuera la retención final.
+    const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_LABELS[f.categoria] || f.categoria).join(', ');
+    contenido = `
+      <div class="fd-label">Retención sugerida</div>
+      <div class="fd-value">⚠ Falta el AIU de ${escapeHtml(faltantes)} -- ingrésalo en la columna AIU de "Ítems de la factura" abajo.</div>
+    `;
+  } else if (sugerido) {
+    const motivoRango = esAcumuladoFicha ? '(según los pagos que lleve este proveedor en el año)' : '(según si el proveedor declara renta)';
+    const montoTexto = sugerido.mismaTarifa
+      ? `$${sugerido.bajo.toLocaleString('es-CO')}`
+      : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')} ${motivoRango}`;
+    contenido = `
+      <div class="fd-label">Retención sugerida</div>
+      <div class="fd-value money">${montoTexto}</div>
+    `;
+  } else if (clienteFicha && clienteFicha.agente_retenedor) {
+    const perfilEfectivoFicha = (typeof perfilFiscalEfectivo === 'function') ? perfilFiscalEfectivo(d, perfilTerceroFicha) : { regimenSimple: (d.regimen_simple === true || d.regimen_simple === 'true'), autorretenedor: false };
+    let motivo = 'bajo el umbral, o categoría sin tarifa confirmada';
+    if (perfilEfectivoFicha.regimenSimple) motivo = 'proveedor Régimen Simple -- no aplica';
+    else if (perfilEfectivoFicha.autorretenedor) motivo = 'proveedor autorretenedor -- no aplica';
+    contenido = `
+      <div class="fd-label">Retención sugerida</div>
+      <div class="fd-value">— (${motivo})</div>
+    `;
+  }
+  return `<div class="fd-row" id="filaRetencionSugerida">${contenido}</div>`;
+}
+
+// Repinta SOLO la fila "Retención sugerida" con los datos ya en caché --
+// se llama desde acumuladosParaFacturaMasivo() en cuanto el acumulado del
+// proveedor llega del servidor, para que este texto no se quede
+// mostrando el rango sin resolver mientras el selector de abajo ya sí se
+// actualizó.
+function actualizarFilaRetencionSugeridaMasivo(){
+  if (!itemAbierto || !itemAbierto.data) return;
+  const el = document.getElementById('filaRetencionSugerida');
+  if (!el) return;
+  el.outerHTML = calcularFilaRetencionSugeridaHtml(itemAbierto);
+}
+
 function renderFichaCompleta(item, modoEdicion){
   const modalDatos = document.getElementById('modalDatos');
   itemAbierto = item;
@@ -701,45 +775,15 @@ function renderFichaCompleta(item, modoEdicion){
   // identificado para esta fila y cualquier tarifa ya aprendida antes
   // para este proveedor. Ver retenciones.js para el detalle y las
   // salvedades (esto no reemplaza asesoría tributaria).
+  // Esta fila queda con un id fijo (calcularFilaRetencionSugeridaHtml)
+  // porque su contenido depende del acumulado anual del proveedor, que
+  // puede llegar DESPUÉS de este primer render -- sin el id no habría
+  // forma de refrescar solo este texto cuando el dato llegue, y quedaría
+  // mostrando el rango sin resolver para siempre (ver
+  // actualizarFilaRetencionSugeridaMasivo, más abajo).
   const clienteFicha = myClients.find(c => c.id === item.clienteId);
   const perfilTerceroFicha = perfilFiscalDelNit(d.nit_cc);
-  const sugerido = (clienteFicha && typeof calcularRetencionSugerida === 'function')
-    ? calcularRetencionSugerida(d, clienteFicha, tarifasAprendidas, perfilTerceroFicha)
-    : null;
-  let filaRetencion = '';
-  if (sugerido && sugerido.requiereAiu) {
-    // No mostrar bajo/alto -- es un total PARCIAL (falta el AIU de al
-    // menos una categoría). Sin esta rama se corre el riesgo de mostrar
-    // $0 o un valor incompleto como si fuera la retención final.
-    const faltantes = (sugerido.categoriasFaltantesAiu || []).map(f => CATEGORIA_LABELS[f.categoria] || f.categoria).join(', ');
-    filaRetencion = `
-      <div class="fd-row">
-        <div class="fd-label">Retención sugerida</div>
-        <div class="fd-value">⚠ Falta el AIU de ${escapeHtml(faltantes)} -- ingrésalo en la columna AIU de "Ítems de la factura" abajo.</div>
-      </div>
-    `;
-  } else if (sugerido) {
-    const montoTexto = sugerido.mismaTarifa
-      ? `$${sugerido.bajo.toLocaleString('es-CO')}`
-      : `$${sugerido.bajo.toLocaleString('es-CO')} – $${sugerido.alto.toLocaleString('es-CO')} (según si el proveedor declara renta)`;
-    filaRetencion = `
-      <div class="fd-row">
-        <div class="fd-label">Retención sugerida</div>
-        <div class="fd-value money">${montoTexto}</div>
-      </div>
-    `;
-  } else if (clienteFicha && clienteFicha.agente_retenedor) {
-    const perfilEfectivoFicha = (typeof perfilFiscalEfectivo === 'function') ? perfilFiscalEfectivo(d, perfilTerceroFicha) : { regimenSimple: (d.regimen_simple === true || d.regimen_simple === 'true'), autorretenedor: false };
-    let motivo = 'bajo el umbral, o categoría sin tarifa confirmada';
-    if (perfilEfectivoFicha.regimenSimple) motivo = 'proveedor Régimen Simple -- no aplica';
-    else if (perfilEfectivoFicha.autorretenedor) motivo = 'proveedor autorretenedor -- no aplica';
-    filaRetencion = `
-      <div class="fd-row">
-        <div class="fd-label">Retención sugerida</div>
-        <div class="fd-value">— (${motivo})</div>
-      </div>
-    `;
-  }
+  const filaRetencion = calcularFilaRetencionSugeridaHtml(item);
 
   // ReteIVA sugerido -- cálculo aparte (15% del IVA, no de la
   // categoría), mismo patrón que Escanear. Se aplica igual con
@@ -967,6 +1011,52 @@ function renderItemsMiniPanel(item){
   });
 }
 
+// ---------- Acumulado anual por proveedor (honorarios_natural) ----------
+//
+// Misma pieza que ya tiene Escanear (ver el comentario allá para el
+// detalle de la norma): para categorías de criterioTarifa:'acumulado_anual'
+// (hoy, honorarios_natural), la tarifa exacta (10% u 11%) depende de
+// cuánto se le ha pagado a ESE proveedor en el año -- un dato que solo
+// el servidor puede calcular sumando las facturas ya guardadas. Se pide
+// en segundo plano y, en cuanto llega, se repinta el estimado con la
+// tarifa ya resuelta -- mientras tanto se sigue mostrando el rango.
+let acumuladosCategoriaCacheMasivo = {};
+let acumuladosCategoriaEnCursoMasivo = {};
+
+function acumuladosParaFacturaMasivo(nitProveedor, categorias, fechaFactura){
+  const anio = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(fechaFactura) : new Date().getFullYear();
+  const resultado = {};
+  (categorias || []).forEach((categoriaRaw) => {
+    const categoria = String(categoriaRaw || '').toLowerCase();
+    if (!categoria || !nitProveedor) return;
+    if (typeof esCategoriaCriterioAcumulado !== 'function' || !esCategoriaCriterioAcumulado(categoria)) return;
+    const key = `${nitProveedor}|${categoria}|${anio}`;
+    if (acumuladosCategoriaCacheMasivo[key] !== undefined) {
+      resultado[categoria] = acumuladosCategoriaCacheMasivo[key];
+      return;
+    }
+    if (acumuladosCategoriaEnCursoMasivo[key]) return; // ya se está pidiendo, no duplicar
+    acumuladosCategoriaEnCursoMasivo[key] = true;
+    fetch(`/api/acumulado-categoria?nit=${encodeURIComponent(nitProveedor)}&categoria=${encodeURIComponent(categoria)}&anio=${anio}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((resp) => {
+        if (resp && resp.aplica) {
+          acumuladosCategoriaCacheMasivo[key] = resp.acumulado;
+          // Solo repinta si la ficha que sigue abierta es la misma que
+          // pidió este dato -- si el contador ya cerró/cambió de ítem
+          // mientras la respuesta viajaba, no tiene sentido repintar.
+          if (itemAbierto && itemAbierto.data && String(itemAbierto.data.nit_cc || '') === nitProveedor) {
+            actualizarEstimadosRetencionMasivo();
+            actualizarFilaRetencionSugeridaMasivo();
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => { delete acumuladosCategoriaEnCursoMasivo[key]; });
+  });
+  return resultado;
+}
+
 // Estimado inline, debajo de cada campo editable de retención -- misma
 // idea y misma fuente de cálculo (retenciones.js) que ya tiene
 // Escanear: si el campo está en $0, se ofrece un valor sugerido con un
@@ -991,9 +1081,11 @@ function actualizarEstimadosRetencionMasivo(){
   estFuenteEl.classList.remove('show');
   estFuenteEl.innerHTML = '';
   if (typeof calcularRetencionSugerida === 'function') {
-    const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc));
     const categoriasEnDesglose = Object.keys(d.desglose_categorias || {});
     const facturaEsUnaSolaCategoria = categoriasEnDesglose.length <= 1;
+    const categoriasParaAcumulado = categoriasEnDesglose.length > 0 ? categoriasEnDesglose : [d.categoria_concepto];
+    const acumuladosCategoria = acumuladosParaFacturaMasivo(d.nit_cc, categoriasParaAcumulado, d.fecha_factura);
+    const sugerido = calcularRetencionSugerida(d, cliente, tarifasAprendidas, perfilFiscalDelNit(d.nit_cc), acumuladosCategoria);
     if (sugerido && sugerido.requiereAiu) {
       // Nunca se ofrece un botón "Usar" acá -- bajo/alto son un total
       // PARCIAL mientras falte el AIU de alguna categoría.

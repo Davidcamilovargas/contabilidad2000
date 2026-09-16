@@ -60,7 +60,22 @@ const TARIFAS_RETENCION = {
   compras_tarjeta:         { umbralUvt: 0,  tarifaBaja: 0.015, tarifaAlta: 0.015, cuentaPUC: '236540', nombrePUC: 'Compras' },
   servicios:                { umbralUvt: 2,  tarifaBaja: 0.04,  tarifaAlta: 0.06,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
   honorarios_juridica:      { umbralUvt: 0,  tarifaBaja: 0.11,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios' },
-  honorarios_natural:       { umbralUvt: 0,  tarifaBaja: 0.10,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios' },
+  // OJO -- a diferencia de compras/servicios de arriba, el 10%/11% de
+  // honorarios a PERSONA NATURAL NO depende de si el proveedor declara
+  // renta o no. El art. 1.2.4.3.1 del Decreto 1625 de 2016 (texto citado
+  // por Gerencie.com) es explícito en que la norma "no habla de
+  // declarantes y no declarantes, sino del monto de los pagos anuales":
+  // 10% mientras lo pagado a ESE proveedor en el año gravable sea <=
+  // 3.300 UVT, y 11% desde el pago que hace que el acumulado del año
+  // supere ese monto en adelante (verificado cruzando Gerencie.com y
+  // Alegra el 14 de sept de 2026, fuente: tabla de Siigo que compartió
+  // el usuario). `criterioTarifa`/`umbralAcumuladoUvt` son lo que le
+  // dice a calcularRetencionCategoriaLinea() que NO use el atajo de
+  // "declarante" de perfilFiscalEfectivo() para esta categoría, y que
+  // en cambio resuelva la tarifa sola cuando se le pase el acumulado
+  // del año (ver acumuladoAnualPrevio más abajo) -- mismo principio que
+  // baseEspecial:'aiu', pero con un criterio distinto.
+  honorarios_natural:       { umbralUvt: 0,  tarifaBaja: 0.10,  tarifaAlta: 0.11,  cuentaPUC: '236515', nombrePUC: 'Honorarios', criterioTarifa: 'acumulado_anual', umbralAcumuladoUvt: 3300 },
   arrendamiento_muebles:    { umbralUvt: 0,  tarifaBaja: 0.04,  tarifaAlta: 0.04,  cuentaPUC: '236530', nombrePUC: 'Arrendamientos' },
   arrendamiento_inmuebles:  { umbralUvt: 10, tarifaBaja: 0.035, tarifaAlta: 0.035, cuentaPUC: '236530', nombrePUC: 'Arrendamientos' },
   transporte_carga:         { umbralUvt: 2,  tarifaBaja: 0.01,  tarifaAlta: 0.01,  cuentaPUC: '236525', nombrePUC: 'Servicios' },
@@ -81,6 +96,26 @@ const AIU_PISO_PORCENTAJE = 0.10;
 function esCategoriaBaseAiu(categoria) {
   const config = TARIFAS_RETENCION[String(categoria || '').toLowerCase()];
   return !!(config && config.baseEspecial === 'aiu');
+}
+
+// Categorías donde la tarifa baja/alta se resuelve por el ACUMULADO de
+// pagos a ese proveedor en el año, no por declarante/no declarante --
+// hoy solo honorarios_natural. Ver el comentario junto a esa entrada en
+// TARIFAS_RETENCION de arriba para la norma exacta.
+function esCategoriaCriterioAcumulado(categoria) {
+  const config = TARIFAS_RETENCION[String(categoria || '').toLowerCase()];
+  return !!(config && config.criterioTarifa === 'acumulado_anual');
+}
+
+// Umbral en pesos del acumulado anual para una categoría de criterio
+// 'acumulado_anual' (ej. honorarios_natural), según la fecha de la
+// factura -- mismo mecanismo de umbralPesos() de abajo, pero usando
+// `umbralAcumuladoUvt` en vez de `umbralUvt` (son cosas distintas: una
+// es el piso para que aplique retención en UNA factura, la otra es el
+// techo de acumulado del AÑO que decide si la tarifa sube a la alta).
+function umbralAcumuladoPesos(configBase, fechaFactura) {
+  const anio = anioDeFechaFactura(fechaFactura);
+  return Math.round((configBase.umbralAcumuladoUvt || 0) * valorUvt(anio));
 }
 
 // ---------- UVT (Unidad de Valor Tributario) por año ----------
@@ -303,7 +338,17 @@ function perfilFiscalEfectivo(inv, perfilTercero) {
 // `aiuUsado`/`baseUsada` solo vienen en las categorías con baseEspecial
 // -- en las demás, la base ES el subtotal (mismo comportamiento de
 // siempre, no hace falta reportarla aparte).
-function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta) {
+//
+// `acumuladoAnualPrevio` -- SOLO tiene efecto en categorías con
+// criterioTarifa:'acumulado_anual' (hoy, honorarios_natural). Es lo
+// pagado a ESE proveedor en lo que va del año gravable de la factura,
+// SIN incluir el subtotal de esta línea -- esta función le suma el
+// subtotal actual y compara contra `umbralAcumuladoUvt` para resolver
+// sola si aplica la tarifa baja o la alta, en vez de dejar el rango.
+// Si no se pasa (undefined), se devuelve el rango bajo-alto tal cual,
+// para que el contador decida a mano (comportamiento de respaldo si
+// quien llama a esta función todavía no calculó el acumulado).
+function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fechaFactura, tarifasAprendidas, aiu, declaranteRenta, acumuladoAnualPrevio) {
   tarifasAprendidas = tarifasAprendidas || {};
   const categoriaKey = String(categoria || '').toLowerCase();
   const configBase = TARIFAS_RETENCION[categoriaKey];
@@ -316,14 +361,41 @@ function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fech
   if (subtotalNum < umbralPesos(configBase, fechaFactura)) return null; // bajo el umbral, no aplica
 
   const aprendida = tarifasAprendidas[`${nitProveedor || ''}|${categoriaKey}`];
-  // Si ya se confirmó una tarifa exacta antes (aprendida), esa manda --
-  // es más específica que el flag general de declarante. Si no hay
-  // tarifa aprendida pero el contador SÍ marcó a este proveedor como
-  // declarante de renta (ficha de terceros), se usa la tarifa BAJA
-  // exacta en vez del rango bajo-alto -- ver perfilFiscalEfectivo().
-  const config = aprendida !== undefined
-    ? { tarifaBaja: aprendida, tarifaAlta: aprendida }
-    : (declaranteRenta ? { tarifaBaja: configBase.tarifaBaja, tarifaAlta: configBase.tarifaBaja } : configBase);
+  const esAcumulado = configBase.criterioTarifa === 'acumulado_anual';
+
+  let config;
+  let infoAcumulado = null;
+  if (aprendida !== undefined) {
+    // Si ya se confirmó una tarifa exacta antes (aprendida), esa manda --
+    // es más específica que cualquier otro criterio, incluido el acumulado.
+    config = { tarifaBaja: aprendida, tarifaAlta: aprendida };
+  } else if (esAcumulado) {
+    // El atajo de "declarante" (perfilFiscalEfectivo) NO aplica aquí --
+    // ver el comentario junto a honorarios_natural en TARIFAS_RETENCION.
+    const acumNum = (acumuladoAnualPrevio === undefined || acumuladoAnualPrevio === null || acumuladoAnualPrevio === '')
+      ? null : Number(acumuladoAnualPrevio);
+    if (acumNum !== null && !isNaN(acumNum)) {
+      const umbralAcum = umbralAcumuladoPesos(configBase, fechaFactura);
+      const acumuladoConEstePago = acumNum + subtotalNum;
+      const tarifaResuelta = acumuladoConEstePago > umbralAcum ? configBase.tarifaAlta : configBase.tarifaBaja;
+      config = { tarifaBaja: tarifaResuelta, tarifaAlta: tarifaResuelta };
+      infoAcumulado = {
+        criterioTarifa: 'acumulado_anual',
+        acumuladoAnualPrevio: acumNum,
+        acumuladoConEstePago,
+        umbralAcumuladoPesos: umbralAcum,
+        cruzaUmbralConEstePago: acumNum <= umbralAcum && acumuladoConEstePago > umbralAcum,
+      };
+    } else {
+      config = configBase; // no tenemos el acumulado todavía -- rango, decide el contador
+    }
+  } else {
+    // Si no hay tarifa aprendida pero el contador SÍ marcó a este
+    // proveedor como declarante de renta (ficha de terceros), se usa
+    // la tarifa BAJA exacta en vez del rango bajo-alto -- ver
+    // perfilFiscalEfectivo(). No aplica en categorías de acumulado.
+    config = declaranteRenta ? { tarifaBaja: configBase.tarifaBaja, tarifaAlta: configBase.tarifaBaja } : configBase;
+  }
 
   if (configBase.baseEspecial === 'aiu') {
     const aiuNum = (aiu === undefined || aiu === null || aiu === '') ? null : Number(aiu);
@@ -342,6 +414,12 @@ function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fech
       bajo: Math.round(baseTarifa * config.tarifaBaja),
       alto: Math.round(baseTarifa * config.tarifaAlta),
       mismaTarifa: config.tarifaBaja === config.tarifaAlta,
+      // `tarifaAplicada` -- solo tiene un valor inequívoco cuando
+      // mismaTarifa es true (tarifaBaja===tarifaAlta ya resueltas a UNA
+      // sola, sea por aprendida, por declarante, o por acumulado). Con
+      // rango (mismaTarifa:false) esto queda en la tarifa baja, que es
+      // la que ya se preseleccionaba por defecto -- no cambia nada ahí.
+      tarifaAplicada: config.tarifaBaja,
       cuentaPUC: configBase.cuentaPUC,
       nombrePUC: configBase.nombrePUC,
       baseUsada: baseTarifa,
@@ -354,13 +432,44 @@ function calcularRetencionCategoriaLinea(categoria, subtotal, nitProveedor, fech
     bajo: Math.round(subtotalNum * config.tarifaBaja),
     alto: Math.round(subtotalNum * config.tarifaAlta),
     mismaTarifa: config.tarifaBaja === config.tarifaAlta,
+    tarifaAplicada: config.tarifaBaja,
     cuentaPUC: configBase.cuentaPUC,
     nombrePUC: configBase.nombrePUC,
+    ...(infoAcumulado || {}),
   };
 }
 
-function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero){
+// Cuánto de una categoría dada hay en UNA factura ya guardada -- mira
+// primero el desglose (facturas que mezclan categorías, Fase 4) y si no
+// hay desglose, cae al par categoria_concepto/valor_sin_iva de la
+// cabecera. Es la MISMA precedencia que ya usa calcularRetencionSugerida()
+// más abajo -- se extrajo aparte para que el acumulado anual (ver
+// /api/acumulado-categoria en server.js) sume exactamente lo mismo que
+// ya se le muestra al contador como retención de esa factura, en vez de
+// una segunda lectura que se pueda desincronizar.
+function montoCategoriaEnFactura(inv, categoria) {
+  const categoriaKey = String(categoria || '').toLowerCase();
+  let desglose = null;
+  try {
+    const raw = inv.desglose_categorias;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
+      desglose = parsed;
+    }
+  } catch (e) { desglose = null; }
+  if (desglose) return Number(desglose[categoriaKey]) || 0;
+  if (String(inv.categoria_concepto || '').toLowerCase() === categoriaKey) return Number(inv.valor_sin_iva) || 0;
+  return 0;
+}
+
+// `acumulados` es opcional -- un objeto { categoria: montoAcumuladoAnualPrevio }
+// con lo pagado a este proveedor en categorías de criterioTarifa:'acumulado_anual'
+// ANTES de esta factura (ver /api/acumulado-categoria en server.js). Pasa
+// {} o nada si no lo tienes cargado -- esas categorías simplemente
+// devuelven el rango bajo-alto en vez de resolver la tarifa sola.
+function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero, acumulados){
   tarifasAprendidas = tarifasAprendidas || {};
+  acumulados = acumulados || {};
   if (!cliente || !cliente.agente_retenedor) return null; // nunca le corresponde retener
 
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
@@ -392,9 +501,34 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
     let faltaAiuEnAlguna = false;
     const categoriasFaltantesAiu = [];
     const cuentasInvolucradas = new Map(); // cuentaPUC -> nombrePUC, sin duplicados
+    // Un desglose de UNA sola categoría (ej. una factura de Fase 4 con
+    // todos sus ítems en la misma categoría) es el caso más común -- ahí
+    // escanear.html/masivo.html sí necesitan tarifaAplicada/criterioTarifa
+    // (para el selector de honorarios_natural), igual que en el camino
+    // "sin desglose" de más abajo. Con MÁS de una categoría involucrada
+    // no tendría sentido reportar una sola tarifa "aplicada" para el
+    // conjunto, así que solo se guarda cuando hay una única `r` con
+    // estos datos (nunca se sobrescribe si ya hay más de una).
+    let categoriasConResultado = 0;
+    let metaTarifaUnica = null;
     for (const [categoriaParte, montoParte] of Object.entries(desglose)) {
-      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta);
+      const r = calcularRetencionCategoriaLinea(categoriaParte, montoParte, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, desgloseAiu[categoriaParte], perfil.declaranteRenta, acumulados[categoriaParte]);
       if (!r) continue; // esta parte no aplica (categoría sin tarifa, o bajo su umbral), se omite
+      categoriasConResultado++;
+      if (categoriasConResultado === 1 && r.tarifaAplicada !== undefined) {
+        metaTarifaUnica = {
+          tarifaAplicada: r.tarifaAplicada,
+          ...(r.criterioTarifa === 'acumulado_anual' ? {
+            criterioTarifa: r.criterioTarifa,
+            acumuladoAnualPrevio: r.acumuladoAnualPrevio,
+            acumuladoConEstePago: r.acumuladoConEstePago,
+            umbralAcumuladoPesos: r.umbralAcumuladoPesos,
+            cruzaUmbralConEstePago: r.cruzaUmbralConEstePago,
+          } : {}),
+        };
+      } else if (categoriasConResultado > 1) {
+        metaTarifaUnica = null; // más de una categoría con monto -- no hay una sola tarifa que reportar
+      }
       if (r.requiereAiu) {
         faltaAiuEnAlguna = true;
         categoriasFaltantesAiu.push({ categoria: categoriaParte, subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo });
@@ -417,11 +551,13 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
       // sin revisar este flag primero.
       requiereAiu: faltaAiuEnAlguna,
       categoriasFaltantesAiu,
+      ...(metaTarifaUnica || {}),
     };
   }
 
   // Sin desglose -- factura de una sola categoría, comportamiento normal.
-  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu, perfil.declaranteRenta);
+  const categoriaHeader = String(inv.categoria_concepto || '').toLowerCase();
+  const r = calcularRetencionCategoriaLinea(inv.categoria_concepto, inv.valor_sin_iva, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, inv.valor_aiu, perfil.declaranteRenta, acumulados[categoriaHeader]);
   if (!r) return null;
   if (r.requiereAiu) {
     return {
@@ -433,8 +569,16 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
   }
   return {
     bajo: r.bajo, alto: r.alto, mismaTarifa: r.mismaTarifa,
+    tarifaAplicada: r.tarifaAplicada,
     cuentasPUC: [{ cuenta: r.cuentaPUC, nombre: r.nombrePUC }],
     requiereAiu: false, categoriasFaltantesAiu: [],
+    ...(r.criterioTarifa === 'acumulado_anual' ? {
+      criterioTarifa: r.criterioTarifa,
+      acumuladoAnualPrevio: r.acumuladoAnualPrevio,
+      acumuladoConEstePago: r.acumuladoConEstePago,
+      umbralAcumuladoPesos: r.umbralAcumuladoPesos,
+      cruzaUmbralConEstePago: r.cruzaUmbralConEstePago,
+    } : {}),
   };
 }
 
@@ -463,9 +607,17 @@ function calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercer
 // vez de en un monto -- `bajo`/`alto` del total son igual que en
 // calcularRetencionSugerida: un total PARCIAL cuando `requiereAiu` es
 // true, nunca el total final sin revisar ese flag primero.
-function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendidas, perfilTercero) {
+// `acumulados` -- ver el mismo parámetro en calcularRetencionSugerida()
+// arriba: { categoria: montoAcumuladoAnualPrevio }, lo pagado a este
+// proveedor ANTES de esta factura. Si dos ítems de esta MISMA factura
+// caen en una categoría de criterioTarifa:'acumulado_anual' (ej. dos
+// líneas de honorarios_natural), el segundo ítem ve el acumulado previo
+// MÁS el subtotal del primero -- se van sumando en el orden de `items`,
+// no se les pasa a ambos el mismo acumulado previo a la factura.
+function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendidas, perfilTercero, acumulados) {
   if (!cliente || !cliente.agente_retenedor) return null;
   if (!Array.isArray(items) || items.length === 0) return null;
+  acumulados = acumulados || {};
 
   const perfil = perfilFiscalEfectivo(inv, perfilTercero);
   if (perfil.regimenSimple || perfil.autorretenedor) {
@@ -475,8 +627,18 @@ function calcularRetencionSugeridaPorItems(items, inv, cliente, tarifasAprendida
   let bajoTotal = 0, altoTotal = 0, mismaTarifaEnTodas = true;
   const cuentasInvolucradas = new Map();
   const itemsFaltantesAiu = [];
+  const acumuladoCorrido = { ...acumulados }; // copia -- se va actualizando ítem a ítem, sin tocar el objeto original
   const porItem = items.map((item, idx) => {
-    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu, perfil.declaranteRenta);
+    const categoriaKey = String(item.categoria_concepto || '').toLowerCase();
+    const r = calcularRetencionCategoriaLinea(item.categoria_concepto, item.subtotal, inv.nit_cc || '', inv.fecha_factura, tarifasAprendidas, item.aiu, perfil.declaranteRenta, acumuladoCorrido[categoriaKey]);
+    if (esCategoriaCriterioAcumulado(categoriaKey)) {
+      // Se suma el subtotal de ESTE ítem para el siguiente de la misma
+      // categoría en esta factura, sin importar si con el dato de hoy
+      // ya se pudo resolver la tarifa de este ítem o no (r.criterioTarifa
+      // solo viene cuando SÍ se resolvió -- pero el acumulado corrido
+      // tiene que seguir sumando de todas formas).
+      acumuladoCorrido[categoriaKey] = (acumuladoCorrido[categoriaKey] || 0) + (Number(item.subtotal) || 0);
+    }
     if (!r) return null;
     if (r.requiereAiu) {
       itemsFaltantesAiu.push({ idx, descripcion: item.descripcion || '', subtotalBruto: r.subtotalBruto, aiuMinimoPresuntivo: r.aiuMinimoPresuntivo });
@@ -584,9 +746,28 @@ function tarifaFuenteOpciones(categoria){
   const config = TARIFAS_RETENCION[String(categoria || '').toLowerCase()];
   const opciones = [{ valor: 0, label: 'Ninguno' }];
   if (!config) return opciones;
-  opciones.push({ valor: config.tarifaBaja, label: formatearPorcentajeTarifa(config.tarifaBaja) + (config.tarifaBaja !== config.tarifaAlta ? ' (declarante)' : '') });
+  const esAcumulado = config.criterioTarifa === 'acumulado_anual';
+  // El paréntesis depende del criterio real de la categoría -- ver el
+  // mismo comentario en renderSelectorTarifaFuente() más abajo:
+  // honorarios_natural se decide por el acumulado de pagos del año
+  // (Decreto 1625/2016 art. 1.2.4.3.1), no por declarante/no declarante.
+  // Esta función es la que arma el selector por ÍTEM (tabla de la Fase
+  // 4, Escanear y Carga masiva) -- no conoce el acumulado real de ese
+  // proveedor (eso requiere una consulta al servidor), así que aquí solo
+  // se corrige el texto para no inducir al contador a elegir con el
+  // criterio equivocado; el selector de la ficha completa (que si tiene
+  // acceso al acumulado real) es el que puede resolver la tarifa sola.
+  opciones.push({
+    valor: config.tarifaBaja,
+    label: formatearPorcentajeTarifa(config.tarifaBaja) + (config.tarifaBaja !== config.tarifaAlta
+      ? (esAcumulado ? ' (pagos del año a este proveedor ≤ 3.300 UVT)' : ' (declarante)')
+      : ''),
+  });
   if (config.tarifaAlta !== config.tarifaBaja) {
-    opciones.push({ valor: config.tarifaAlta, label: formatearPorcentajeTarifa(config.tarifaAlta) + ' (no declarante)' });
+    opciones.push({
+      valor: config.tarifaAlta,
+      label: formatearPorcentajeTarifa(config.tarifaAlta) + (esAcumulado ? ' (pagos del año a este proveedor > 3.300 UVT)' : ' (no declarante)'),
+    });
   }
   return opciones;
 }
@@ -771,10 +952,30 @@ function renderSelectorTarifaFuente(contenedorEl, categoria, sugerido, fuenteInp
   const esc = (typeof escapeHtml === 'function') ? escapeHtml : (s) => String(s);
   const parseVal = (typeof parseMoneyValue === 'function') ? parseMoneyValue : (v) => Number(String(v).replace(/[^\d-]/g, '')) || 0;
 
+  // El texto entre paréntesis depende del CRITERIO real de esa
+  // categoría -- la mayoría (compras, servicios...) sí es
+  // declarante/no declarante, pero honorarios_natural (criterioTarifa
+  // 'acumulado_anual') se decide por el monto pagado en el año, no por
+  // eso (Decreto 1625/2016 art. 1.2.4.3.1) -- mostrarle "declarante" ahí
+  // sería inducir al contador a elegir con el criterio equivocado.
+  const esAcumulado = configCategoria && configCategoria.criterioTarifa === 'acumulado_anual';
   const opciones = [{ valor: 0, label: 'Ninguno -- no aplica retención en este caso' }];
   if (sugerido.mismaTarifa) {
-    const pct = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaBaja) + ' — ' : '';
-    opciones.push({ valor: sugerido.bajo, label: `${pct}$${sugerido.bajo.toLocaleString('es-CO')}` });
+    const pctResuelto = (typeof sugerido.tarifaAplicada === 'number') ? sugerido.tarifaAplicada : (configCategoria ? configCategoria.tarifaBaja : null);
+    const pct = pctResuelto !== null ? formatearPorcentajeTarifa(pctResuelto) + ' — ' : '';
+    let sufijo = '';
+    if (esAcumulado && sugerido.criterioTarifa === 'acumulado_anual') {
+      sufijo = ` (acumulado ${sugerido.acumuladoConEstePago.toLocaleString('es-CO')} de ${sugerido.umbralAcumuladoPesos.toLocaleString('es-CO')} en el año)`;
+    }
+    opciones.push({ valor: sugerido.bajo, label: `${pct}$${sugerido.bajo.toLocaleString('es-CO')}${sufijo}` });
+  } else if (esAcumulado) {
+    // Todavía no se conoce el acumulado del año para este proveedor
+    // (se está cargando en segundo plano) -- se muestra el rango con el
+    // criterio correcto en vez de "declarante/no declarante".
+    const pctBaja = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaBaja) + ' ' : '';
+    const pctAlta = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaAlta) + ' ' : '';
+    opciones.push({ valor: sugerido.bajo, label: `${pctBaja}(pagos del año a este proveedor ≤ 3.300 UVT) — $${sugerido.bajo.toLocaleString('es-CO')}` });
+    opciones.push({ valor: sugerido.alto, label: `${pctAlta}(pagos del año a este proveedor > 3.300 UVT) — $${sugerido.alto.toLocaleString('es-CO')}` });
   } else {
     const pctBaja = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaBaja) + ' ' : '';
     const pctAlta = configCategoria ? formatearPorcentajeTarifa(configCategoria.tarifaAlta) + ' ' : '';
@@ -794,7 +995,16 @@ function renderSelectorTarifaFuente(contenedorEl, categoria, sugerido, fuenteInp
   let coincide = null;
   if (valorActual > 0) {
     coincide = opciones.find((o) => o.valor === valorActual) || null;
-    if (!coincide) {
+    // Si no coincide con ninguna opción Y el contador nunca tocó el
+    // campo a mano (`tocado`), lo más probable es que ese valor haya
+    // quedado de un cálculo automático ANTERIOR con menos información
+    // (ej. el acumulado anual de honorarios_natural que todavía no había
+    // llegado del servidor) -- no de una elección deliberada. En ese
+    // caso NO se trata como "otro valor ya escrito": se deja `coincide`
+    // en null para que la rama de abajo lo actualice solo al nuevo
+    // estimado, en vez de quedarse pegado a un número que ya quedó
+    // desactualizado sin que el contador lo haya elegido nunca.
+    if (!coincide && tocado) {
       coincide = { valor: valorActual, label: `Otro valor ya escrito — $${valorActual.toLocaleString('es-CO')}` };
       opciones.push(coincide);
     }
@@ -829,4 +1039,61 @@ function renderSelectorTarifaFuente(contenedorEl, categoria, sugerido, fuenteInp
   if (!coincide) {
     fuenteInput.value = preseleccionado.toLocaleString('es-CO');
   }
+}
+
+// ---------- Export para Node (server.js) ----------
+//
+// Este archivo se carga de dos formas: como <script> plano en el
+// navegador (Escanear, Carga masiva, Facturas, Informe de auditoría --
+// todo lo de arriba queda como variables/funciones globales, igual que
+// siempre) y, desde este bloque, como módulo de Node vía
+// require('./public/retenciones') en server.js.
+//
+// Antes server.js tenía su PROPIA copia a mano de las tarifas con rango
+// (TARIFAS_CON_RANGO, para "recordar" qué tarifa exacta confirmó el
+// contador) -- exactamente el mismo riesgo que este archivo existe para
+// evitar en el navegador: si TARIFAS_RETENCION cambia aquí y esa copia
+// en server.js no se actualiza también, quedan desincronizadas sin que
+// nadie lo note. Ahora server.js hace require() de este archivo y usa
+// esta MISMA tabla -- un solo lugar que tocar cuando cambie una tarifa.
+//
+// El `if` de abajo es lo que permite que el mismo archivo sirva para
+// los dos mundos sin romper ninguno: en el navegador no existe la
+// variable `module`, así que la condición da falso y este bloque no
+// hace nada (el resto del archivo ya quedó definido como variables
+// globales, que es todo lo que necesita el navegador). En Node sí
+// existe `module`, así que aquí se arma el export.
+//
+// Solo se exportan piezas que NO tocan el DOM -- renderSelectorTarifaFuente()
+// sí lo hace (document.createElement, etc.) y no tendría sentido
+// llamarla desde el servidor, así que a propósito se deja afuera.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    TARIFAS_RETENCION,
+    AIU_PISO_PORCENTAJE,
+    UVT_POR_ANIO,
+    UVT_ANIO_MAS_RECIENTE,
+    CUENTAS_PUC_FIJAS,
+    SUBCUENTAS_GASTO,
+    RETEIVA_TARIFA_GENERAL,
+    esCategoriaBaseAiu,
+    esCategoriaCriterioAcumulado,
+    umbralAcumuladoPesos,
+    montoCategoriaEnFactura,
+    valorUvt,
+    anioDeFechaFactura,
+    umbralPesos,
+    perfilFiscalEfectivo,
+    calcularRetencionCategoriaLinea,
+    calcularRetencionSugerida,
+    calcularRetencionSugeridaPorItems,
+    normalizarItemsDesdeIA,
+    tarifaFuenteOpciones,
+    itemsParaGuardar,
+    desgloseDesdeItems,
+    desgloseAiuDesdeItems,
+    calcularReteIvaSugerido,
+    calcularReteIcaSugerido,
+    formatearPorcentajeTarifa,
+  };
 }

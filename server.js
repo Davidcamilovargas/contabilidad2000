@@ -9,8 +9,20 @@ const { Pool } = require('pg');
 const integraciones = require('./integraciones');
 const cartera = require('./cartera');
 const lotes = require('./public/lotes');
+const { cabecerasSeguridad, crearCors, crearLimitador } = require('./seguridad');
+// Única fuente de verdad de tarifas de retención (ver public/retenciones.js
+// -- se carga como <script> en el navegador Y aquí con require(), misma
+// tabla en los dos lados).
+const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCategoriaCriterioAcumulado } = require('./public/retenciones');
 
 const app = express();
+// Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
+// peticiones a Express por HTTP plano, agregando cabeceras X-Forwarded-*
+// con los datos reales de la conexión del visitante. Sin esto, req.ip
+// siempre sería la IP interna del proxy (rompe el límite de tasa por IP
+// de abajo) y req.secure siempre sería false (rompe HSTS y la detección
+// de "producción" de la cookie de sesión, ver issueSessionCookie).
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -442,6 +454,13 @@ async function ensureSchema() {
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'solo';`);
+  // Columna de rol -- todavía no hay ninguna pantalla que la use ni
+  // ninguna ruta que la exija (eso es la tarea de "Multiempresa + roles"
+  // más grande, con su propia jerarquía firma -> usuarios -> empresas).
+  // Se agrega ya para que ese cambio, cuando llegue, no tenga que hacer
+  // una migración sobre datos existentes: todo usuario de hoy queda
+  // como 'contador' (dueño de su cuenta), que es exactamente lo que es.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'contador';`);
 
   // Integraciones con software contable externo (Alegra, y a futuro
   // Siigo u otros) -- una fila por contador+proveedor conectado. El
@@ -488,8 +507,49 @@ const COLUMNAS_ENVIO_PROVEEDOR = {
 
 // ---------- Middlewares globales (deben ir ANTES que cualquier ruta
 // que los necesite -- express procesa todo en orden de registro) ----------
+app.disable('x-powered-by'); // no anunciar "Express" en cada respuesta -- un paso menos para quien busque huecos conocidos de una versión específica
+app.use(cabecerasSeguridad);
+// ALLOWED_ORIGINS: orígenes EXTRA (además del propio Enlaza, que nunca
+// necesita estar en esta lista) a los que se les permite leer respuestas
+// de la API desde el navegador -- separados por coma, ej.
+// "https://app.enlaza.co,https://socios.enlaza.co". Vacío por defecto:
+// hoy nadie más que el propio frontend de Enlaza llama a esta API.
+app.use(crearCors((process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim())));
 app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
 app.use(cookieParser());
+
+// Límite de tasa general para toda la API -- una primera barrera contra
+// tráfico automatizado/abusivo antes de llegar a cualquier ruta. Los
+// límites más estrictos de login e IA (más abajo, junto a sus rutas) se
+// suman a este, no lo reemplazan.
+const limitadorGeneral = crearLimitador({
+  ventanaMs: 15 * 60 * 1000,
+  maximo: 600,
+  mensaje: 'Demasiadas solicitudes desde este origen -- espera unos minutos e intenta de nuevo.',
+});
+app.use('/api', limitadorGeneral);
+
+// Límite de tasa para el login de Google -- protege el endpoint que
+// verifica tokens contra los servidores de Google de ser golpeado en
+// bucle (cada verificación cuesta una llamada real a Google).
+const limitadorAuth = crearLimitador({
+  ventanaMs: 15 * 60 * 1000,
+  maximo: 20,
+  mensaje: 'Demasiados intentos de inicio de sesión -- espera unos minutos e intenta de nuevo.',
+});
+
+// Límite de tasa para las rutas que llaman a Gemini -- cada llamada
+// cuesta dinero real, así que esto protege el gasto además de la carga
+// del servidor. Se limita por contador ya autenticado (no por IP) para
+// que el tráfico de un contador no afecte a los demás; antes de que
+// requireAuth haya corrido (no debería pasar, todas estas rutas lo usan
+// primero) cae de vuelta a la IP.
+const limitadorIA = crearLimitador({
+  ventanaMs: 15 * 60 * 1000,
+  maximo: 60,
+  mensaje: 'Demasiadas facturas/solicitudes de IA en poco tiempo -- espera unos minutos e intenta de nuevo.',
+  obtenerClave: (req) => req.userId,
+});
 
 // El Client ID de Google NO es secreto (a diferencia del Client Secret,
 // que aquí ni siquiera se usa) -- el navegador lo necesita para mostrar
@@ -531,7 +591,7 @@ function requireAuth(req, res, next) {
 // Recibe el token que entrega el botón de Google (Google Identity
 // Services) en el navegador, lo verifica contra los servidores de
 // Google, y crea o reconoce al usuario en nuestra base de datos.
-app.post('/auth/google', async (req, res) => {
+app.post('/auth/google', limitadorAuth, async (req, res) => {
   try {
     const { credential } = req.body;
     if (!credential) return res.status(400).json({ error: 'Falta el token de Google.' });
@@ -578,7 +638,7 @@ app.post('/auth/google', async (req, res) => {
 // Le dice al frontend quién está logueado (o 401 si nadie)
 app.get('/api/me', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url, plan FROM users WHERE id = $1', [req.userId]);
+    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url, plan, role FROM users WHERE id = $1', [req.userId]);
     if (rows.length === 0) return res.status(401).json({ error: 'Usuario no encontrado.' });
 
     const plan = rows[0].plan || 'solo';
@@ -588,6 +648,10 @@ app.get('/api/me', requireAuth, async (req, res) => {
 
     res.json({
       id: rows[0].id, email: rows[0].email, nombre: rows[0].nombre, avatarUrl: rows[0].avatar_url,
+      // "role" todavía no tiene ningún efecto (ver comentario en
+      // ensureSchema) -- se expone ya para que el frontend pueda
+      // empezar a leerlo cuando haga falta, sin otro cambio de API.
+      role: rows[0].role || 'contador',
       plan, limiteClientes: limite, clientesActuales: actuales,
     });
   } catch (err) {
@@ -663,14 +727,18 @@ async function guardarCorreccion(contadorId, concepto, categoriaFinal) {
 
 // ---------- Memoria de la tarifa real por proveedor ----------
 
-// Solo estas categorías tienen una diferencia real entre tarifa
-// declarante/no declarante -- las demás son tarifa fija, no hay nada
-// que aprender ahí (ver TARIFAS_RETENCION en facturas.html).
-const TARIFAS_CON_RANGO = {
-  compras: { tarifaBaja: 0.025, tarifaAlta: 0.035 },
-  servicios: { tarifaBaja: 0.04, tarifaAlta: 0.06 },
-  honorarios_natural: { tarifaBaja: 0.10, tarifaAlta: 0.11 },
-};
+// Antes esta tabla era una copia a mano de las tarifas con rango,
+// separada de public/retenciones.js -- si una tarifa cambiaba allá y
+// alguien olvidaba actualizar esta copia, quedaban desincronizadas sin
+// que nada lo avisara. Ahora se deriva EN VIVO de la misma
+// TARIFAS_RETENCION que usan Escanear/Carga masiva/Facturas (única
+// fuente de verdad para toda la app, ver public/retenciones.js) --
+// "con rango" son las categorías donde tarifaBaja !== tarifaAlta
+// (declarante vs. no declarante); las demás tienen tarifa fija, no hay
+// nada que aprender ahí.
+const TARIFAS_CON_RANGO = Object.fromEntries(
+  Object.entries(TARIFAS_RETENCION).filter(([, config]) => config.tarifaBaja !== config.tarifaAlta)
+);
 
 // Revisa si el valor de Rete Fuente que el contador escribió coincide
 // con alguna de las 2 tarifas conocidas para esa categoría -- si
@@ -912,6 +980,61 @@ app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error leyendo tarifas aprendidas:', err);
     res.status(500).json({ error: 'No se pudieron leer las tarifas aprendidas.' });
+  }
+});
+
+// Acumulado anual pagado a un proveedor en una categoría de
+// criterioTarifa:'acumulado_anual' (hoy, solo honorarios_natural -- ver
+// TARIFAS_RETENCION en public/retenciones.js). Escanear/Carga masiva
+// llaman esto ANTES de calcular la retención de una factura de esa
+// categoría, para que calcularRetencionCategoriaLinea() pueda resolver
+// sola si aplica 10% u 11% (Decreto 1625/2016 art. 1.2.4.3.1: el corte
+// es el monto pagado en el año, no si el proveedor declara renta o no).
+//
+// Suma TODAS las facturas ya guardadas de este contador para ese NIT,
+// en el mismo año de `anio`, usando montoCategoriaEnFactura() -- la
+// MISMA función (misma precedencia desglose/cabecera) que ya usa
+// calcularRetencionSugerida() para mostrarle al contador cuánto de esa
+// categoría hay en cada factura, así que lo que se acumula aquí es
+// exactamente lo mismo que el contador ya ve factura por factura.
+//
+// `excluir_id` es opcional -- pásalo cuando se está editando/revisando
+// una factura que YA se guardó antes (ej. desde Facturas), para no
+// contarla dos veces (una como "acumulado previo" y otra como el pago
+// de hoy).
+app.get('/api/acumulado-categoria', requireAuth, async (req, res) => {
+  const nit = String(req.query.nit || '').trim();
+  const categoria = String(req.query.categoria || '').trim().toLowerCase();
+  const anio = Number(req.query.anio);
+  const excluirId = req.query.excluir_id ? String(req.query.excluir_id) : null;
+
+  if (!nit || !categoria || !anio) {
+    return res.status(400).json({ error: 'Falta nit, categoria o anio.' });
+  }
+  if (!esCategoriaCriterioAcumulado(categoria)) {
+    // No es un error del contador -- es que esta ruta no aplica para
+    // otras categorías (declarante/no declarante, o tarifa fija). Se
+    // devuelve 0 en vez de un error para que el front-end no tenga que
+    // saber de antemano cuáles categorías usan este criterio.
+    return res.json({ acumulado: 0, aplica: false });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, valor_sin_iva, categoria_concepto, desglose_categorias, fecha_factura
+       FROM invoices WHERE contador_id = $1 AND nit_cc = $2`,
+      [req.userId, nit]
+    );
+    let acumulado = 0;
+    for (const row of rows) {
+      if (excluirId && String(row.id) === excluirId) continue;
+      if (anioDeFechaFactura(row.fecha_factura) !== anio) continue;
+      acumulado += montoCategoriaEnFactura(row, categoria);
+    }
+    res.json({ acumulado, aplica: true });
+  } catch (err) {
+    console.error('Error calculando acumulado por categoría:', err);
+    res.status(500).json({ error: 'No se pudo calcular el acumulado del año para este proveedor.' });
   }
 });
 
@@ -1415,7 +1538,7 @@ REGLAS IMPORTANTES QUE SIEMPRE DEBES SEGUIR:
 4. Si la pregunta es sobre algo que de verdad no puedes resolver (un bug real, algo que suena a error del servidor, o algo muy específico de su cuenta), dilo con honestidad y sugiere que hable directo con soporte humano por WhatsApp -- justo debajo de tu respuesta le va a aparecer un botón para eso, así que NUNCA inventes un correo, un formulario, un "chat en vivo" en otra esquina de la página, ni ningún otro canal de contacto -- solo di algo como "contacta a soporte humano por WhatsApp" y confía en que el botón aparece solo.
 5. Nunca inventes funciones que la aplicación no tiene, ni canales de contacto (correos, formularios, chats) que no existen.`;
 
-app.post('/api/soporte-chat', requireAuth, async (req, res) => {
+app.post('/api/soporte-chat', requireAuth, limitadorIA, async (req, res) => {
   const { mensaje, historial } = req.body;
   if (!mensaje || typeof mensaje !== 'string' || !mensaje.trim()) {
     return res.status(400).json({ error: 'Escribe una pregunta antes de enviar.' });
@@ -1739,7 +1862,7 @@ async function detectarClienteYMovimientoServidor(contadorId, data) {
   return { clienteId: '', tipoMovimiento: 'egreso', confiado: false };
 }
 
-app.post('/api/extract', requireAuth, async (req, res) => {
+app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {
   const { base64, mediaType, isPdf, forzar } = req.body;
 
   if (!base64 || !mediaType) {
@@ -1773,7 +1896,7 @@ app.post('/api/extract', requireAuth, async (req, res) => {
 // otros_grupos) es mayor a 1, el frontend avisa y manda al contador a
 // Carga masiva -- que sí procesa cada documento del paquete como una
 // fila independiente (ver lotes.js).
-app.post('/api/extract-paquete', requireAuth, async (req, res) => {
+app.post('/api/extract-paquete', requireAuth, limitadorIA, async (req, res) => {
   const { base64, mediaType, isPdf, forzar } = req.body;
 
   if (!base64 || !mediaType) {
@@ -1828,7 +1951,7 @@ No inventes datos que no estén en el documento. Si algún campo no se puede lee
 // Endpoint que recibe el RUT (imagen o PDF) y usa la IA para pre-llenar
 // el formulario de "Agregar cliente" -- el contador siempre revisa y
 // completa lo que falte antes de guardar, esto solo ahorra tecleo.
-app.post('/api/extract-rut', requireAuth, async (req, res) => {
+app.post('/api/extract-rut', requireAuth, limitadorIA, async (req, res) => {
   const { base64, mediaType, isPdf } = req.body;
 
   if (!base64 || !mediaType) {
@@ -1974,7 +2097,7 @@ app.get('/api/cartera/:clienteId', requireAuth, async (req, res) => {
 // facturas. Antes de gastar una lectura, revisa si este mismo archivo
 // (mismos bytes) ya se procesó antes para este cliente -- evita subir
 // el mismo extracto dos veces sin darse cuenta.
-app.post('/api/extracto/leer-pdf', requireAuth, async (req, res) => {
+app.post('/api/extracto/leer-pdf', requireAuth, limitadorIA, async (req, res) => {
   const { base64, mediaType, isPdf, clienteId, forzar } = req.body;
   if (!base64 || !mediaType || !clienteId) {
     return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
