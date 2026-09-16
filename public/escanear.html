@@ -521,6 +521,8 @@
       <a href="/escanear.html" class="sidebar-link active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Escanear</a>
       <a href="/masivo.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0-10l-3.5 3.5M12 4l3.5 3.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>Carga masiva</a>
       <a href="/integraciones.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6M10.5 6.5l1-1a3 3 0 014.24 4.24l-1 1M13.5 17.5l-1 1a3 3 0 01-4.24-4.24l1-1"/></svg>Integraciones</a>
+      <a href="/revision.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6a2 2 0 012 2v1H7V6a2 2 0 012-2z"/><rect x="5" y="6" width="14" height="15" rx="2"/><path d="M9 13l2.2 2.2L15.5 11"/></svg>Revisión</a>
+      <a href="/configuracion.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Configuración</a>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-foot">C&oacute;lombia &middot; Enlaza</div>
@@ -2286,6 +2288,17 @@ function renderEstimadoIca(estIcaEl, invParaCalculo){
         icaInput.dispatchEvent(new Event('input', { bubbles: true }));
       });
       resultSpan.appendChild(btn);
+      // La base mínima de este municipio (base_uvt) se convirtió a pesos
+      // con la UVT del año de la factura -- si ese año no está en la
+      // tabla, se avisa que se usó la UVT de respaldo (mismo criterio
+      // que el resto del panel de retenciones).
+      const anioIca = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(invParaCalculo.fecha_factura) : null;
+      if (anioIca && typeof esUvtDeRespaldo === 'function' && esUvtDeRespaldo(anioIca)) {
+        const avisoIca = document.createElement('span');
+        avisoIca.className = 'fine';
+        avisoIca.textContent = `⚠ UVT de respaldo: la UVT de ${anioIca} aún no está registrada, se usó la de ${(typeof UVT_ANIO_MAS_RECIENTE !== 'undefined') ? UVT_ANIO_MAS_RECIENTE : 'respaldo'}.`;
+        resultSpan.appendChild(avisoIca);
+      }
     } else {
       const span = document.createElement('span');
       span.className = 'fine';
@@ -2485,6 +2498,18 @@ function showRetencionHint(data){
   const exentoPorCalidadVendedor = posibleReteIva && !reteIvaAplicaAviso &&
     perfilTercero && (perfilTercero.agente_retencion_iva || perfilTercero.gran_contribuyente);
 
+  // Los umbrales/montos de arriba dependen de la UVT del año de la
+  // factura (ver UVT_POR_ANIO en retenciones.js). Si ese año todavía no
+  // se agregó a la tabla, valorUvt() cae en silencio a la UVT del año
+  // más reciente conocido -- lo cual es razonable como respaldo, pero
+  // el contador necesita saber que el estimado no usa la UVT oficial
+  // de ESA factura, no que se descubra meses después en una auditoría.
+  const anioFacturaParaUvt = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(data.fecha_factura) : null;
+  const usaUvtRespaldo = !!(anioFacturaParaUvt && typeof esUvtDeRespaldo === 'function' && esUvtDeRespaldo(anioFacturaParaUvt));
+  const avisoUvtRespaldo = usaUvtRespaldo
+    ? `<b>⚠ UVT de respaldo:</b> aún no se registró la UVT oficial de ${anioFacturaParaUvt} en el sistema -- este estimado usa la UVT de ${(typeof UVT_ANIO_MAS_RECIENTE !== 'undefined') ? UVT_ANIO_MAS_RECIENTE : 'el año más reciente conocido'} como referencia, podría no ser exacto una vez la DIAN publique/se registre la de ${anioFacturaParaUvt}. `
+    : '';
+
   if (esRegimenSimple) {
     const origenPerfil = perfilTercero && perfilTercero.regimen_simple;
     html += `<b>ℹ Proveedor de Régimen Simple${origenPerfil ? ' (marcado en su perfil fiscal)' : ' detectado'}</b>` +
@@ -2536,6 +2561,7 @@ function showRetencionHint(data){
     html = `<b>⚠ Falta el AIU para calcular la retención</b>` +
       `Esta factura incluye ${escapeHtml(faltantes)}, que se retiene sobre el componente de AIU (Administración + Imprevistos + Utilidad), no sobre el subtotal bruto -- ingrésalo en la columna AIU de "Ítems de la factura" abajo. ` +
       (reteIvaAplicaAviso ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
+      avisoUvtRespaldo +
       `<span class="fine">Concepto DIAN 100202208-1587. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
     retencionHintEl.classList.add('show');
@@ -2559,6 +2585,7 @@ function showRetencionHint(data){
       (varianPorItem ? 'Esta factura tiene más de un ítem/categoría -- la retención está calculada sumando cada ítem por separado, y las retenciones varían según el ítem (revisa el detalle en la tabla de ítems abajo). ' : '') +
       (reteIvaAplicaAviso ? `También podría corresponder <b>Rete IVA</b>${reteIvaTexto} ` : '') +
       (exentoPorCalidadVendedor ? `No corresponde Rete IVA aparte -- el proveedor ya es ${perfilTercero.gran_contribuyente ? 'Gran Contribuyente' : 'agente de retención de IVA'}. ` : '') +
+      avisoUvtRespaldo +
       `<span class="fine">Estimado con la tarifa vigente conocida al construir esta app — la base de retención cambió varias veces en 2026 por decisiones judiciales. Verifica la norma actual antes de aplicar este valor. No es asesoría tributaria.</span>`;
     retencionHintEl.innerHTML = html;
     retencionHintEl.classList.add('show');
@@ -2941,7 +2968,16 @@ async function guardarFactura(forzar){
 
     if (!response.ok) throw new Error(data.error || 'No se pudo guardar.');
 
-    savedMsg.textContent = '✓ Guardada en el kárdex — puedes verla en la pestaña Facturas.';
+    // El servidor vuelve a revisar la cuadratura de valores por su cuenta
+    // (con una tolerancia más estricta que el aviso de arriba) -- si de
+    // todas formas quedó descuadrada, se avisa aquí también, en vez de
+    // dejar que la única señal sea la ausencia silenciosa del asiento
+    // contable en Facturas.
+    if (data.advertencia) {
+      savedMsg.textContent = '✓ Guardada, con una advertencia — ' + data.advertencia;
+    } else {
+      savedMsg.textContent = '✓ Guardada en el kárdex — puedes verla en la pestaña Facturas.';
+    }
     savedMsg.classList.add('show');
     btnSave.textContent = '✓ Guardada';
 

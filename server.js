@@ -14,6 +14,9 @@ const { cabecerasSeguridad, crearCors, crearLimitador } = require('./seguridad')
 // -- se carga como <script> en el navegador Y aquí con require(), misma
 // tabla en los dos lados).
 const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCategoriaCriterioAcumulado } = require('./public/retenciones');
+// Motor contable mínimo (PUC + asientos de partida doble) -- ver
+// asientos.js para el alcance exacto de esta primera versión.
+const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
 
 const app = express();
 // Render (y cualquier hosting detrás de un proxy/balanceador) entrega las
@@ -494,6 +497,88 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS alegra_enviada_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS siigo_bill_id TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS siigo_enviada_at TIMESTAMPTZ;`);
+
+  // ---------- Motor contable mínimo: plan de cuentas + asientos ----------
+  // Ver asientos.js para el alcance exacto (por ahora solo egresos, solo
+  // causación, nunca se adivina lo que el contador no ha confirmado).
+  //
+  // Cada contador tiene su propia copia del plan de cuentas -- se
+  // siembra la primera vez que hace falta (asegurarPlanCuentasContador,
+  // más abajo), no en ensureSchema, porque sembrar necesita saber DE
+  // QUÉ contador se trata.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plan_cuentas (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      naturaleza TEXT NOT NULL,
+      clase TEXT NOT NULL,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      creado_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (contador_id, codigo)
+    );
+  `);
+
+  // Un asiento por factura (por ahora) -- "propuesto" es lo que generó
+  // el sistema solo, "aprobado" es lo que el contador ya confirmó. Nunca
+  // hay un tercer estado que se salte la aprobación humana.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asientos_contables (
+      id UUID PRIMARY KEY,
+      contador_id UUID NOT NULL,
+      invoice_id UUID,
+      fecha TEXT DEFAULT '',
+      descripcion TEXT DEFAULT '',
+      estado TEXT NOT NULL DEFAULT 'propuesto',
+      generado_por TEXT NOT NULL DEFAULT 'ia',
+      aprobado_at TIMESTAMPTZ,
+      creado_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asientos_contador_estado ON asientos_contables (contador_id, estado);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asientos_invoice ON asientos_contables (invoice_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asiento_lineas (
+      id UUID PRIMARY KEY,
+      asiento_id UUID NOT NULL,
+      orden INTEGER NOT NULL DEFAULT 0,
+      cuenta_codigo TEXT NOT NULL,
+      cuenta_nombre TEXT NOT NULL,
+      debito NUMERIC NOT NULL DEFAULT 0,
+      credito NUMERIC NOT NULL DEFAULT 0
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asiento_lineas_asiento ON asiento_lineas (asiento_id);`);
+
+  // ---------- Confianza de la IA + aprobación del contador (Fase 2) ----------
+  // `confianza_campos`: JSON (guardado como TEXT, igual que
+  // desglose_categorias) con un puntaje 0-1 por cada campo clave que
+  // Gemini extrajo, para que una futura pantalla de revisión pueda
+  // resaltar los campos dudosos sin que el contador tenga que adivinar
+  // cuáles revisar con lupa.
+  // `aprobado_por_contador`/`aprobado_at`: a diferencia de los 3 campos
+  // de retención (editables por CAMPOS_EDITABLES_RETENCION) o del
+  // estado de un asiento, la aprobación de la FACTURA solo cambia por
+  // la ruta dedicada de abajo -- nunca es parte de SAVED_FIELDS, para
+  // que guardar o editar una factura no pueda marcarla como aprobada
+  // por accidente.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS confianza_campos TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS aprobado_por_contador BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS aprobado_at TIMESTAMPTZ;`);
+
+  // ---------- Cuadratura de valores (retenciones -- tema #1) ----------
+  // Antes, si "valor sin IVA + IVA" no cuadraba con "valor con IVA", lo
+  // único que pasaba era que generarAsientoEgreso() se negaba en
+  // silencio a proponer un asiento (error 'valores_no_cuadran') -- la
+  // factura quedaba guardada igual, pero sin ninguna marca visible de
+  // por qué nunca apareció su asiento. Este campo hace visible y
+  // PERMANENTE ese mismo chequeo (calculado una sola vez, al guardar,
+  // con la misma tolerancia de $1 que ya usa asientos.js) para que
+  // Facturas pueda mostrar una alerta que no dependa de que el
+  // contador se acuerde de ir a revisar por qué falta un asiento.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valores_descuadrados BOOLEAN NOT NULL DEFAULT false;`);
 }
 
 // Nombres de columna (whitelisteados, nunca vienen del usuario) donde
@@ -625,6 +710,13 @@ app.post('/auth/google', limitadorAuth, async (req, res) => {
         [id, googleId, email, nombre, avatarUrl]
       );
       user = rows[0];
+      // Contador nuevo -- le siembra su plan de cuentas de una vez, para
+      // que ya lo tenga listo la primera vez que guarde una factura. Si
+      // esto falla, no bloquea el login (se vuelve a intentar sola,
+      // sembrado es idempotente, ver asegurarPlanCuentasContador).
+      asegurarPlanCuentasContador(user.id).catch((err) => {
+        console.error('No se pudo sembrar el plan de cuentas del nuevo contador:', err.message);
+      });
     }
 
     issueSessionCookie(res, user.id);
@@ -766,6 +858,90 @@ async function guardarTarifaProveedor(contadorId, nitProveedor, categoria, tarif
   );
 }
 
+// ---------- Motor contable mínimo: plan de cuentas + asientos ----------
+
+// Siembra el plan de cuentas base para un contador, si todavía no tiene
+// ninguna fila (ON CONFLICT DO NOTHING hace que llamarla de más no
+// duplique ni sobreescriba nada -- así se puede llamar tanto al crear
+// la cuenta como, por si acaso, justo antes de generar el primer
+// asiento de un contador que ya existía antes de este cambio).
+async function asegurarPlanCuentasContador(contadorId) {
+  for (const cuenta of PLAN_CUENTAS_SEMILLA) {
+    await pool.query(
+      `INSERT INTO plan_cuentas (id, contador_id, codigo, nombre, naturaleza, clase)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (contador_id, codigo) DO NOTHING`,
+      [crypto.randomUUID(), contadorId, cuenta.codigo, cuenta.nombre, cuenta.naturaleza, cuenta.clase]
+    );
+  }
+}
+
+// Genera (o regenera) el asiento PROPUESTO de una factura ya guardada.
+// Nunca lanza -- si algo sale mal, o si la factura todavía no tiene lo
+// necesario para proponer un asiento (ver asientos.js), simplemente no
+// se crea/actualiza nada. Se llama después de guardar o editar una
+// factura, sin bloquear esa respuesta si esto falla (mismo criterio que
+// guardarCorreccion/guardarTarifaProveedor, arriba).
+async function generarYGuardarAsientoParaFactura(contadorId, invoiceRow) {
+  try {
+    const itemsRes = await pool.query(
+      'SELECT categoria_concepto, subcuenta_gasto, subtotal FROM factura_items WHERE invoice_id = $1 ORDER BY orden',
+      [invoiceRow.id]
+    );
+    const resultado = generarAsientoEgreso(invoiceRow, itemsRes.rows);
+    if (resultado.error) {
+      // No es un error del guardado de la factura -- solo significa que
+      // todavía no hay suficiente información (o que es una factura de
+      // ingreso, fuera de alcance por ahora) para proponer un asiento.
+      // Si YA existía un asiento propuesto de una versión anterior de
+      // esta factura (ej. el contador borró la subcuenta que había
+      // elegido), se retira -- ya no sería válido con los datos de hoy.
+      await pool.query(`DELETE FROM asientos_contables WHERE invoice_id = $1 AND estado = 'propuesto'`, [invoiceRow.id]);
+      return;
+    }
+
+    await asegurarPlanCuentasContador(contadorId);
+
+    const descripcion = `Factura ${invoiceRow.nombre_razon_social || 'sin nombre'} -- ${invoiceRow.concepto || ''}`.trim();
+    const existente = await pool.query(
+      `SELECT id FROM asientos_contables WHERE invoice_id = $1 AND estado = 'propuesto'`,
+      [invoiceRow.id]
+    );
+
+    let asientoId;
+    if (existente.rows.length > 0) {
+      // Ya había una propuesta (sin aprobar todavía) -- se reemplaza por
+      // la nueva, no se acumulan versiones viejas. Un asiento YA
+      // aprobado nunca entra en esta rama (el filtro de arriba solo
+      // busca 'propuesto') -- aprobar es una decisión del contador, y el
+      // sistema no la deshace solo si la factura cambia después.
+      asientoId = existente.rows[0].id;
+      await pool.query('DELETE FROM asiento_lineas WHERE asiento_id = $1', [asientoId]);
+      await pool.query(
+        `UPDATE asientos_contables SET fecha = $2, descripcion = $3, creado_at = now() WHERE id = $1`,
+        [asientoId, invoiceRow.fecha_factura || '', descripcion]
+      );
+    } else {
+      asientoId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO asientos_contables (id, contador_id, invoice_id, fecha, descripcion, estado, generado_por)
+         VALUES ($1,$2,$3,$4,$5,'propuesto','ia')`,
+        [asientoId, contadorId, invoiceRow.id, invoiceRow.fecha_factura || '', descripcion]
+      );
+    }
+
+    for (const linea of resultado.lineas) {
+      await pool.query(
+        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [crypto.randomUUID(), asientoId, linea.orden, linea.cuenta_codigo, linea.cuenta_nombre, linea.debito, linea.credito]
+      );
+    }
+  } catch (err) {
+    console.error('No se pudo generar el asiento propuesto de la factura:', err.message);
+  }
+}
+
 const SAVED_FIELDS = [
   'tipo_doc', 'nit_cc', 'dv', 'nombre_razon_social',
   'letras_fe', 'numeros_fe', 'fecha_factura',
@@ -774,6 +950,7 @@ const SAVED_FIELDS = [
   'tipo_movimiento', 'adquiriente_nit', 'adquiriente_nombre', 'cliente_id',
   'regimen_simple', 'autorretenedor', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
   'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado', 'valor_abonado',
+  'confianza_campos',
 ];
 
 function rowToInvoice(row) {
@@ -968,18 +1145,99 @@ app.get('/api/invoices', requireAuth, async (req, res) => {
 });
 
 // Tarifas de retención que ya se aprendieron por proveedor -- usado
-// por el Excel para mostrar el valor exacto en vez de un rango,
-// cuando ya sabemos qué tarifa le corresponde a ese proveedor.
+// por Escanear/Carga masiva/Facturas/Informe de auditoría para mostrar
+// el valor exacto en vez de un rango, cuando ya sabemos qué tarifa le
+// corresponde a ese proveedor (ver calcularRetencionSugerida() en
+// public/retenciones.js, parámetro `tarifasAprendidas`). Se llena sola
+// cuando se guarda una factura con un Rete Fuente que coincide con una
+// de las dos tarifas conocidas (ver guardarTarifaProveedor()/
+// detectarTarifaUsada() más arriba) -- los endpoints de abajo son para
+// que el contador la vea, la corrija a mano si quedó mal aprendida, o
+// la aprenda desde cero sin esperar a guardar otra factura (pantalla
+// Configuración -- "Tarifas aprendidas por proveedor").
 app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT nit_proveedor, categoria, tarifa FROM tarifa_proveedor_aprendida WHERE contador_id = $1',
+      `SELECT id, nit_proveedor, categoria, tarifa, veces_confirmado, updated_at
+       FROM tarifa_proveedor_aprendida WHERE contador_id = $1 ORDER BY updated_at DESC`,
       [req.userId]
     );
     res.json(rows);
   } catch (err) {
     console.error('Error leyendo tarifas aprendidas:', err);
     res.status(500).json({ error: 'No se pudieron leer las tarifas aprendidas.' });
+  }
+});
+
+// Crear/corregir a mano una tarifa aprendida -- mismo upsert que
+// guardarTarifaProveedor() (auto-aprendizaje al guardar una factura),
+// pero disparado por el contador desde Configuración en vez de
+// inferirse de un Rete Fuente guardado. `veces_confirmado` se reinicia
+// a 1 en una creación manual nueva (no hay un conflicto todavía); si ya
+// existía, el ON CONFLICT la trata igual que una reconfirmación más.
+app.post('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
+  try {
+    const nitProveedor = String(req.body.nit_proveedor || '').trim();
+    const categoria = String(req.body.categoria || '').trim().toLowerCase();
+    const tarifa = Number(req.body.tarifa);
+
+    if (!nitProveedor) return res.status(400).json({ error: 'Falta el NIT/cédula del proveedor.' });
+    if (!categoria) return res.status(400).json({ error: 'Falta la categoría.' });
+    if (!Number.isFinite(tarifa) || tarifa < 0 || tarifa > 1) return res.status(400).json({ error: 'La tarifa debe ser un número entre 0 y 1 (ej. 0.04 para 4%).' });
+
+    const { rows } = await pool.query(
+      `INSERT INTO tarifa_proveedor_aprendida (id, contador_id, nit_proveedor, categoria, tarifa, veces_confirmado)
+       VALUES ($1, $2, $3, $4, $5, 1)
+       ON CONFLICT (contador_id, nit_proveedor, categoria)
+       DO UPDATE SET tarifa = EXCLUDED.tarifa, veces_confirmado = tarifa_proveedor_aprendida.veces_confirmado + 1, updated_at = now()
+       RETURNING id, nit_proveedor, categoria, tarifa, veces_confirmado, updated_at`,
+      [crypto.randomUUID(), req.userId, nitProveedor, categoria, tarifa]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error guardando tarifa aprendida:', err);
+    res.status(500).json({ error: 'No se pudo guardar la tarifa aprendida.' });
+  }
+});
+
+// Corregir una tarifa aprendida existente -- ej. se aprendió mal (un
+// error de digitación en una factura anterior coincidió por casualidad
+// con la tarifa alta) y el contador la quiere dejar en el valor
+// correcto sin borrar el historial de veces_confirmado.
+app.put('/api/tarifas-aprendidas/:id', requireAuth, async (req, res) => {
+  try {
+    const tarifa = Number(req.body.tarifa);
+    if (!Number.isFinite(tarifa) || tarifa < 0 || tarifa > 1) return res.status(400).json({ error: 'La tarifa debe ser un número entre 0 y 1 (ej. 0.04 para 4%).' });
+
+    const { rows } = await pool.query(
+      `UPDATE tarifa_proveedor_aprendida SET tarifa = $1, updated_at = now()
+       WHERE id = $2 AND contador_id = $3
+       RETURNING id, nit_proveedor, categoria, tarifa, veces_confirmado, updated_at`,
+      [tarifa, req.params.id, req.userId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Tarifa aprendida no encontrada.' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error corrigiendo tarifa aprendida:', err);
+    res.status(500).json({ error: 'No se pudo corregir la tarifa aprendida.' });
+  }
+});
+
+// Olvidar una tarifa aprendida -- ej. el proveedor cambió de condición
+// (pasó a declarar renta, o dejó de hacerlo) y lo aprendido antes ya no
+// aplica; sin esto, calcularRetencionSugerida() seguiría usando el
+// valor viejo indefinidamente en vez de volver a mostrar el rango.
+app.delete('/api/tarifas-aprendidas/:id', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      'DELETE FROM tarifa_proveedor_aprendida WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Tarifa aprendida no encontrada.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando tarifa aprendida:', err);
+    res.status(500).json({ error: 'No se pudo eliminar la tarifa aprendida.' });
   }
 });
 
@@ -1082,6 +1340,20 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       }
     }
 
+    // Misma regla que ya usa generarAsientoEgreso() (tolerancia $1) --
+    // se calcula UNA vez aquí, aparte de esa función, para que quede
+    // guardada de forma permanente en la factura misma (columna
+    // valores_descuadrados) y no dependa de que se llegue a generar un
+    // asiento para que el problema quede registrado en algún lado. Solo
+    // se evalúa si ambos valores base están presentes -- una factura sin
+    // valor_sin_iva o sin valor_con_iva ya se rechaza antes por otro
+    // motivo (campo obligatorio vacío), no hace falta duplicarlo aquí.
+    const sinIvaGuardado = Number(req.body.valor_sin_iva) || 0;
+    const ivaGuardado = Number(req.body.valor_iva) || 0;
+    const conIvaGuardado = Number(req.body.valor_con_iva) || 0;
+    const valoresDescuadrados = sinIvaGuardado > 0 && conIvaGuardado > 0 &&
+      Math.abs(sinIvaGuardado + ivaGuardado - conIvaGuardado) > 1;
+
     const id = crypto.randomUUID();
     const values = SAVED_FIELDS.map((key) => {
       const val = req.body[key] ?? '';
@@ -1094,14 +1366,22 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       if (key === 'regimen_simple' || key === 'autorretenedor' || key === 'saldo_vencido_detectado' || key === 'anticipo_detectado') {
         return val === true || val === 'true';
       }
+      // confianza_campos es un objeto {campo: 0-1} -- se guarda como TEXT
+      // (igual que desglose_categorias), así que si llega como objeto
+      // (ej. reenviado tal cual vino de /api/extract) se serializa aquí;
+      // si ya llega como texto (JSON.stringify hecho en el navegador), se
+      // deja igual.
+      if (key === 'confianza_campos') {
+        return typeof val === 'string' ? val : JSON.stringify(val || {});
+      }
       return val;
     });
-    const columns = [...SAVED_FIELDS, 'contador_id'].join(', ');
-    const placeholders = [...SAVED_FIELDS, 'contador_id'].map((_, i) => `$${i + 2}`).join(', ');
+    const columns = [...SAVED_FIELDS, 'contador_id', 'valores_descuadrados'].join(', ');
+    const placeholders = [...SAVED_FIELDS, 'contador_id', 'valores_descuadrados'].map((_, i) => `$${i + 2}`).join(', ');
 
     const { rows } = await pool.query(
       `INSERT INTO invoices (id, ${columns}) VALUES ($1, ${placeholders}) RETURNING *`,
-      [id, ...values, req.userId]
+      [id, ...values, req.userId, valoresDescuadrados]
     );
 
     // Si el contador cambió la categoría que la IA sugirió, lo
@@ -1168,7 +1448,22 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       }
     }
 
-    res.status(201).json(rowToInvoice(rows[0]));
+    // Propone el asiento contable de esta factura (solo egresos por
+    // ahora, ver asientos.js) -- nunca bloquea ni cambia la respuesta
+    // del guardado si falla o si todavía no hay suficiente información.
+    await generarYGuardarAsientoParaFactura(req.userId, rows[0]);
+
+    const respuesta = rowToInvoice(rows[0]);
+    // La factura SÍ se guarda aunque los valores no cuadren (nunca se
+    // bloquea el guardado por esto -- es el contador quien decide si
+    // corrige o la deja así) -- pero la respuesta siempre lo dice
+    // explícitamente, para que quien llame a este endpoint (Escanear,
+    // Carga Masiva, o cualquier otro futuro) no tenga que adivinar por
+    // qué esta factura en particular no tiene asiento propuesto.
+    if (valoresDescuadrados) {
+      respuesta.advertencia = 'Se guardó, pero "Valor sin IVA + IVA" no coincide con "Valor con IVA" -- por eso no se generó un asiento contable automático. Corrige los valores o marca esta factura para revisarla después.';
+    }
+    res.status(201).json(respuesta);
   } catch (err) {
     console.error('Error guardando factura:', err);
     res.status(500).json({ error: 'No se pudo guardar la factura.' });
@@ -1220,10 +1515,45 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
     }
+    // Los 3 valores de retención son justo lo que decide cuánto se le
+    // acredita a cada cuenta de retención por pagar en el asiento -- si
+    // cambiaron, la propuesta anterior (si no estaba aprobada todavía)
+    // queda desactualizada y hay que regenerarla.
+    await generarYGuardarAsientoParaFactura(req.userId, rows[0]);
     res.json(rowToInvoice(rows[0]));
   } catch (err) {
     console.error('Error actualizando retención de factura:', err);
     res.status(500).json({ error: 'No se pudo actualizar la factura.' });
+  }
+});
+
+// El contador aprueba una factura ya revisada -- separado a propósito
+// de la aprobación del asiento (arriba) y de la tarifa aprendida: son
+// tres decisiones distintas que hoy viven en pantallas distintas (ver
+// hoja de ruta, Fase 2), aunque terminen unificándose en una sola
+// pantalla de revisión más adelante. Como con los asientos, nunca es
+// automático ni se puede desaprobar desde acá -- si el contador se
+// equivocó, corrige los datos primero (PUT de arriba) y aprueba de nuevo
+// cuando esté conforme.
+app.post('/api/invoices/:id/aprobar', requireAuth, async (req, res) => {
+  try {
+    const factura = await pool.query(
+      'SELECT id, aprobado_por_contador FROM invoices WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (factura.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
+    if (factura.rows[0].aprobado_por_contador) {
+      return res.status(400).json({ error: 'Esta factura ya estaba aprobada.' });
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE invoices SET aprobado_por_contador = true, aprobado_at = now() WHERE id = $1 RETURNING id, aprobado_por_contador, aprobado_at`,
+      [req.params.id]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error aprobando factura:', err);
+    res.status(500).json({ error: 'No se pudo aprobar la factura.' });
   }
 });
 
@@ -1239,6 +1569,112 @@ app.get('/api/invoices/:id/items', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error listando ítems de factura:', err);
     res.status(500).json({ error: 'No se pudieron cargar los ítems de la factura.' });
+  }
+});
+
+// ---------- Motor contable mínimo: plan de cuentas + asientos ----------
+
+// El plan de cuentas de este contador -- lo siembra si todavía no tiene
+// ninguna fila (contador que existía antes de este cambio, o algo falló
+// al crear la cuenta). Ordenado por código para que se vea como un
+// plan de cuentas de verdad, no como una lista sin orden.
+app.get('/api/plan-cuentas', requireAuth, async (req, res) => {
+  try {
+    const existe = await pool.query('SELECT 1 FROM plan_cuentas WHERE contador_id = $1 LIMIT 1', [req.userId]);
+    if (existe.rows.length === 0) await asegurarPlanCuentasContador(req.userId);
+    const { rows } = await pool.query(
+      'SELECT codigo, nombre, naturaleza, clase, activa FROM plan_cuentas WHERE contador_id = $1 ORDER BY codigo',
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error listando el plan de cuentas:', err);
+    res.status(500).json({ error: 'No se pudo cargar el plan de cuentas.' });
+  }
+});
+
+// Lista los asientos de este contador -- opcionalmente filtrados por
+// estado (?estado=propuesto o ?estado=aprobado) o por factura
+// (?invoice_id=...). Sin filtro, los más recientes primero -- así la
+// bandeja de "por aprobar" (estado=propuesto) es la vista que más se va
+// a usar en el día a día.
+app.get('/api/asientos', requireAuth, async (req, res) => {
+  try {
+    const condiciones = ['contador_id = $1'];
+    const valores = [req.userId];
+    if (req.query.estado) {
+      valores.push(req.query.estado);
+      condiciones.push(`estado = $${valores.length}`);
+    }
+    if (req.query.invoice_id) {
+      valores.push(req.query.invoice_id);
+      condiciones.push(`invoice_id = $${valores.length}`);
+    }
+    const { rows } = await pool.query(
+      `SELECT id, invoice_id, fecha, descripcion, estado, generado_por, aprobado_at, creado_at
+       FROM asientos_contables WHERE ${condiciones.join(' AND ')} ORDER BY creado_at DESC`,
+      valores
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error listando asientos:', err);
+    res.status(500).json({ error: 'No se pudieron cargar los asientos.' });
+  }
+});
+
+// Detalle de un asiento -- cabecera + sus líneas de débito/crédito, en
+// el orden en que se generaron.
+app.get('/api/asientos/:id', requireAuth, async (req, res) => {
+  try {
+    const cabecera = await pool.query(
+      `SELECT id, invoice_id, fecha, descripcion, estado, generado_por, aprobado_at, creado_at
+       FROM asientos_contables WHERE id = $1 AND contador_id = $2`,
+      [req.params.id, req.userId]
+    );
+    if (cabecera.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
+    const lineas = await pool.query(
+      'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
+      [req.params.id]
+    );
+    res.json({ ...cabecera.rows[0], lineas: lineas.rows });
+  } catch (err) {
+    console.error('Error cargando el detalle del asiento:', err);
+    res.status(500).json({ error: 'No se pudo cargar el asiento.' });
+  }
+});
+
+// El contador aprueba un asiento propuesto -- lo único que hace pasar
+// un asiento de "propuesto" a "aprobado" es esta ruta, nunca algo
+// automático. Antes de aprobar, se revalida que debe y haber cuadren
+// sobre las líneas YA GUARDADAS (no sobre la factura en este momento,
+// que pudo haber cambiado) -- una última red de seguridad antes de
+// dejar algo como confirmado.
+app.post('/api/asientos/:id/aprobar', requireAuth, async (req, res) => {
+  try {
+    const asiento = await pool.query(
+      'SELECT id, estado FROM asientos_contables WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (asiento.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
+    if (asiento.rows[0].estado === 'aprobado') {
+      return res.status(400).json({ error: 'Este asiento ya estaba aprobado.' });
+    }
+
+    const lineas = await pool.query('SELECT debito, credito FROM asiento_lineas WHERE asiento_id = $1', [req.params.id]);
+    const debe = lineas.rows.reduce((s, l) => s + Number(l.debito), 0);
+    const haber = lineas.rows.reduce((s, l) => s + Number(l.credito), 0);
+    if (Math.abs(debe - haber) > 1) {
+      return res.status(400).json({ error: 'Este asiento no cuadra (débito y crédito no son iguales) -- no se puede aprobar así.' });
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE asientos_contables SET estado = 'aprobado', aprobado_at = now() WHERE id = $1 RETURNING id, estado, aprobado_at`,
+      [req.params.id]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error aprobando asiento:', err);
+    res.status(500).json({ error: 'No se pudo aprobar el asiento.' });
   }
 });
 
@@ -1622,7 +2058,8 @@ const CAMPOS_FACTURA_JSON = `{
   "valor_letras_numero": "SOLO si llenaste valor_letras_texto: convierte ESAS PALABRAS a un número entero (ej. si el texto dice 'un millón cien mil pesos', este campo es 1100000), para que el sistema pueda comparar si coincide con el valor en números del documento -- esto es clave porque a veces el valor escrito en letras NO coincide con el valor escrito en números (un error de digitación o de imprenta en el documento original), y detectar esa diferencia es importante. Conviértelo con cuidado, palabra por palabra, sin asumir que necesariamente es igual a valor_con_iva. Si valor_letras_texto quedó vacío, usa 0 en este campo.",
   "categoria_concepto": "clasifica el concepto de la factura en UNA de estas categorías oficiales de retención en la fuente de la DIAN (usa exactamente uno de estos valores, en minúsculas): 'compras' (bienes/productos físicos generales, ej. útiles, insumos, mercancía), 'compras_tarjeta' (SOLO si el documento indica explícitamente que se pagó con tarjeta débito o crédito), 'servicios' (mano de obra operativa sin título profesional, ej. limpieza general, mantenimiento), 'honorarios_juridica' (servicio profesional facturado por una persona jurídica/empresa, ej. una firma de asesoría), 'honorarios_natural' (servicio profesional facturado por una persona natural con título, ej. un contador o abogado independiente), 'arrendamiento_muebles' (alquiler de equipos, vehículos, maquinaria), 'arrendamiento_inmuebles' (alquiler de local, oficina o bodega), 'transporte_carga' (transporte de mercancía/carga), 'transporte_pasajeros' (transporte terrestre de personas), 'licenciamiento_software' (licencias o derecho de uso de software), 'vigilancia_aseo' (servicios de vigilancia o aseo prestados por una empresa especializada), 'servicios_temporales' (suministro de personal temporal por una Empresa de Servicios Temporales -- EST -- legalmente constituida, distinto de una simple prestación de servicios), 'hoteles_restaurantes' (alojamiento o alimentación), 'servicios_publicos' (usa SIEMPRE esta categoría cuando tipo_documento es 'factura_servicios_publicos', sin importar cuántos servicios distintos venga combinando el documento -- acueducto, alcantarillado, energía, aseo, etc. son todos 'servicios_publicos'), 'otro' (si no encaja claramente en ninguna). Elige la que mejor describa la naturaleza real de lo facturado, no solo el nombre del producto.",
   "desglose_categorias": "IMPORTANTE: revisa la tabla de ítems de la factura línea por línea. Si TODOS los ítems son de la misma naturaleza (ej. todos productos, o todo un solo servicio), deja este campo como un objeto vacío {}. Si la factura mezcla ítems de naturaleza distinta (ej. productos Y mano de obra/servicio en la misma factura, como suele pasar en talleres, ferreterías o mantenimiento), agrupa el subtotal (sin IVA) de cada ítem según su categoría real (usa las mismas categorías del campo categoria_concepto) y devuelve un objeto JSON con cada categoría encontrada y la suma de sus ítems, ej: {\"compras\": 442000, \"servicios\": 140000}. La suma de todos los valores del objeto debe ser igual al subtotal total de la factura (valor_sin_iva). Nunca inventes una categoría que no tenga ítems reales detrás.",
-  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). EXCEPCIÓN -- factura de servicios públicos: cuando tipo_documento es 'factura_servicios_publicos' y el documento combina varios servicios (ej. acueducto + alcantarillado + energía + aseo, cada uno con su propio subtotal), NO los separes en varios ítems -- devuelve siempre un arreglo con UN SOLO elemento por el valor TOTAL de la factura (todos los servicios sumados), \"descripcion\": 'Servicios públicos' seguido de cuáles servicios incluye (ej. 'Servicios públicos (acueducto, alcantarillado, energía, aseo)'), \"categoria_concepto\": 'servicios_publicos'. Nunca inventes ítems que no estén realmente en el documento."
+  "items": "El desglose línea por línea COMPLETO de la factura -- un arreglo con CADA ítem real que aparece en la tabla de productos/servicios del documento, sin resumir ni agrupar. Cada elemento del arreglo debe tener esta forma: {\"descripcion\": \"texto breve del ítem tal como aparece\", \"cantidad\": cantidad si aparece (número), o cadena vacía si no aparece, \"valor_unitario\": valor unitario en pesos ENTEROS si aparece, o 0 si no aparece, \"subtotal\": subtotal de ESA línea SIN IVA, en pesos ENTEROS (regla de formato de más abajo), \"categoria_concepto\": clasifica ESTE ítem puntual en UNA de las mismas categorías oficiales de retención listadas en el campo categoria_concepto de arriba (usa exactamente uno de esos valores, en minúsculas), según la naturaleza real de ESE ítem, no de la factura completa, \"aiu\": SOLO si categoria_concepto de ESTE ítem es 'vigilancia_aseo' o 'servicios_temporales' Y el documento desglosa explícitamente el componente de AIU (Administración + Imprevistos + Utilidad, a veces solo 'utilidad' o escrito como 'AIU') para esa línea, el valor de ese componente en pesos ENTEROS -- cadena vacía en cualquier otro caso, incluyendo cuando no estés seguro (la mayoría de facturas de este tipo NO desglosan el AIU, y no hay que inventarlo)}. La suma de todos los \"subtotal\" del arreglo debe ser igual (o muy cercana, por redondeo) al valor_sin_iva total de la factura. Si el documento NO trae una tabla de ítems detallada (ej. una cuenta de cobro con un solo concepto global, sin líneas separadas), devuelve un arreglo con UN SOLO elemento que represente el total de la factura, usando el mismo concepto y la misma categoria_concepto que ya extrajiste arriba (y el mismo criterio de \"aiu\" si aplica). EXCEPCIÓN -- factura de servicios públicos: cuando tipo_documento es 'factura_servicios_publicos' y el documento combina varios servicios (ej. acueducto + alcantarillado + energía + aseo, cada uno con su propio subtotal), NO los separes en varios ítems -- devuelve siempre un arreglo con UN SOLO elemento por el valor TOTAL de la factura (todos los servicios sumados), \"descripcion\": 'Servicios públicos' seguido de cuáles servicios incluye (ej. 'Servicios públicos (acueducto, alcantarillado, energía, aseo)'), \"categoria_concepto\": 'servicios_publicos'. Nunca inventes ítems que no estén realmente en el documento.",
+  "confianza_campos": "un objeto con un puntaje de confianza NUMÉRICO de 0 a 1 (nunca texto) para cada uno de estos campos, indicando qué tan seguro estás de haber leído ESE dato correctamente en el documento -- 1 significa perfectamente legible y sin ambigüedad, 0.5 dudoso o parcialmente ilegible (ej. una cifra borrosa, un NIT con un dígito que podría ser 3 u 8), 0 no pudiste leerlo y lo dejaste vacío o en 0. Incluye exactamente estas claves: nit_cc, nombre_razon_social, fecha_factura, valor_sin_iva, valor_iva, valor_con_iva, rete_fuente, rete_iva, rete_ica, categoria_concepto. Ejemplo: {\"nit_cc\": 0.95, \"nombre_razon_social\": 1, \"fecha_factura\": 0.6, \"valor_sin_iva\": 1, \"valor_iva\": 1, \"valor_con_iva\": 1, \"rete_fuente\": 0.4, \"rete_iva\": 1, \"rete_ica\": 1, \"categoria_concepto\": 0.8}. Sé honesto -- si el documento está borroso, mal escaneado, o girado, o un valor no se alcanza a distinguir con certeza, usa un puntaje bajo en vez de fingir seguridad. No bajes el puntaje solo porque tuviste que interpretar el formato (punto/coma) de un valor que sí se lee con claridad."
 }`;
 
 // Reglas de formato/validación de valores -- también compartidas, se
@@ -1706,6 +2143,34 @@ const TIPOS_DOCUMENTO_VALIDOS = ['factura_venta', 'cuenta_cobro', 'factura_servi
 // ... } para que cada llamador decida qué hacer con eso (procesar UN
 // documento aborta con un 422; procesar un PAQUETE solo marca ESE
 // documento puntual como rechazado y sigue con los demás).
+// Campos sobre los que le pedimos a Gemini un puntaje de confianza --
+// deliberadamente solo los que más le importan al contador para decidir
+// si revisar la factura con lupa antes de guardarla (identidad del
+// tercero, fecha, y los valores que alimentan directamente el asiento
+// contable y las retenciones). No se pide confianza de TODOS los campos
+// para no inflar aún más un prompt que ya es largo.
+const CAMPOS_CON_CONFIANZA = [
+  'nit_cc', 'nombre_razon_social', 'fecha_factura',
+  'valor_sin_iva', 'valor_iva', 'valor_con_iva',
+  'rete_fuente', 'rete_iva', 'rete_ica', 'categoria_concepto',
+];
+
+// Nunca confiar ciegamente en que Gemini devolvió el objeto con la forma
+// exacta que se le pidió -- si viene mal formado (falta una clave, un
+// valor no numérico, fuera de 0-1), se descarta ESE campo puntual en vez
+// de tumbar toda la extracción. Un campo ausente en el resultado final
+// significa "sin dato de confianza" (la futura pantalla de revisión no
+// debería resaltarlo ni como confiable ni como dudoso).
+function sanitizarConfianzaCampos(crudo) {
+  const limpio = {};
+  if (!crudo || typeof crudo !== 'object' || Array.isArray(crudo)) return limpio;
+  for (const campo of CAMPOS_CON_CONFIANZA) {
+    const valor = Number(crudo[campo]);
+    if (!isNaN(valor)) limpio[campo] = Math.max(0, Math.min(1, valor));
+  }
+  return limpio;
+}
+
 async function posprocesarDocumentoExtraido(userId, parsed) {
   if (parsed.documento_valido === false || (parsed.tipo_documento && !TIPOS_DOCUMENTO_VALIDOS.includes(parsed.tipo_documento))) {
     const motivo = parsed.motivo_rechazo ? ` ${parsed.motivo_rechazo}.` : '';
@@ -1721,6 +2186,8 @@ async function posprocesarDocumentoExtraido(userId, parsed) {
       parsed[key] = Math.round(Number(parsed[key]));
     }
   }
+
+  parsed.confianza_campos = sanitizarConfianzaCampos(parsed.confianza_campos);
 
   parsed.categoria_concepto_ia = parsed.categoria_concepto || '';
   try {
@@ -2599,16 +3066,31 @@ app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
   }
 });
 
-app.listen(PORT, async () => {
+// OJO -- antes `ensureSchema()`/`lotes.init()` corrían DENTRO del
+// callback de `app.listen()`, lo que significa que Express ya estaba
+// aceptando conexiones (el puerto queda abierto en cuanto se llama
+// `app.listen`, no cuando termina su callback) mientras ese `await`
+// seguía en curso. Cualquier request que llegara en esa ventana -- ej.
+// el avisito global de lotes pidiendo /api/lotes/activo apenas carga
+// cualquier página -- caía en lotes.js con su `pool` interno todavía
+// sin asignar (`lotes.init()` no había corrido todavía), y explotaba
+// con "Cannot read properties of undefined (reading 'query')". Con una
+// base de datos remota (Supabase) esa ventana es más larga que en
+// local, así que se veía siempre al arrancar. Ahora todo el setup
+// async corre ANTES de abrir el puerto -- nada puede llegar a un
+// `pool`/`lotes` sin inicializar.
+(async () => {
   try {
     await ensureSchema();
     lotes.init({ pool, crypto, procesarExtraccionFactura, procesarPaqueteDocumento, detectarClienteYMovimientoServidor });
     await lotes.asegurarSchemaLotes();
-    lotes.dispararProcesamiento(); // por si el servidor se reinició con un lote a medias
-    console.log(`\n✔ Enlaza corriendo en http://localhost:${PORT}`);
-    console.log(`✔ Base de datos conectada y lista\n`);
   } catch (err) {
     console.error('\n[ERROR] No se pudo conectar/preparar la base de datos:', err.message);
     console.error('Verifica que tu DATABASE_URL en .env sea correcta.\n');
   }
-});
+  app.listen(PORT, () => {
+    lotes.dispararProcesamiento(); // por si el servidor se reinició con un lote a medias
+    console.log(`\n✔ Enlaza corriendo en http://localhost:${PORT}`);
+    console.log(`✔ Base de datos conectada y lista\n`);
+  });
+})();

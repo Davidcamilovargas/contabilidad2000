@@ -27,7 +27,19 @@ function cabecerasSeguridad(req, res, next) {
   res.setHeader('X-Frame-Options', 'DENY'); // nadie debería poder meter Enlaza en un <iframe> ajeno (clickjacking)
   res.setHeader('X-DNS-Prefetch-Control', 'off');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  // OJO -- 'same-origin' (el valor "estricto" típico de un hardening tipo
+  // helmet) rompe el login con Google: el botón de Sign In With Google
+  // abre un popup propio (accounts.google.com/gsi/transform) que le
+  // reporta la sesión de vuelta a login.html vía `window.opener.postMessage(...)`.
+  // Con COOP:'same-origin', el navegador aísla el grupo de contexto de
+  // navegación y `window.opener` queda `null` DENTRO del popup de Google
+  // -- de ahí el "Cannot read properties of null (reading 'postMessage')"
+  // que se ve en la consola y el popup que se queda en blanco sin volver
+  // nunca a cerrarse. 'same-origin-allow-popups' sigue aislando de
+  // ventanas de OTROS orígenes (la protección que de verdad importa),
+  // pero permite que un popup que ESTA página abrió pueda hablarle de
+  // vuelta -- que es exactamente lo que necesita el login de Google.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   // HSTS solo tiene sentido si la conexión ya es HTTPS (si no, el propio
   // navegador la ignora) -- con `trust proxy` activado (ver server.js),
   // req.secure ya refleja el X-Forwarded-Proto que manda Render.

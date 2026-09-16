@@ -164,6 +164,8 @@
       <a href="/escanear.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2l1.5-2h9L18 8h2a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Escanear</a>
       <a href="/masivo.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0-10l-3.5 3.5M12 4l3.5 3.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>Carga masiva</a>
       <a href="/integraciones.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6M10.5 6.5l1-1a3 3 0 014.24 4.24l-1 1M13.5 17.5l-1 1a3 3 0 01-4.24-4.24l1-1"/></svg>Integraciones</a>
+      <a href="/revision.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6a2 2 0 012 2v1H7V6a2 2 0 012-2z"/><rect x="5" y="6" width="14" height="15" rx="2"/><path d="M9 13l2.2 2.2L15.5 11"/></svg>Revisión</a>
+      <a href="/configuracion.html" class="sidebar-link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Configuración</a>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-foot">C&oacute;lombia &middot; Enlaza</div>
@@ -427,7 +429,16 @@ async function regenerar(){
       }
     }));
 
-    const datos = calcularInforme(cliente, egresos, ingresos, itemsPorFactura);
+    // Acumulado anual previo por NIT+categoría+año, SOLO para las
+    // categorías con criterioTarifa:'acumulado_anual' (hoy, únicamente
+    // honorarios_natural) -- sin esto, calcularRetencionSugerida() nunca
+    // resuelve la tarifa 10%/11% para esas facturas, se queda siempre en
+    // el rango completo, y las alertas de la sección 5 no pueden marcar
+    // como "mal aplicada" una tarifa que en realidad ya se sabía cuál era
+    // (mismo dato que ya usan Escanear/Carga Masiva vía /api/acumulado-categoria).
+    const acumuladosPorClave = await cargarAcumuladosNecesarios(egresos);
+
+    const datos = calcularInforme(cliente, egresos, ingresos, itemsPorFactura, acumuladosPorClave);
     renderDiagnostico(datos);
     renderBases(datos);
     renderMatriz(datos);
@@ -453,21 +464,70 @@ function sintetizarItem(inv){
   };
 }
 
+// Misma clave en el cargador (cargarAcumuladosNecesarios) y en el
+// consumidor (calcularInforme) -- si alguna vez se te ocurre cambiar el
+// formato, cámbialo en los dos lugares a la vez.
+function claveAcumulado(nit, categoria, anio){
+  return `${nit || ''}|${categoria}|${anio}`;
+}
+
+// Antes de calcular, junta todos los NIT+categoría+año de este período
+// que necesitan el acumulado anual (solo categorías con criterioTarifa
+// 'acumulado_anual', hoy únicamente honorarios_natural) y los pide todos
+// en paralelo -- un solo round-trip por combinación distinta, nunca uno
+// por factura repetida.
+async function cargarAcumuladosNecesarios(egresos){
+  const claves = new Map(); // clave -> {nit, categoria, anio}
+  egresos.forEach((inv) => {
+    let desglose = {};
+    try { desglose = JSON.parse(inv.desglose_categorias || '{}') || {}; } catch (e) { desglose = {}; }
+    const categorias = Object.keys(desglose).length > 0 ? Object.keys(desglose) : [(inv.categoria_concepto || 'otro').toLowerCase()];
+    const anio = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(inv.fecha_factura) : new Date().getFullYear();
+    categorias.forEach((categoria) => {
+      if (!inv.nit_cc || typeof esCategoriaCriterioAcumulado !== 'function' || !esCategoriaCriterioAcumulado(categoria)) return;
+      claves.set(claveAcumulado(inv.nit_cc, categoria, anio), { nit: inv.nit_cc, categoria, anio });
+    });
+  });
+
+  const resultado = {};
+  await Promise.all([...claves.entries()].map(async ([clave, { nit, categoria, anio }]) => {
+    try {
+      const r = await fetch(`/api/acumulado-categoria?nit=${encodeURIComponent(nit)}&categoria=${encodeURIComponent(categoria)}&anio=${anio}`);
+      const resp = r.ok ? await r.json() : null;
+      if (resp && resp.aplica) resultado[clave] = resp.acumulado;
+    } catch (e) { /* si falla, esa combinación simplemente se queda sin acumulado -- cae al rango, como antes */ }
+  }));
+  return resultado;
+}
+
 // ---------- Cálculo central: cruza cada factura contra el motor de
 // retenciones.js (el mismo que usan Escanear/Carga masiva) y arma las
 // estructuras que consumen las 5 secciones. Nada de esto llama a la IA
 // -- todo sale de columnas ya guardadas + las mismas funciones puras. ----------
-function calcularInforme(cliente, egresos, ingresos, itemsPorFactura){
+function calcularInforme(cliente, egresos, ingresos, itemsPorFactura, acumuladosPorClave){
+  acumuladosPorClave = acumuladosPorClave || {};
   const filas = egresos.map((inv) => {
     const perfilTercero = perfilFiscalDelNit(inv.nit_cc);
-    const sugerido = calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero);
-    const reteIvaSugerido = calcularReteIvaSugerido(inv, cliente, perfilTercero);
-    const tarifaIca = inv.tarifa_ica_id ? tarifasIcaPorId[inv.tarifa_ica_id] : null;
-    const reteIcaSugerido = calcularReteIcaSugerido(inv, tarifaIca);
 
     let desglose = {};
     try { desglose = JSON.parse(inv.desglose_categorias || '{}') || {}; } catch (e) { desglose = {}; }
     const categorias = Object.keys(desglose).length > 0 ? Object.keys(desglose) : [(inv.categoria_concepto || 'otro').toLowerCase()];
+
+    // { categoria: montoAcumuladoAnualPrevio } SOLO con lo que de verdad
+    // se pudo cargar para el NIT+año de ESTA factura -- si no hay dato
+    // para una categoría, calcularRetencionSugerida cae de vuelta al
+    // rango bajo-alto, igual que hacía antes de este ajuste.
+    const anio = (typeof anioDeFechaFactura === 'function') ? anioDeFechaFactura(inv.fecha_factura) : new Date().getFullYear();
+    const acumuladosDeEstaFactura = {};
+    categorias.forEach((categoria) => {
+      const clave = claveAcumulado(inv.nit_cc, categoria, anio);
+      if (acumuladosPorClave[clave] !== undefined) acumuladosDeEstaFactura[categoria] = acumuladosPorClave[clave];
+    });
+
+    const sugerido = calcularRetencionSugerida(inv, cliente, tarifasAprendidas, perfilTercero, acumuladosDeEstaFactura);
+    const reteIvaSugerido = calcularReteIvaSugerido(inv, cliente, perfilTercero);
+    const tarifaIca = inv.tarifa_ica_id ? tarifasIcaPorId[inv.tarifa_ica_id] : null;
+    const reteIcaSugerido = calcularReteIcaSugerido(inv, tarifaIca);
 
     return { inv, perfilTercero, sugerido, reteIvaSugerido, reteIcaSugerido, tarifaIca, desglose, categorias };
   });
@@ -789,7 +849,7 @@ function renderAlertas(datos){
     alertas.push({ severidad: 'media', texto: `${escapeHtml(cliente.nombre)} no está marcado como agente retenedor -- por eso no se evaluaron retenciones en este período. Si esto cambió, actualiza su ficha.` });
   }
 
-  filas.forEach(({ inv, sugerido, reteIvaSugerido }) => {
+  filas.forEach(({ inv, sugerido, reteIvaSugerido, reteIcaSugerido, tarifaIca }) => {
     const ref = `${escapeHtml(inv.letras_fe || '')}${escapeHtml(inv.numeros_fe || '(sin número)')} — ${escapeHtml(inv.nombre_razon_social || '')}`;
     if (sugerido && sugerido.requiereAiu) {
       const detalle = (sugerido.categoriasFaltantesAiu || []).map(f => `${CATEGORIA_LABEL(f.categoria)} (mínimo presuntivo ${fmtCOP(f.aiuMinimoPresuntivo)} si no se declara)`).join(', ');
@@ -816,6 +876,21 @@ function renderAlertas(datos){
         }
       }
     }
+    if (reteIcaSugerido) {
+      const ricaGuardado = Number(inv.rete_ica) || 0;
+      if (Math.abs(ricaGuardado - reteIcaSugerido.monto) > TOL) {
+        if (ricaGuardado === 0) {
+          alertas.push({ severidad: 'alta', texto: `Factura ${ref}: el motor sugiere Rete ICA de ${fmtCOP(reteIcaSugerido.monto)}${tarifaIca && tarifaIca.municipio ? ` (tarifa ${escapeHtml(tarifaIca.municipio)})` : ''} pero quedó guardada en $0 -- posible retención no practicada.` });
+        } else {
+          alertas.push({ severidad: 'media', texto: `Factura ${ref}: Rete ICA guardada (${fmtCOP(ricaGuardado)}) no coincide con el estimado (${fmtCOP(reteIcaSugerido.monto)}).` });
+        }
+      }
+    } else if (inv.tarifa_ica_id === null || inv.tarifa_ica_id === undefined) {
+      const ricaGuardado = Number(inv.rete_ica) || 0;
+      if (ricaGuardado === 0) {
+        alertas.push({ severidad: 'info', texto: `Factura ${ref}: no tiene tarifa ICA elegida -- si aplica Rete ICA en este municipio, selecciónala en Configuración y vuelve a calcular.` });
+      }
+    }
     if ((inv.categoria_concepto || 'otro').toLowerCase() === 'otro') {
       alertas.push({ severidad: 'info', texto: `Factura ${ref}: quedó en la categoría "Otro", sin tarifa de retención confirmada -- revísala manualmente si aplica alguna retención.` });
     }
@@ -824,6 +899,25 @@ function renderAlertas(datos){
   if (ingresos.length > 0) {
     const totalIngresos = ingresos.reduce((s, i) => s + (Number(i.valor_con_iva) || 0), 0);
     alertas.push({ severidad: 'info', texto: `${ingresos.length} factura(s) de ingreso (ventas) en el período por ${fmtCOP(totalIngresos)} -- fuera del alcance de este informe (que cubre retenciones practicadas como comprador). Si a tu cliente le practicaron retenciones como vendedor, revísalas aparte.` });
+  }
+
+  // Todos los umbrales/montos de este informe (Rete Fuente, Rete IVA,
+  // Rete ICA) dependen de la UVT del año de cada factura -- si ese año
+  // todavía no está en UVT_POR_ANIO (retenciones.js), el cálculo cae en
+  // silencio a la UVT del año más reciente conocido. Eso es razonable
+  // como respaldo, pero el contador necesita verlo en el informe, no
+  // descubrirlo después de haberlo entregado ya.
+  if (typeof anioDeFechaFactura === 'function' && typeof esUvtDeRespaldo === 'function') {
+    const aniosDeRespaldo = new Set();
+    filas.forEach(({ inv }) => {
+      const anio = anioDeFechaFactura(inv.fecha_factura);
+      if (esUvtDeRespaldo(anio)) aniosDeRespaldo.add(anio);
+    });
+    if (aniosDeRespaldo.size > 0) {
+      const listaAnios = [...aniosDeRespaldo].sort().join(', ');
+      const uvtRespaldo = (typeof UVT_ANIO_MAS_RECIENTE !== 'undefined') ? UVT_ANIO_MAS_RECIENTE : 'el año más reciente conocido';
+      alertas.push({ severidad: 'media', texto: `UVT de respaldo: este informe incluye facturas de ${listaAnios}, año(s) sin la UVT oficial registrada todavía -- los cálculos de retención de esas facturas usaron la UVT de ${uvtRespaldo} como estimado, verifica antes de entregar el informe si ya se publicó/registró la UVT real.` });
+    }
   }
 
   if (alertas.length === 0) {

@@ -142,6 +142,18 @@ function valorUvt(anio) {
   return UVT_POR_ANIO[UVT_ANIO_MAS_RECIENTE];
 }
 
+// true cuando valorUvt(anio) tuvo que caer al valor de respaldo porque
+// todavía no se agregó la fila de ese año en UVT_POR_ANIO -- ej. ya
+// estamos en un año nuevo y la DIAN publicó la UVT pero nadie actualizó
+// esta tabla. Antes esto pasaba en silencio (el cálculo seguía andando
+// con un número "casi correcto" sin que el contador se enterara); ahora
+// las pantallas que muestran retenciones sugeridas pueden usar esto para
+// avisar explícitamente que el umbral usado es un estimado, no el UVT
+// oficial de la factura.
+function esUvtDeRespaldo(anio) {
+  return UVT_POR_ANIO[Number(anio)] == null;
+}
+
 // La fecha de factura en esta app siempre viene como texto DD/MM/AAAA.
 function anioDeFechaFactura(fechaFactura) {
   const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(fechaFactura || '').trim());
@@ -1081,6 +1093,7 @@ if (typeof module !== 'undefined' && module.exports) {
     umbralAcumuladoPesos,
     montoCategoriaEnFactura,
     valorUvt,
+    esUvtDeRespaldo,
     anioDeFechaFactura,
     umbralPesos,
     perfilFiscalEfectivo,
