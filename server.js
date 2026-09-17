@@ -457,13 +457,57 @@ async function ensureSchema() {
   // Se asigna manualmente hoy (desde Supabase) hasta que exista cobro
   // real; "solo" es el valor por defecto para cualquier cuenta nueva.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'solo';`);
-  // Columna de rol -- todavía no hay ninguna pantalla que la use ni
-  // ninguna ruta que la exija (eso es la tarea de "Multiempresa + roles"
-  // más grande, con su propia jerarquía firma -> usuarios -> empresas).
-  // Se agrega ya para que ese cambio, cuando llegue, no tenga que hacer
-  // una migración sobre datos existentes: todo usuario de hoy queda
-  // como 'contador' (dueño de su cuenta), que es exactamente lo que es.
+  // Columna de rol -- ahora sí tiene efecto (ver requireAuth y
+  // requireRole más abajo): administrador, contador, auxiliar_contable,
+  // auxiliar_administrativo, solo_lectura.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'contador';`);
+
+  // ---------- Multiempresa: firma -> usuarios ----------
+  //
+  // En vez de una tabla "firmas" separada, se reusa la propia tabla
+  // `users`: cada fila de `users` ya es dueña de todos sus `clients`,
+  // `invoices`, etc. vía `contador_id` -- eso NO cambia. Lo único nuevo
+  // es `firma_id`: el id del usuario "fundador" de la firma, el mismo
+  // valor que YA se usa como `contador_id` en cada tabla del sistema.
+  // Así, ni una sola de las ~90 consultas `WHERE contador_id = $1` que
+  // ya existían en este archivo tuvo que tocarse -- lo que cambió es
+  // QUÉ id se les pasa: antes siempre `req.userId` (la persona que
+  // inició sesión), ahora `req.firmaId` (la firma a la que pertenece esa
+  // persona, resuelta en requireAuth). Para una cuenta que sigue sola
+  // (sin invitar a nadie), `firma_id = id` siempre, así que
+  // `req.firmaId === req.userId` y nada cambia en la práctica.
+  //
+  // `nombre_firma` es opcional -- si el administrador no le pone un
+  // nombre a su firma, la UI usa su propio nombre de pila como respaldo.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS firma_id UUID;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nombre_firma TEXT DEFAULT '';`);
+  // Backfill de una sola vez: toda cuenta que exista desde antes de este
+  // cambio (firma_id todavía NULL) se vuelve fundadora de su propia
+  // firma (firma_id = su propio id) y queda como 'administrador' -- es
+  // literalmente lo que ya era (dueña de todos sus datos), solo que
+  // ahora el rol lo refleja explícitamente. El WHERE firma_id IS NULL
+  // hace que esto corra una única vez por cuenta, nunca de nuevo (así
+  // que si un administrador más adelante se auto-degrada a 'contador',
+  // este backfill no lo va a resucitar en el próximo arranque).
+  await pool.query(`UPDATE users SET firma_id = id, role = 'administrador' WHERE firma_id IS NULL;`);
+
+  // Invitaciones pendientes -- alguien todavía sin cuenta en Enlaza
+  // (identificado solo por correo) al que un administrador ya le asignó
+  // un rol dentro de su firma. Cuando esa persona inicie sesión con
+  // Google por primera vez, si su correo coincide con una invitación
+  // pendiente, se une a esa firma con ese rol en vez de fundar una
+  // firma propia nueva (ver /auth/google más abajo).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invitaciones_firma (
+      id UUID PRIMARY KEY,
+      firma_id UUID NOT NULL,
+      email TEXT NOT NULL,
+      rol TEXT NOT NULL,
+      invitado_por UUID,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invitaciones_firma_email ON invitaciones_firma (LOWER(email));`);
 
   // Integraciones con software contable externo (Alegra, y a futuro
   // Siigo u otros) -- una fila por contador+proveedor conectado. El
@@ -633,7 +677,7 @@ const limitadorIA = crearLimitador({
   ventanaMs: 15 * 60 * 1000,
   maximo: 60,
   mensaje: 'Demasiadas facturas/solicitudes de IA en poco tiempo -- espera unos minutos e intenta de nuevo.',
-  obtenerClave: (req) => req.userId,
+  obtenerClave: (req) => req.firmaId,
 });
 
 // El Client ID de Google NO es secreto (a diferencia del Client Secret,
@@ -659,18 +703,62 @@ function issueSessionCookie(res, userId) {
   });
 }
 
-// Verifica el JWT de la cookie. Si es válido, agrega req.userId.
+// Los 5 roles de "Multiempresa + roles" -- administrador puede gestionar
+// la firma (invitar/quitar gente, cambiar roles, Configuración e
+// integraciones); contador tiene el mismo alcance operativo del día a
+// día (aprobar, eliminar, configurar tarifas) pero no administra la
+// firma; auxiliar_contable puede cargar y editar facturas pero no
+// aprobar ni eliminar; auxiliar_administrativo solo puede escanear/subir
+// documentos (captura), sin ver ni tocar cifras ya aprobadas; y
+// solo_lectura únicamente consulta reportes, nunca escribe nada.
+const ROLES_VALIDOS = ['administrador', 'contador', 'auxiliar_contable', 'auxiliar_administrativo', 'solo_lectura'];
+
+// Verifica el JWT de la cookie y, si es válido, resuelve TRES cosas:
+//  - req.userId: la identidad real de quien inició sesión (para /api/me,
+//    auditoría de "quién lo hizo", y el limitador de tasa de IA).
+//  - req.firmaId: la firma a la que pertenece -- el id que se usa en
+//    TODAS las tablas de negocio (clients, invoices, tarifas, etc.) en
+//    vez de req.userId, para que los datos se compartan entre todos los
+//    usuarios de una misma firma. Para una cuenta que nunca invitó a
+//    nadie, firma_id === userId siempre.
+//  - req.rol: uno de ROLES_VALIDOS, usado por requireRole() más abajo.
 // Si no, responde 401 en JSON (nunca redirige -- esto protege rutas /api/*).
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const token = req.cookies?.kardex_session;
   if (!token) return res.status(401).json({ error: 'No has iniciado sesión.' });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     req.userId = payload.userId;
+    const { rows } = await pool.query('SELECT firma_id, role FROM users WHERE id = $1', [req.userId]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Tu cuenta ya no existe. Inicia sesión de nuevo.' });
+    // Respaldo por si acaso (no debería pasar tras el backfill de
+    // ensureSchema, pero evita un req.firmaId nulo si algo raro pasó).
+    req.firmaId = rows[0].firma_id || req.userId;
+    req.rol = rows[0].role || 'contador';
+    // solo_lectura nunca escribe nada, en ninguna pantalla -- se aplica
+    // una sola vez aquí (en vez de agregar requireRole a cada una de las
+    // ~35 rutas que modifican algo) porque la regla es absoluta: no hay
+    // ninguna excepción de "esto sí lo puede crear/editar". GET/HEAD
+    // siempre pasan (son solo lectura, que es justo lo que sí puede hacer).
+    if (req.rol === 'solo_lectura' && !['GET', 'HEAD'].includes(req.method)) {
+      return res.status(403).json({ error: 'Tu rol es de solo lectura -- no puedes crear, editar ni eliminar nada.' });
+    }
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Tu sesión expiró o no es válida. Inicia sesión de nuevo.' });
   }
+}
+
+// Restringe una ruta a ciertos roles -- se usa DESPUÉS de requireAuth
+// (necesita req.rol ya resuelto). Devuelve 403, nunca 401 (la sesión sí
+// es válida, solo que ese rol no puede hacer esto).
+function requireRole(...rolesPermitidos) {
+  return function (req, res, next) {
+    if (!rolesPermitidos.includes(req.rol)) {
+      return res.status(403).json({ error: 'Tu rol dentro de la firma no tiene permiso para hacer esto.' });
+    }
+    next();
+  };
 }
 
 // Recibe el token que entrega el botón de Google (Google Identity
@@ -704,19 +792,39 @@ app.post('/auth/google', limitadorAuth, async (req, res) => {
     if (existing.rows.length > 0) {
       user = existing.rows[0];
     } else {
+      // Cuenta nueva -- antes de fundar su propia firma, revisa si algún
+      // administrador ya la invitó por este correo. Si hay una
+      // invitación pendiente, se une a esa firma con el rol que le
+      // asignaron, en vez de quedar como fundadora de una firma vacía.
+      // Si hay varias invitaciones para el mismo correo (poco probable),
+      // usa la más reciente y descarta el resto.
+      const invRes = await pool.query(
+        'SELECT * FROM invitaciones_firma WHERE LOWER(email) = LOWER($1) ORDER BY created_at DESC LIMIT 1',
+        [email]
+      );
+      const invitacion = invRes.rows.length > 0 ? invRes.rows[0] : null;
+
       const id = crypto.randomUUID();
+      const firmaId = invitacion ? invitacion.firma_id : id;
+      const rol = invitacion ? invitacion.rol : 'administrador';
       const { rows } = await pool.query(
-        'INSERT INTO users (id, google_id, email, nombre, avatar_url) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-        [id, googleId, email, nombre, avatarUrl]
+        'INSERT INTO users (id, google_id, email, nombre, avatar_url, firma_id, role) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [id, googleId, email, nombre, avatarUrl, firmaId, rol]
       );
       user = rows[0];
-      // Contador nuevo -- le siembra su plan de cuentas de una vez, para
-      // que ya lo tenga listo la primera vez que guarde una factura. Si
-      // esto falla, no bloquea el login (se vuelve a intentar sola,
-      // sembrado es idempotente, ver asegurarPlanCuentasContador).
-      asegurarPlanCuentasContador(user.id).catch((err) => {
-        console.error('No se pudo sembrar el plan de cuentas del nuevo contador:', err.message);
-      });
+
+      if (invitacion) {
+        await pool.query('DELETE FROM invitaciones_firma WHERE id = $1', [invitacion.id]);
+      } else {
+        // Solo la fundadora de una firma nueva necesita su propio plan
+        // de cuentas -- alguien que se unió por invitación ya comparte
+        // el de la firma. Si esto falla, no bloquea el login (se vuelve
+        // a intentar sola, sembrado es idempotente, ver
+        // asegurarPlanCuentasContador).
+        asegurarPlanCuentasContador(user.id).catch((err) => {
+          console.error('No se pudo sembrar el plan de cuentas del nuevo contador:', err.message);
+        });
+      }
     }
 
     issueSessionCookie(res, user.id);
@@ -730,20 +838,24 @@ app.post('/auth/google', limitadorAuth, async (req, res) => {
 // Le dice al frontend quién está logueado (o 401 si nadie)
 app.get('/api/me', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url, plan, role FROM users WHERE id = $1', [req.userId]);
+    const { rows } = await pool.query('SELECT id, email, nombre, avatar_url, role FROM users WHERE id = $1', [req.userId]);
     if (rows.length === 0) return res.status(401).json({ error: 'Usuario no encontrado.' });
 
-    const plan = rows[0].plan || 'solo';
+    // El plan y el límite de clientes son de la FIRMA, no de la persona
+    // -- viven en la fila del usuario fundador (id = firma_id), que para
+    // una cuenta que nunca invitó a nadie es la misma fila de arriba.
+    const firmaRes = await pool.query('SELECT nombre, nombre_firma, plan FROM users WHERE id = $1', [req.firmaId]);
+    const firma = firmaRes.rows[0] || {};
+    const plan = firma.plan || 'solo';
     const limite = clientLimitFor(plan);
-    const countRes = await pool.query('SELECT COUNT(*) FROM clients WHERE contador_id = $1', [req.userId]);
+    const countRes = await pool.query('SELECT COUNT(*) FROM clients WHERE contador_id = $1', [req.firmaId]);
     const actuales = Number(countRes.rows[0].count);
 
     res.json({
       id: rows[0].id, email: rows[0].email, nombre: rows[0].nombre, avatarUrl: rows[0].avatar_url,
-      // "role" todavía no tiene ningún efecto (ver comentario en
-      // ensureSchema) -- se expone ya para que el frontend pueda
-      // empezar a leerlo cuando haga falta, sin otro cambio de API.
       role: rows[0].role || 'contador',
+      firmaId: req.firmaId,
+      nombreFirma: firma.nombre_firma || firma.nombre || rows[0].nombre,
       plan, limiteClientes: limite, clientesActuales: actuales,
     });
   } catch (err) {
@@ -754,6 +866,132 @@ app.get('/api/me', requireAuth, async (req, res) => {
 app.post('/auth/logout', (req, res) => {
   res.clearCookie('kardex_session');
   res.json({ ok: true });
+});
+
+// ---------- Multiempresa: gestión de la firma ----------
+//
+// Solo el administrador puede invitar, cambiar roles o quitar gente --
+// contador tiene el mismo alcance operativo del día a día, pero la
+// gestión de LA FIRMA MISMA (quién entra, con qué rol) es exclusiva del
+// administrador.
+
+// Miembros activos + invitaciones pendientes de la firma de quien
+// pregunta -- una sola pantalla necesita ambas listas.
+app.get('/api/firma/miembros', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    const { rows: miembros } = await pool.query(
+      `SELECT id, email, nombre, avatar_url, role FROM users WHERE firma_id = $1 ORDER BY nombre ASC`,
+      [req.firmaId]
+    );
+    // "es_fundador" y el orden (fundador primero) se calculan aquí en
+    // vez de en el SQL -- una expresión booleana dentro del SELECT/ORDER
+    // BY es más frágil de mantener que esto, y el resultado es idéntico.
+    miembros.forEach((m) => { m.es_fundador = m.id === req.firmaId; });
+    miembros.sort((a, b) => (Number(b.es_fundador) - Number(a.es_fundador)) || String(a.nombre || '').localeCompare(String(b.nombre || '')));
+    const { rows: invitaciones } = await pool.query(
+      `SELECT id, email, rol, created_at FROM invitaciones_firma WHERE firma_id = $1 ORDER BY created_at DESC`,
+      [req.firmaId]
+    );
+    res.json({ miembros, invitaciones });
+  } catch (err) {
+    console.error('Error listando miembros de la firma:', err);
+    res.status(500).json({ error: 'No se pudieron leer los miembros de la firma.' });
+  }
+});
+
+// Invitar a alguien nuevo por correo, con un rol ya asignado. Si esa
+// persona ya tiene cuenta en Enlaza (con OTRA firma), esta invitación no
+// la mueve sola -- solo aplica la primera vez que alguien inicia sesión
+// SIN cuenta previa (ver /auth/google). Evita mandarla dos veces al
+// mismo correo para la misma firma.
+app.post('/api/firma/invitar', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const rol = String(req.body.rol || '').trim();
+    if (!email || !email.includes('@')) return res.status(400).json({ error: 'Escribe un correo válido.' });
+    if (!ROLES_VALIDOS.includes(rol)) return res.status(400).json({ error: 'Rol inválido.' });
+    if (rol === 'administrador') {
+      // Un segundo administrador sí es válido (una firma puede querer
+      // varios), pero se avisa aparte -- no es un error, solo se deja
+      // pasar igual que cualquier otro rol.
+    }
+
+    const yaEsMiembro = await pool.query('SELECT 1 FROM users WHERE firma_id = $1 AND LOWER(email) = LOWER($2)', [req.firmaId, email]);
+    if (yaEsMiembro.rows.length > 0) return res.status(400).json({ error: 'Ese correo ya es miembro de tu firma.' });
+
+    const yaInvitado = await pool.query('SELECT 1 FROM invitaciones_firma WHERE firma_id = $1 AND LOWER(email) = LOWER($2)', [req.firmaId, email]);
+    if (yaInvitado.rows.length > 0) return res.status(400).json({ error: 'Ya hay una invitación pendiente para ese correo.' });
+
+    const id = crypto.randomUUID();
+    await pool.query(
+      'INSERT INTO invitaciones_firma (id, firma_id, email, rol, invitado_por) VALUES ($1,$2,$3,$4,$5)',
+      [id, req.firmaId, email, rol, req.userId]
+    );
+    res.status(201).json({ ok: true, id, email, rol });
+  } catch (err) {
+    console.error('Error invitando a la firma:', err);
+    res.status(500).json({ error: 'No se pudo crear la invitación.' });
+  }
+});
+
+// Cancelar una invitación que todavía no se ha usado.
+app.delete('/api/firma/invitaciones/:id', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM invitaciones_firma WHERE id = $1 AND firma_id = $2', [req.params.id, req.firmaId]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Invitación no encontrada.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error cancelando invitación:', err);
+    res.status(500).json({ error: 'No se pudo cancelar la invitación.' });
+  }
+});
+
+// Cambiar el rol de un miembro ya activo de la firma.
+app.patch('/api/firma/miembros/:id', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    const rol = String(req.body.rol || '').trim();
+    if (!ROLES_VALIDOS.includes(rol)) return res.status(400).json({ error: 'Rol inválido.' });
+    if (req.params.id === req.firmaId && rol !== 'administrador') {
+      return res.status(400).json({ error: 'No puedes quitarte a ti mismo el rol de administrador de tu propia firma fundadora -- pídele a otro administrador que lo haga, o ascende a alguien más primero.' });
+    }
+    const { rowCount } = await pool.query('UPDATE users SET role = $1 WHERE id = $2 AND firma_id = $3', [rol, req.params.id, req.firmaId]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Miembro no encontrado en tu firma.' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error cambiando rol de miembro:', err);
+    res.status(500).json({ error: 'No se pudo cambiar el rol.' });
+  }
+});
+
+// Quitar a alguien de la firma -- lo separa a su PROPIA firma nueva y
+// vacía (nunca se borra su cuenta ni los datos que ya se compartían, que
+// se quedan con la firma; esa persona simplemente deja de verlos). Nadie
+// puede quitarse a sí mismo de su propia firma fundadora.
+app.delete('/api/firma/miembros/:id', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    if (req.params.id === req.firmaId) {
+      return res.status(400).json({ error: 'No puedes quitarte a ti mismo -- eres quien fundó esta firma.' });
+    }
+    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1 AND firma_id = $2', [req.params.id, req.firmaId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Miembro no encontrado en tu firma.' });
+    await pool.query("UPDATE users SET firma_id = id, role = 'administrador' WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error quitando miembro de la firma:', err);
+    res.status(500).json({ error: 'No se pudo quitar al miembro.' });
+  }
+});
+
+// Nombre visible de la firma (por defecto, el nombre de quien la fundó).
+app.patch('/api/firma', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    const nombreFirma = String(req.body.nombreFirma || '').trim();
+    await pool.query('UPDATE users SET nombre_firma = $1 WHERE id = $2', [nombreFirma, req.firmaId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Error actualizando el nombre de la firma:', err);
+    res.status(500).json({ error: 'No se pudo actualizar el nombre de la firma.' });
+  }
 });
 
 // Cuántos clientes puede registrar cada contador, según su plan.
@@ -989,7 +1227,7 @@ async function buscarFacturaPorHash(contadorId, fileHash) {
 // Listar todos los clientes guardados (solo los de este contador)
 app.get('/api/clients', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM clients WHERE contador_id = $1 ORDER BY nombre ASC', [req.userId]);
+    const { rows } = await pool.query('SELECT * FROM clients WHERE contador_id = $1 ORDER BY nombre ASC', [req.firmaId]);
     res.json(rows);
   } catch (err) {
     console.error('Error leyendo clientes:', err);
@@ -999,7 +1237,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
 
 // Crear un cliente nuevo, asociado a este contador -- respetando el
 // tope de clientes de su plan.
-app.post('/api/clients', requireAuth, async (req, res) => {
+app.post('/api/clients', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const {
       nombre, nit, dv, tipo_persona, direccion, ciudad, telefono, correo,
@@ -1011,12 +1249,12 @@ app.post('/api/clients', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
     }
 
-    const userRes = await pool.query('SELECT plan FROM users WHERE id = $1', [req.userId]);
+    const userRes = await pool.query('SELECT plan FROM users WHERE id = $1', [req.firmaId]);
     const plan = userRes.rows[0]?.plan || 'solo';
     const limite = clientLimitFor(plan);
 
     if (limite !== null) {
-      const countRes = await pool.query('SELECT COUNT(*) FROM clients WHERE contador_id = $1', [req.userId]);
+      const countRes = await pool.query('SELECT COUNT(*) FROM clients WHERE contador_id = $1', [req.firmaId]);
       const actuales = Number(countRes.rows[0].count);
       if (actuales >= limite) {
         return res.status(403).json({
@@ -1043,7 +1281,7 @@ app.post('/api/clients', requireAuth, async (req, res) => {
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
       RETURNING *`,
       [
-        id, nombre, nit, dv || '', req.userId, agenteRetenedorCalculado,
+        id, nombre, nit, dv || '', req.firmaId, agenteRetenedorCalculado,
         tipo_persona || '', direccion || '', ciudad || '', telefono || '', correo || '', ciiu || '', responsabilidadesStr,
         rut_archivo || '', rut_archivo_nombre || '',
         contacto_nombre || '', contacto_cargo || '', contacto_telefono || '', contacto_correo || '',
@@ -1058,9 +1296,9 @@ app.post('/api/clients', requireAuth, async (req, res) => {
 });
 
 // Eliminar un cliente (solo si es de este contador)
-app.delete('/api/clients/:id', requireAuth, async (req, res) => {
+app.delete('/api/clients/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
-    const { rowCount } = await pool.query('DELETE FROM clients WHERE id = $1 AND contador_id = $2', [req.params.id, req.userId]);
+    const { rowCount } = await pool.query('DELETE FROM clients WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
     if (rowCount === 0) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
@@ -1112,7 +1350,7 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
     const values = keys.map((k) => updates[k]);
     const { rows } = await pool.query(
       `UPDATE clients SET ${setClause} WHERE id = $${keys.length + 1} AND contador_id = $${keys.length + 2} RETURNING *`,
-      [...values, req.params.id, req.userId]
+      [...values, req.params.id, req.firmaId]
     );
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
@@ -1127,7 +1365,7 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
 // Listar facturas guardadas (todas, o filtradas por mes con ?month=YYYY-MM) -- solo las de este contador
 app.get('/api/invoices', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM invoices WHERE contador_id = $1 ORDER BY saved_at DESC', [req.userId]);
+    const { rows } = await pool.query('SELECT * FROM invoices WHERE contador_id = $1 ORDER BY saved_at DESC', [req.firmaId]);
     const invoices = rows.map(rowToInvoice);
     const { month } = req.query;
     if (!month) return res.json(invoices);
@@ -1160,7 +1398,7 @@ app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, nit_proveedor, categoria, tarifa, veces_confirmado, updated_at
        FROM tarifa_proveedor_aprendida WHERE contador_id = $1 ORDER BY updated_at DESC`,
-      [req.userId]
+      [req.firmaId]
     );
     res.json(rows);
   } catch (err) {
@@ -1175,7 +1413,7 @@ app.get('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
 // inferirse de un Rete Fuente guardado. `veces_confirmado` se reinicia
 // a 1 en una creación manual nueva (no hay un conflicto todavía); si ya
 // existía, el ON CONFLICT la trata igual que una reconfirmación más.
-app.post('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
+app.post('/api/tarifas-aprendidas', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const nitProveedor = String(req.body.nit_proveedor || '').trim();
     const categoria = String(req.body.categoria || '').trim().toLowerCase();
@@ -1191,7 +1429,7 @@ app.post('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
        ON CONFLICT (contador_id, nit_proveedor, categoria)
        DO UPDATE SET tarifa = EXCLUDED.tarifa, veces_confirmado = tarifa_proveedor_aprendida.veces_confirmado + 1, updated_at = now()
        RETURNING id, nit_proveedor, categoria, tarifa, veces_confirmado, updated_at`,
-      [crypto.randomUUID(), req.userId, nitProveedor, categoria, tarifa]
+      [crypto.randomUUID(), req.firmaId, nitProveedor, categoria, tarifa]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -1204,7 +1442,7 @@ app.post('/api/tarifas-aprendidas', requireAuth, async (req, res) => {
 // error de digitación en una factura anterior coincidió por casualidad
 // con la tarifa alta) y el contador la quiere dejar en el valor
 // correcto sin borrar el historial de veces_confirmado.
-app.put('/api/tarifas-aprendidas/:id', requireAuth, async (req, res) => {
+app.put('/api/tarifas-aprendidas/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const tarifa = Number(req.body.tarifa);
     if (!Number.isFinite(tarifa) || tarifa < 0 || tarifa > 1) return res.status(400).json({ error: 'La tarifa debe ser un número entre 0 y 1 (ej. 0.04 para 4%).' });
@@ -1213,7 +1451,7 @@ app.put('/api/tarifas-aprendidas/:id', requireAuth, async (req, res) => {
       `UPDATE tarifa_proveedor_aprendida SET tarifa = $1, updated_at = now()
        WHERE id = $2 AND contador_id = $3
        RETURNING id, nit_proveedor, categoria, tarifa, veces_confirmado, updated_at`,
-      [tarifa, req.params.id, req.userId]
+      [tarifa, req.params.id, req.firmaId]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Tarifa aprendida no encontrada.' });
     res.json(rows[0]);
@@ -1227,11 +1465,11 @@ app.put('/api/tarifas-aprendidas/:id', requireAuth, async (req, res) => {
 // (pasó a declarar renta, o dejó de hacerlo) y lo aprendido antes ya no
 // aplica; sin esto, calcularRetencionSugerida() seguiría usando el
 // valor viejo indefinidamente en vez de volver a mostrar el rango.
-app.delete('/api/tarifas-aprendidas/:id', requireAuth, async (req, res) => {
+app.delete('/api/tarifas-aprendidas/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       'DELETE FROM tarifa_proveedor_aprendida WHERE id = $1 AND contador_id = $2',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Tarifa aprendida no encontrada.' });
     res.json({ ok: true });
@@ -1281,7 +1519,7 @@ app.get('/api/acumulado-categoria', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, valor_sin_iva, categoria_concepto, desglose_categorias, fecha_factura
        FROM invoices WHERE contador_id = $1 AND nit_cc = $2`,
-      [req.userId, nit]
+      [req.firmaId, nit]
     );
     let acumulado = 0;
     for (const row of rows) {
@@ -1307,7 +1545,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     if (req.body.cliente_id) {
       const clienteRes = await pool.query(
         'SELECT 1 FROM clients WHERE id = $1 AND contador_id = $2',
-        [req.body.cliente_id, req.userId]
+        [req.body.cliente_id, req.firmaId]
       );
       if (clienteRes.rows.length === 0) {
         return res.status(400).json({ error: 'El cliente indicado no existe o no te pertenece.' });
@@ -1316,7 +1554,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     if (req.body.tarifa_ica_id) {
       const tarifaRes = await pool.query(
         'SELECT 1 FROM tarifas_ica WHERE id = $1 AND contador_id = $2',
-        [req.body.tarifa_ica_id, req.userId]
+        [req.body.tarifa_ica_id, req.firmaId]
       );
       if (tarifaRes.rows.length === 0) {
         return res.status(400).json({ error: 'La tarifa de ICA indicada no existe o no te pertenece.' });
@@ -1330,7 +1568,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     // contador ya confirmó que quiere guardarla de todas formas, manda
     // forzar_duplicado y se salta este chequeo.
     if (req.body.file_hash && !req.body.forzar_duplicado) {
-      const existente = await buscarFacturaPorHash(req.userId, req.body.file_hash);
+      const existente = await buscarFacturaPorHash(req.firmaId, req.body.file_hash);
       if (existente) {
         return res.status(409).json({
           error: 'Este documento ya se había guardado antes -- no se guardó de nuevo para evitar un duplicado.',
@@ -1381,7 +1619,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO invoices (id, ${columns}) VALUES ($1, ${placeholders}) RETURNING *`,
-      [id, ...values, req.userId, valoresDescuadrados]
+      [id, ...values, req.firmaId, valoresDescuadrados]
     );
 
     // Si el contador cambió la categoría que la IA sugirió, lo
@@ -1392,7 +1630,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     const categoriaFinal = req.body.categoria_concepto || '';
     if (categoriaOriginal && categoriaFinal && categoriaOriginal !== categoriaFinal) {
       try {
-        await guardarCorreccion(req.userId, req.body.concepto || '', categoriaFinal);
+        await guardarCorreccion(req.firmaId, req.body.concepto || '', categoriaFinal);
       } catch (err) {
         console.error('No se pudo guardar la corrección aprendida:', err.message);
       }
@@ -1411,7 +1649,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
       if (nitProveedorGuardado && reteFuenteGuardado > 0) {
         const tarifaDetectada = detectarTarifaUsada(categoriaGuardada, subtotalGuardado, reteFuenteGuardado);
         if (tarifaDetectada !== null) {
-          await guardarTarifaProveedor(req.userId, nitProveedorGuardado, categoriaGuardada, tarifaDetectada);
+          await guardarTarifaProveedor(req.firmaId, nitProveedorGuardado, categoriaGuardada, tarifaDetectada);
         }
       }
     } catch (err) {
@@ -1434,7 +1672,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
               (id, invoice_id, contador_id, orden, descripcion, cantidad, valor_unitario, subtotal, categoria_concepto, subcuenta_gasto, valor_iva, iva_mayor_valor, aiu)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
             [
-              crypto.randomUUID(), id, req.userId, orden++,
+              crypto.randomUUID(), id, req.firmaId, orden++,
               String(item.descripcion ?? ''), String(item.cantidad ?? ''), String(item.valor_unitario ?? ''),
               String(item.subtotal ?? ''), String(item.categoria_concepto ?? '').toLowerCase(),
               String(item.subcuenta_gasto ?? ''), String(item.valor_iva ?? ''),
@@ -1451,7 +1689,7 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     // Propone el asiento contable de esta factura (solo egresos por
     // ahora, ver asientos.js) -- nunca bloquea ni cambia la respuesta
     // del guardado si falla o si todavía no hay suficiente información.
-    await generarYGuardarAsientoParaFactura(req.userId, rows[0]);
+    await generarYGuardarAsientoParaFactura(req.firmaId, rows[0]);
 
     const respuesta = rowToInvoice(rows[0]);
     // La factura SÍ se guarda aunque los valores no cuadren (nunca se
@@ -1471,9 +1709,9 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
 });
 
 // Eliminar una factura guardada (solo si es de este contador)
-app.delete('/api/invoices/:id', requireAuth, async (req, res) => {
+app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
-    const { rowCount } = await pool.query('DELETE FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.userId]);
+    const { rowCount } = await pool.query('DELETE FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
     if (rowCount === 0) {
       return res.status(404).json({ error: 'Factura no encontrada.' });
     }
@@ -1507,7 +1745,7 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
     if (sets.length === 0) {
       return res.status(400).json({ error: 'No se envió ningún campo válido para actualizar.' });
     }
-    values.push(req.params.id, req.userId);
+    values.push(req.params.id, req.firmaId);
     const { rows } = await pool.query(
       `UPDATE invoices SET ${sets.join(', ')} WHERE id = $${i} AND contador_id = $${i + 1} RETURNING *`,
       values
@@ -1519,7 +1757,7 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
     // acredita a cada cuenta de retención por pagar en el asiento -- si
     // cambiaron, la propuesta anterior (si no estaba aprobada todavía)
     // queda desactualizada y hay que regenerarla.
-    await generarYGuardarAsientoParaFactura(req.userId, rows[0]);
+    await generarYGuardarAsientoParaFactura(req.firmaId, rows[0]);
     res.json(rowToInvoice(rows[0]));
   } catch (err) {
     console.error('Error actualizando retención de factura:', err);
@@ -1535,11 +1773,11 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
 // automático ni se puede desaprobar desde acá -- si el contador se
 // equivocó, corrige los datos primero (PUT de arriba) y aprueba de nuevo
 // cuando esté conforme.
-app.post('/api/invoices/:id/aprobar', requireAuth, async (req, res) => {
+app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const factura = await pool.query(
       'SELECT id, aprobado_por_contador FROM invoices WHERE id = $1 AND contador_id = $2',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (factura.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
     if (factura.rows[0].aprobado_por_contador) {
@@ -1563,7 +1801,7 @@ app.get('/api/invoices/:id/items', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT * FROM factura_items WHERE invoice_id = $1 AND contador_id = $2 ORDER BY orden ASC',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     res.json(rows);
   } catch (err) {
@@ -1580,11 +1818,11 @@ app.get('/api/invoices/:id/items', requireAuth, async (req, res) => {
 // plan de cuentas de verdad, no como una lista sin orden.
 app.get('/api/plan-cuentas', requireAuth, async (req, res) => {
   try {
-    const existe = await pool.query('SELECT 1 FROM plan_cuentas WHERE contador_id = $1 LIMIT 1', [req.userId]);
-    if (existe.rows.length === 0) await asegurarPlanCuentasContador(req.userId);
+    const existe = await pool.query('SELECT 1 FROM plan_cuentas WHERE contador_id = $1 LIMIT 1', [req.firmaId]);
+    if (existe.rows.length === 0) await asegurarPlanCuentasContador(req.firmaId);
     const { rows } = await pool.query(
       'SELECT codigo, nombre, naturaleza, clase, activa FROM plan_cuentas WHERE contador_id = $1 ORDER BY codigo',
-      [req.userId]
+      [req.firmaId]
     );
     res.json(rows);
   } catch (err) {
@@ -1601,7 +1839,7 @@ app.get('/api/plan-cuentas', requireAuth, async (req, res) => {
 app.get('/api/asientos', requireAuth, async (req, res) => {
   try {
     const condiciones = ['contador_id = $1'];
-    const valores = [req.userId];
+    const valores = [req.firmaId];
     if (req.query.estado) {
       valores.push(req.query.estado);
       condiciones.push(`estado = $${valores.length}`);
@@ -1629,7 +1867,7 @@ app.get('/api/asientos/:id', requireAuth, async (req, res) => {
     const cabecera = await pool.query(
       `SELECT id, invoice_id, fecha, descripcion, estado, generado_por, aprobado_at, creado_at
        FROM asientos_contables WHERE id = $1 AND contador_id = $2`,
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (cabecera.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
     const lineas = await pool.query(
@@ -1649,11 +1887,11 @@ app.get('/api/asientos/:id', requireAuth, async (req, res) => {
 // sobre las líneas YA GUARDADAS (no sobre la factura en este momento,
 // que pudo haber cambiado) -- una última red de seguridad antes de
 // dejar algo como confirmado.
-app.post('/api/asientos/:id/aprobar', requireAuth, async (req, res) => {
+app.post('/api/asientos/:id/aprobar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const asiento = await pool.query(
       'SELECT id, estado FROM asientos_contables WHERE id = $1 AND contador_id = $2',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (asiento.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
     if (asiento.rows[0].estado === 'aprobado') {
@@ -1687,7 +1925,7 @@ app.get('/api/integraciones', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT proveedor, email, activo, conectado_at, ultima_sincronizacion FROM integraciones_contables WHERE contador_id = $1',
-      [req.userId]
+      [req.firmaId]
     );
     res.json(rows);
   } catch (err) {
@@ -1708,7 +1946,7 @@ app.get('/api/integraciones', requireAuth, async (req, res) => {
 // opciones reales de esa cuenta SIN guardar nada -- el frontend las
 // muestra, el contador elige, y se vuelve a llamar esta misma ruta ya
 // con `configuracion` incluida para guardar todo junto.
-app.post('/api/integraciones/:proveedor/conectar', requireAuth, async (req, res) => {
+app.post('/api/integraciones/:proveedor/conectar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   const { proveedor } = req.params;
   const adaptador = integraciones.PROVEEDORES[proveedor];
   if (!adaptador) {
@@ -1747,7 +1985,7 @@ app.post('/api/integraciones/:proveedor/conectar', requireAuth, async (req, res)
        ON CONFLICT (contador_id, proveedor)
        DO UPDATE SET email = $4, token_cifrado = $5, activo = true, conectado_at = now(), configuracion = $6
        RETURNING proveedor, email, activo, conectado_at`,
-      [id, req.userId, proveedor, email, tokenCifrado, configuracionTexto]
+      [id, req.firmaId, proveedor, email, tokenCifrado, configuracionTexto]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -1759,11 +1997,11 @@ app.post('/api/integraciones/:proveedor/conectar', requireAuth, async (req, res)
 
 // Desconecta un proveedor -- borra el token guardado, no solo lo marca
 // inactivo, para no dejar una credencial sin uso dando vueltas.
-app.delete('/api/integraciones/:proveedor', requireAuth, async (req, res) => {
+app.delete('/api/integraciones/:proveedor', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       'DELETE FROM integraciones_contables WHERE contador_id = $1 AND proveedor = $2',
-      [req.userId, req.params.proveedor]
+      [req.firmaId, req.params.proveedor]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'No tenías esa integración conectada.' });
     res.json({ ok: true });
@@ -1792,7 +2030,7 @@ app.post('/api/invoices/:id/enviar/:proveedor', requireAuth, async (req, res) =>
   }
 
   try {
-    const facturaRes = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [id, req.userId]);
+    const facturaRes = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [id, req.firmaId]);
     if (facturaRes.rows.length === 0) {
       return res.status(404).json({ error: 'Factura no encontrada.' });
     }
@@ -1800,7 +2038,7 @@ app.post('/api/invoices/:id/enviar/:proveedor', requireAuth, async (req, res) =>
 
     const integracionRes = await pool.query(
       'SELECT email, token_cifrado, configuracion FROM integraciones_contables WHERE contador_id = $1 AND proveedor = $2 AND activo = true',
-      [req.userId, proveedor]
+      [req.firmaId, proveedor]
     );
     if (integracionRes.rows.length === 0) {
       return res.status(400).json({ error: `No tienes ${adaptador.nombre} conectado. Ve a Integraciones para conectarlo primero.` });
@@ -1821,7 +2059,7 @@ app.post('/api/invoices/:id/enviar/:proveedor', requireAuth, async (req, res) =>
     );
     await pool.query(
       'UPDATE integraciones_contables SET ultima_sincronizacion = now() WHERE contador_id = $1 AND proveedor = $2',
-      [req.userId, proveedor]
+      [req.firmaId, proveedor]
     );
 
     res.json({ ok: true, billId: resultado.billId, avisos: resultado.avisos || [] });
@@ -2339,7 +2577,7 @@ app.post('/api/extract', requireAuth, limitadorIA, async (req, res) => {
   const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
 
   try {
-    const parsed = await procesarExtraccionFactura(req.userId, base64, effectiveMediaType, isPdf, forzar);
+    const parsed = await procesarExtraccionFactura(req.firmaId, base64, effectiveMediaType, isPdf, forzar);
     res.json(parsed);
   } catch (err) {
     console.error('Error al llamar a Gemini (factura):', err);
@@ -2376,11 +2614,11 @@ app.post('/api/extract-paquete', requireAuth, limitadorIA, async (req, res) => {
     if (!isPdf) {
       // Una foto es siempre un solo documento -- no hace falta gastar
       // el prompt (más largo) de segmentación de paquete.
-      const parsed = await procesarExtraccionFactura(req.userId, base64, effectiveMediaType, isPdf, forzar);
+      const parsed = await procesarExtraccionFactura(req.firmaId, base64, effectiveMediaType, isPdf, forzar);
       return res.json({ facturas: [parsed], otros_grupos: [] });
     }
 
-    const { documentos } = await procesarPaqueteDocumento(req.userId, base64, effectiveMediaType, forzar);
+    const { documentos } = await procesarPaqueteDocumento(req.firmaId, base64, effectiveMediaType, forzar);
     const facturas = documentos.map((doc) => (doc.tipo === 'factura' ? doc.data : { error: true, mensaje: doc.mensaje }));
     res.json({ facturas, otros_grupos: [] });
   } catch (err) {
@@ -2490,16 +2728,16 @@ async function facturasConSaldo(contadorId, clienteId) {
 app.get('/api/cartera/:clienteId', requireAuth, async (req, res) => {
   try {
     const clienteId = req.params.clienteId;
-    if (!(await clienteEsDelContador(req.userId, clienteId))) {
+    if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
 
-    const facturas = await facturasConSaldo(req.userId, clienteId);
+    const facturas = await facturasConSaldo(req.firmaId, clienteId);
     const facturasPendientes = facturas.filter((f) => f.saldo_pendiente > 0);
 
     const { rows: movimientos } = await pool.query(
       `SELECT * FROM movimientos_banco WHERE contador_id = $1 AND cliente_id = $2 ORDER BY fecha DESC, created_at DESC`,
-      [req.userId, clienteId]
+      [req.firmaId, clienteId]
     );
 
     const hoy = Date.now();
@@ -2569,7 +2807,7 @@ app.post('/api/extracto/leer-pdf', requireAuth, limitadorIA, async (req, res) =>
   if (!base64 || !mediaType || !clienteId) {
     return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
   }
-  if (!(await clienteEsDelContador(req.userId, clienteId))) {
+  if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
     return res.status(404).json({ error: 'Cliente no encontrado.' });
   }
 
@@ -2580,7 +2818,7 @@ app.post('/api/extracto/leer-pdf', requireAuth, limitadorIA, async (req, res) =>
     try {
       const { rows } = await pool.query(
         `SELECT 1 FROM movimientos_banco WHERE contador_id = $1 AND cliente_id = $2 AND file_hash = $3 LIMIT 1`,
-        [req.userId, clienteId, fileHash]
+        [req.firmaId, clienteId, fileHash]
       );
       if (rows.length > 0) return res.json({ duplicado: true, file_hash: fileHash });
     } catch (err) {
@@ -2608,7 +2846,7 @@ app.post('/api/extracto/leer-csv', requireAuth, async (req, res) => {
   if (!csvTexto || !clienteId) {
     return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
   }
-  if (!(await clienteEsDelContador(req.userId, clienteId))) {
+  if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
     return res.status(404).json({ error: 'Cliente no encontrado.' });
   }
 
@@ -2618,7 +2856,7 @@ app.post('/api/extracto/leer-csv', requireAuth, async (req, res) => {
     try {
       const { rows } = await pool.query(
         `SELECT 1 FROM movimientos_banco WHERE contador_id = $1 AND cliente_id = $2 AND file_hash = $3 LIMIT 1`,
-        [req.userId, clienteId, fileHash]
+        [req.firmaId, clienteId, fileHash]
       );
       if (rows.length > 0) return res.json({ duplicado: true, file_hash: fileHash });
     } catch (err) {
@@ -2651,7 +2889,7 @@ app.post('/api/extracto/guardar', requireAuth, async (req, res) => {
     if (!/^\d{4}-\d{2}$/.test(mes || '')) {
       return res.status(400).json({ error: 'Falta indicar a qué mes contable corresponde este extracto.' });
     }
-    if (!(await clienteEsDelContador(req.userId, clienteId))) {
+    if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
 
@@ -2664,7 +2902,7 @@ app.post('/api/extracto/guardar', requireAuth, async (req, res) => {
       await pool.query(
         `INSERT INTO movimientos_banco (id, contador_id, cliente_id, extracto_id, fecha, descripcion, valor, tipo, estado, file_hash, mes)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'sin_conciliar',$9,$10)`,
-        [id, req.userId, clienteId, extractoId, String(m.fecha || ''), String(m.descripcion || ''), String(valor), m.tipo, file_hash || '', mes]
+        [id, req.firmaId, clienteId, extractoId, String(m.fecha || ''), String(m.descripcion || ''), String(valor), m.tipo, file_hash || '', mes]
       );
       guardados++;
     }
@@ -2686,14 +2924,14 @@ app.post('/api/movimientos/:id/confirmar', requireAuth, async (req, res) => {
 
     const { rows: movRows } = await pool.query(
       'SELECT * FROM movimientos_banco WHERE id = $1 AND contador_id = $2',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (movRows.length === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
     const mov = movRows[0];
 
     const { rows: facRows } = await pool.query(
       'SELECT * FROM invoices WHERE id = $1 AND contador_id = $2 AND cliente_id = $3',
-      [invoiceId, req.userId, mov.cliente_id]
+      [invoiceId, req.firmaId, mov.cliente_id]
     );
     if (facRows.length === 0) return res.status(404).json({ error: 'La factura indicada no existe o no es de este cliente.' });
     const factura = facRows[0];
@@ -2732,7 +2970,7 @@ app.post('/api/movimientos/:id/ignorar', requireAuth, async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       `UPDATE movimientos_banco SET estado = 'ignorado', invoice_id = NULL WHERE id = $1 AND contador_id = $2`,
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
     res.json({ ok: true });
@@ -2749,7 +2987,7 @@ app.post('/api/movimientos/:id/desconciliar', requireAuth, async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       `UPDATE movimientos_banco SET estado = 'sin_conciliar', invoice_id = NULL WHERE id = $1 AND contador_id = $2`,
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
     res.json({ ok: true });
@@ -2774,7 +3012,7 @@ app.get('/api/plantillas-exportacion', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT id, nombre, columnas, created_at, updated_at FROM plantillas_exportacion WHERE contador_id = $1 ORDER BY nombre ASC',
-      [req.userId]
+      [req.firmaId]
     );
     res.json(rows.map((r) => ({ ...r, columnas: JSON.parse(r.columnas || '[]') })));
   } catch (err) {
@@ -2793,7 +3031,7 @@ app.post('/api/plantillas-exportacion', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `INSERT INTO plantillas_exportacion (id, contador_id, nombre, columnas)
        VALUES ($1,$2,$3,$4) RETURNING id, nombre, columnas, created_at, updated_at`,
-      [id, req.userId, nombre.trim(), JSON.stringify(columnas)]
+      [id, req.firmaId, nombre.trim(), JSON.stringify(columnas)]
     );
     res.json({ ...rows[0], columnas: JSON.parse(rows[0].columnas) });
   } catch (err) {
@@ -2812,7 +3050,7 @@ app.put('/api/plantillas-exportacion/:id', requireAuth, async (req, res) => {
       `UPDATE plantillas_exportacion SET nombre = $1, columnas = $2, updated_at = now()
        WHERE id = $3 AND contador_id = $4
        RETURNING id, nombre, columnas, created_at, updated_at`,
-      [nombre.trim(), JSON.stringify(columnas), req.params.id, req.userId]
+      [nombre.trim(), JSON.stringify(columnas), req.params.id, req.firmaId]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Plantilla no encontrada.' });
     res.json({ ...rows[0], columnas: JSON.parse(rows[0].columnas) });
@@ -2826,7 +3064,7 @@ app.delete('/api/plantillas-exportacion/:id', requireAuth, async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       'DELETE FROM plantillas_exportacion WHERE id = $1 AND contador_id = $2',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Plantilla no encontrada.' });
     res.json({ ok: true });
@@ -2856,7 +3094,7 @@ app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at
        FROM terceros_fiscales WHERE contador_id = $1 ORDER BY updated_at DESC`,
-      [req.userId]
+      [req.firmaId]
     );
     res.json(rows);
   } catch (err) {
@@ -2865,7 +3103,7 @@ app.get('/api/terceros-fiscales', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/terceros-fiscales', requireAuth, async (req, res) => {
+app.post('/api/terceros-fiscales', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const nit = normalizarNit(req.body.nit);
     if (!nit) return res.status(400).json({ error: 'Falta el NIT del tercero.' });
@@ -2880,7 +3118,7 @@ app.post('/api/terceros-fiscales', requireAuth, async (req, res) => {
     // Si no queda ninguna marca activa y no hay nombre/notas, no tiene
     // sentido guardar una fila vacía -- se borra en vez de guardar.
     if (!granContribuyente && !autorretenedor && !regimenSimple && !agenteRetencionIva && !declaranteRenta && !nombre && !notas) {
-      await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.userId, nit]);
+      await pool.query('DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2', [req.firmaId, nit]);
       return res.json({ nit, nombre: '', gran_contribuyente: false, autorretenedor: false, regimen_simple: false, agente_retencion_iva: false, declarante_renta: false, notas: '', borrado: true });
     }
 
@@ -2894,7 +3132,7 @@ app.post('/api/terceros-fiscales', requireAuth, async (req, res) => {
          agente_retencion_iva = EXCLUDED.agente_retencion_iva, declarante_renta = EXCLUDED.declarante_renta,
          notas = EXCLUDED.notas, updated_at = now()
        RETURNING nit, nombre, gran_contribuyente, autorretenedor, regimen_simple, agente_retencion_iva, declarante_renta, notas, updated_at`,
-      [id, req.userId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, notas]
+      [id, req.firmaId, nit, nombre, granContribuyente, autorretenedor, regimenSimple, agenteRetencionIva, declaranteRenta, notas]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -2903,12 +3141,12 @@ app.post('/api/terceros-fiscales', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/terceros-fiscales/:nit', requireAuth, async (req, res) => {
+app.delete('/api/terceros-fiscales/:nit', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const nit = normalizarNit(req.params.nit);
     const { rowCount } = await pool.query(
       'DELETE FROM terceros_fiscales WHERE contador_id = $1 AND nit = $2',
-      [req.userId, nit]
+      [req.firmaId, nit]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'No había un perfil fiscal guardado para ese NIT.' });
     res.json({ ok: true });
@@ -2924,7 +3162,7 @@ app.get('/api/tarifas-ica', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas, updated_at
        FROM tarifas_ica WHERE contador_id = $1 ORDER BY municipio ASC, actividad ASC`,
-      [req.userId]
+      [req.firmaId]
     );
     res.json(rows);
   } catch (err) {
@@ -2933,7 +3171,7 @@ app.get('/api/tarifas-ica', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/tarifas-ica', requireAuth, async (req, res) => {
+app.post('/api/tarifas-ica', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const municipio = String(req.body.municipio || '').trim();
     const actividad = String(req.body.actividad || '').trim();
@@ -2954,7 +3192,7 @@ app.post('/api/tarifas-ica', requireAuth, async (req, res) => {
          tarifa_por_mil = EXCLUDED.tarifa_por_mil, base_uvt = EXCLUDED.base_uvt,
          cuenta_puc = EXCLUDED.cuenta_puc, notas = EXCLUDED.notas, updated_at = now()
        RETURNING id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas, updated_at`,
-      [id, req.userId, municipio, actividad, tarifaPorMil, baseUvt, cuentaPuc, notas]
+      [id, req.firmaId, municipio, actividad, tarifaPorMil, baseUvt, cuentaPuc, notas]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -2963,7 +3201,7 @@ app.post('/api/tarifas-ica', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
+app.put('/api/tarifas-ica/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const municipio = String(req.body.municipio || '').trim();
     const actividad = String(req.body.actividad || '').trim();
@@ -2979,7 +3217,7 @@ app.put('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
       `UPDATE tarifas_ica SET municipio=$1, actividad=$2, tarifa_por_mil=$3, base_uvt=$4, cuenta_puc=$5, notas=$6, updated_at=now()
        WHERE id=$7 AND contador_id=$8
        RETURNING id, municipio, actividad, tarifa_por_mil, base_uvt, cuenta_puc, notas, updated_at`,
-      [municipio, actividad, tarifaPorMil, baseUvt, cuentaPuc, notas, req.params.id, req.userId]
+      [municipio, actividad, tarifaPorMil, baseUvt, cuentaPuc, notas, req.params.id, req.firmaId]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Tarifa de ICA no encontrada.' });
     res.json(rows[0]);
@@ -2989,11 +3227,11 @@ app.put('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/tarifas-ica/:id', requireAuth, async (req, res) => {
+app.delete('/api/tarifas-ica/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       'DELETE FROM tarifas_ica WHERE id = $1 AND contador_id = $2',
-      [req.params.id, req.userId]
+      [req.params.id, req.firmaId]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Tarifa de ICA no encontrada.' });
     res.json({ ok: true });
@@ -3014,7 +3252,7 @@ app.post('/api/lotes', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Máximo 100 archivos por lote -- sube el resto en un segundo lote.' });
   }
   try {
-    const loteId = await lotes.crearLote(req.userId, clienteId || null, archivos);
+    const loteId = await lotes.crearLote(req.firmaId, clienteId || null, archivos);
     res.status(201).json({ loteId });
   } catch (err) {
     console.error('Error creando lote:', err);
@@ -3027,7 +3265,7 @@ app.post('/api/lotes', requireAuth, async (req, res) => {
 // global (en cualquier página) como Carga masiva para reconectarse.
 app.get('/api/lotes/activo', requireAuth, async (req, res) => {
   try {
-    const lote = await lotes.obtenerLoteActivoOUltimo(req.userId);
+    const lote = await lotes.obtenerLoteActivoOUltimo(req.firmaId);
     res.json(lote || null);
   } catch (err) {
     console.error('Error leyendo el lote activo:', err);
@@ -3037,7 +3275,7 @@ app.get('/api/lotes/activo', requireAuth, async (req, res) => {
 
 app.post('/api/lotes/items/:id/reintentar', requireAuth, async (req, res) => {
   try {
-    await lotes.reintentarItem(req.params.id, req.userId, !!req.body.forzar);
+    await lotes.reintentarItem(req.params.id, req.firmaId, !!req.body.forzar);
     res.json({ ok: true });
   } catch (err) {
     console.error('Error reintentando ítem de lote:', err);
@@ -3047,7 +3285,7 @@ app.post('/api/lotes/items/:id/reintentar', requireAuth, async (req, res) => {
 
 app.delete('/api/lotes/items/:id', requireAuth, async (req, res) => {
   try {
-    await lotes.eliminarItem(req.params.id, req.userId);
+    await lotes.eliminarItem(req.params.id, req.firmaId);
     res.json({ ok: true });
   } catch (err) {
     console.error('Error eliminando ítem de lote:', err);
@@ -3057,7 +3295,7 @@ app.delete('/api/lotes/items/:id', requireAuth, async (req, res) => {
 
 app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
   try {
-    const archivo = await lotes.obtenerArchivoItem(req.params.id, req.userId);
+    const archivo = await lotes.obtenerArchivoItem(req.params.id, req.firmaId);
     if (!archivo) return res.status(404).json({ error: 'No se encontró el archivo.' });
     res.json(archivo);
   } catch (err) {
