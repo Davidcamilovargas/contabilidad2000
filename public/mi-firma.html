@@ -76,6 +76,13 @@
     cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
   }
   .del-btn:hover{ color:#B0402D; }
+  .reenviar-btn{
+    background:none; border:none; color:var(--ink-faint);
+    font-family:'JetBrains Mono',monospace; font-size:11.5px;
+    cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
+  }
+  .reenviar-btn:hover{ color:var(--petroleo,#0B4F6C); }
+  .reenviar-btn:disabled{ opacity:.5; cursor:default; }
 
   .config-empty{
     text-align:center; padding:28px 20px; color:var(--ink-faint);
@@ -314,6 +321,7 @@ function renderInvitaciones(invitaciones){
         </div>
       </div>
       <div class="row-actions">
+        <button type="button" class="reenviar-btn" data-action="reenviar" data-id="${inv.id}">Reenviar correo</button>
         <button type="button" class="del-btn" data-action="cancelar" data-id="${inv.id}">Cancelar invitación</button>
       </div>
     </div>
@@ -326,6 +334,22 @@ function renderInvitaciones(invitaciones){
         if (!res.ok) { alert(data.error || 'No se pudo cancelar.'); return; }
         await cargar();
       } catch (e) { alert('No se pudo cancelar: ' + e.message); }
+    });
+  });
+  cont.querySelectorAll('button[data-action="reenviar"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const textoOriginal = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Enviando…';
+      try {
+        const res = await fetch(`/api/firma/invitaciones/${btn.dataset.id}/reenviar`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || 'No se pudo reenviar.'); return; }
+        alert(data.correoEnviado ? 'Correo reenviado.' : 'No se pudo enviar el correo -- revisa la configuración de correo del servidor.');
+      } catch (e) {
+        alert('No se pudo reenviar: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = textoOriginal;
+      }
     });
   });
 }
@@ -361,7 +385,9 @@ btnInvitar.addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) { errorInvitar.textContent = data.error || 'No se pudo invitar.'; errorInvitar.classList.add('show'); return; }
-    okInvitar.textContent = `Invitación enviada a ${email} -- se activa cuando esa persona inicie sesión con Google.`;
+    okInvitar.textContent = data.correoEnviado
+      ? `Se le envió un correo a ${email} avisándole de la invitación -- se activa cuando inicie sesión con Google usando ese mismo correo.`
+      : `Invitación creada para ${email}, pero no se pudo enviar el correo de aviso -- avísale tú mientras tanto. Igual se activa apenas inicie sesión con Google usando ese correo.`;
     okInvitar.classList.add('show');
     document.getElementById('inputInvitarEmail').value = '';
     await cargar();

@@ -32,6 +32,20 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// Correo de invitación a la firma (ver /api/firma/invitar más abajo) --
+// usa la API HTTP de Resend directamente con fetch (igual que las
+// llamadas a Gemini), sin agregar el SDK como dependencia nueva. Es
+// opcional a propósito: si no está configurada, la invitación se sigue
+// creando en la base de datos exactamente igual (eso es lo que de
+// verdad la activa cuando la persona inicia sesión), solo que no se le
+// avisa por correo -- el administrador tendría que avisarle por su
+// cuenta mientras tanto.
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM = process.env.RESEND_FROM || 'Enlaza <onboarding@resend.dev>';
+if (!RESEND_API_KEY) {
+  console.warn('[correo] No hay RESEND_API_KEY configurada -- las invitaciones a la firma se crean igual, pero no se envía el correo de aviso.');
+}
+
 if (!API_KEY) {
   console.error('\n[ERROR] No se encontró GEMINI_API_KEY en el archivo .env');
   console.error('Copia .env.example a .env y agrega tu clave gratuita de Google AI Studio antes de iniciar el servidor.\n');
@@ -712,6 +726,16 @@ function issueSessionCookie(res, userId) {
 // documentos (captura), sin ver ni tocar cifras ya aprobadas; y
 // solo_lectura únicamente consulta reportes, nunca escribe nada.
 const ROLES_VALIDOS = ['administrador', 'contador', 'auxiliar_contable', 'auxiliar_administrativo', 'solo_lectura'];
+// Mismos nombres en español que ya muestra public/mi-firma.html (NOMBRES_ROL) --
+// duplicado a propósito porque uno vive en el navegador y el otro en el
+// correo que arma el servidor; si se agrega un rol nuevo, actualizar los dos.
+const NOMBRES_ROL = {
+  administrador: 'Administrador',
+  contador: 'Contador',
+  auxiliar_contable: 'Auxiliar contable',
+  auxiliar_administrativo: 'Auxiliar administrativo',
+  solo_lectura: 'Solo lectura',
+};
 
 // Verifica el JWT de la cookie y, si es válido, resuelve TRES cosas:
 //  - req.userId: la identidad real de quien inició sesión (para /api/me,
@@ -759,6 +783,123 @@ function requireRole(...rolesPermitidos) {
     }
     next();
   };
+}
+
+// Correo "te invitaron" -- mismo espíritu que compartir una carpeta de
+// Drive: nombre de quien invita, a qué firma, con qué rol, y un botón
+// que lleva a iniciar sesión. La invitación YA quedó activa en la base
+// de datos antes de llamar esto (ver /api/firma/invitar) -- este correo
+// es solo el aviso, nunca la condición para que la invitación funcione.
+function plantillaCorreoInvitacion({ nombreInvita, nombreFirma, rolLabel, email, urlLogin }) {
+  const petroleo = '#0B4F6C';
+  const coral = '#FF6B4A';
+  const tinta = '#1D2A32';
+  const tintaSuave = '#4A5E68';
+  const papel = '#F6FAFC';
+  const linea = '#DCE7EC';
+  const html = `<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:32px 16px;background:${papel};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${tinta};">
+  <div style="max-width:480px;margin:0 auto;background:#FFFFFF;border:1px solid ${linea};border-radius:12px;overflow:hidden;">
+    <div style="padding:28px 32px 0;">
+      <div style="font-size:20px;font-weight:700;color:${petroleo};letter-spacing:-0.01em;">Enlaza</div>
+    </div>
+    <div style="padding:20px 32px 8px;">
+      <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+        <strong>${escaparHtmlCorreo(nombreInvita)}</strong> te invitó a unirte a
+        <strong>${escaparHtmlCorreo(nombreFirma)}</strong> en Enlaza, con el rol de
+        <strong>${escaparHtmlCorreo(rolLabel)}</strong>.
+      </p>
+      <p style="font-size:14px;line-height:1.6;color:${tintaSuave};margin:0 0 24px;">
+        Enlaza es la plataforma donde tu firma procesa facturas, calcula retenciones y lleva la contabilidad con ayuda de IA. Al unirte vas a ver los mismos clientes y documentos que el resto del equipo.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+        <tr><td style="border-radius:8px;background:${coral};">
+          <a href="${urlLogin}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:8px;">Aceptar invitación</a>
+        </td></tr>
+      </table>
+      <p style="font-size:13px;line-height:1.6;color:${tintaSuave};margin:0 0 24px;">
+        Al hacer clic, inicia sesión con Google usando exactamente este correo: <strong>${escaparHtmlCorreo(email)}</strong>. Si usas una cuenta de Google distinta, no vas a entrar a ${escaparHtmlCorreo(nombreFirma)}.
+      </p>
+    </div>
+    <div style="padding:16px 32px 24px;border-top:1px solid ${linea};">
+      <p style="font-size:12px;line-height:1.5;color:${tintaSuave};margin:0;">Si no esperabas este correo, puedes ignorarlo -- no se creó ninguna cuenta a tu nombre todavía.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+  const texto = `${nombreInvita} te invitó a unirte a ${nombreFirma} en Enlaza, con el rol de ${rolLabel}.\n\nAcepta la invitación iniciando sesión con Google usando exactamente este correo (${email}): ${urlLogin}\n\nSi usas una cuenta de Google distinta, no vas a entrar a ${nombreFirma}.\n\nSi no esperabas este correo, puedes ignorarlo.`;
+  return { html, texto };
+}
+
+function escaparHtmlCorreo(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// El remitente que se ve en la bandeja de entrada también dice quién
+// invitó -- mismo patrón que "Fulano compartió una carpeta contigo (vía
+// Google Drive)". La dirección de correo real se queda fija (la de
+// RESEND_FROM, ej. onboarding@resend.dev hasta que haya dominio propio
+// verificado en Resend); solo el nombre que se muestra cambia por
+// invitación.
+function remitenteConNombreDeQuienInvita(nombreInvita) {
+  const correoDelRemitente = (/<([^>]+)>/.exec(RESEND_FROM) || [, RESEND_FROM])[1].trim();
+  const nombreLimpio = String(nombreInvita || '').replace(/["<>]/g, '').trim() || 'Alguien de tu equipo';
+  return `"${nombreLimpio} (vía Enlaza)" <${correoDelRemitente}>`;
+}
+
+// Envía el correo de invitación por la API HTTP de Resend. Nunca lanza
+// -- si Resend no está configurado, tarda demasiado, o responde con
+// error, se registra en consola y se devuelve false; la invitación en
+// la base de datos (lo que de verdad importa) ya quedó creada antes de
+// llamar esto, así que un correo que falla nunca debe tumbar la
+// petición de /api/firma/invitar.
+async function enviarCorreoInvitacion({ email, nombreInvita, nombreFirma, rol, urlLogin }) {
+  if (!RESEND_API_KEY) return false;
+  const rolLabel = NOMBRES_ROL[rol] || rol;
+  const { html, texto } = plantillaCorreoInvitacion({ nombreInvita, nombreFirma, rolLabel, email, urlLogin });
+  const controlador = new AbortController();
+  const timeout = setTimeout(() => controlador.abort(), 8000);
+  try {
+    const resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: remitenteConNombreDeQuienInvita(nombreInvita),
+        to: [email],
+        subject: `${nombreInvita} te invitó a unirte a ${nombreFirma} en Enlaza`,
+        html,
+        text: texto,
+      }),
+      signal: controlador.signal,
+    });
+    if (!resp.ok) {
+      const cuerpo = await resp.text().catch(() => '');
+      console.error(`[correo] Resend respondió ${resp.status} al invitar a ${email}: ${cuerpo}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[correo] No se pudo enviar el correo de invitación a ${email}:`, err.message);
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Nombre de quien invita y nombre de la firma, para personalizar el
+// correo -- misma lógica de "nombre a mostrar" que ya usa /api/me
+// (nombre_firma si lo pusieron, si no el nombre de quien la fundó).
+async function obtenerContextoParaCorreoInvitacion(req) {
+  const [quienInvita, firma] = await Promise.all([
+    pool.query('SELECT nombre FROM users WHERE id = $1', [req.userId]),
+    pool.query('SELECT nombre, nombre_firma FROM users WHERE id = $1', [req.firmaId]),
+  ]);
+  const nombreInvita = quienInvita.rows[0]?.nombre || 'Un compañero';
+  const filaFirma = firma.rows[0] || {};
+  const nombreFirma = filaFirma.nombre_firma || filaFirma.nombre || 'tu firma en Enlaza';
+  return { nombreInvita, nombreFirma };
 }
 
 // Recibe el token que entrega el botón de Google (Google Identity
@@ -927,10 +1068,36 @@ app.post('/api/firma/invitar', requireAuth, requireRole('administrador'), async 
       'INSERT INTO invitaciones_firma (id, firma_id, email, rol, invitado_por) VALUES ($1,$2,$3,$4,$5)',
       [id, req.firmaId, email, rol, req.userId]
     );
-    res.status(201).json({ ok: true, id, email, rol });
+
+    // El correo es solo el aviso -- la invitación de arriba ya quedó
+    // creada y funcionando aunque el envío falle (ver enviarCorreoInvitacion).
+    const { nombreInvita, nombreFirma } = await obtenerContextoParaCorreoInvitacion(req);
+    const urlLogin = `${req.protocol}://${req.get('host')}/login.html`;
+    const correoEnviado = await enviarCorreoInvitacion({ email, nombreInvita, nombreFirma, rol, urlLogin });
+
+    res.status(201).json({ ok: true, id, email, rol, correoEnviado });
   } catch (err) {
     console.error('Error invitando a la firma:', err);
     res.status(500).json({ error: 'No se pudo crear la invitación.' });
+  }
+});
+
+// Reenviar el correo de una invitación pendiente (por si se fue a spam,
+// o se creó antes de configurar RESEND_API_KEY). La invitación en sí no
+// cambia -- esto solo vuelve a intentar el aviso.
+app.post('/api/firma/invitaciones/:id/reenviar', requireAuth, requireRole('administrador'), async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT email, rol FROM invitaciones_firma WHERE id = $1 AND firma_id = $2', [req.params.id, req.firmaId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Esa invitación ya no existe.' });
+
+    const { nombreInvita, nombreFirma } = await obtenerContextoParaCorreoInvitacion(req);
+    const urlLogin = `${req.protocol}://${req.get('host')}/login.html`;
+    const correoEnviado = await enviarCorreoInvitacion({ email: rows[0].email, nombreInvita, nombreFirma, rol: rows[0].rol, urlLogin });
+
+    res.json({ ok: true, correoEnviado });
+  } catch (err) {
+    console.error('Error reenviando invitación:', err);
+    res.status(500).json({ error: 'No se pudo reenviar el correo.' });
   }
 });
 
