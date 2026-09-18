@@ -170,7 +170,7 @@
         </div>
       </div>
 
-      <div id="formTerceros" class="config-form">
+      <div id="formTerceros" class="config-form" data-permiso="admin-contador">
         <div class="config-form-top">
           <h3 id="tituloFormTerceros">Agregar / marcar un tercero</h3>
           <button type="button" class="btn ghost" id="btnCancelarTercero" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
@@ -231,7 +231,7 @@
         </div>
       </div>
 
-      <div id="formIca" class="config-form">
+      <div id="formIca" class="config-form" data-permiso="admin-contador">
         <div class="config-form-top">
           <h3 id="tituloFormIca">Agregar tarifa de ICA</h3>
           <button type="button" class="btn ghost" id="btnCancelarIca" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
@@ -284,7 +284,7 @@
         </div>
       </div>
 
-      <div id="formAprendida" class="config-form">
+      <div id="formAprendida" class="config-form" data-permiso="admin-contador">
         <div class="config-form-top">
           <h3 id="tituloFormAprendida">Enseñar una tarifa nueva</h3>
           <button type="button" class="btn ghost" id="btnCancelarAprendida" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
@@ -338,6 +338,7 @@ function escapeHtml(str){
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+let miRol = null;
 let terceros = [];
 let tarifasIca = [];
 let editandoTercNit = null; // NIT del tercero que se está editando, o null = agregar nuevo
@@ -425,10 +426,10 @@ function renderTerceros(){
         ${t.notas ? `<div class="sub">${escapeHtml(t.notas)}</div>` : ''}
         ${chips.length ? `<div class="config-chips">${chips.join('')}</div>` : ''}
       </div>
-      <div class="row-actions">
+      ${puedeAdministrar(miRol) ? `<div class="row-actions">
         <button class="del-btn edit-btn" data-action="editar-tercero" data-nit="${escapeHtml(t.nit)}">editar</button>
         <button class="del-btn" data-action="eliminar-tercero" data-nit="${escapeHtml(t.nit)}">eliminar</button>
-      </div>
+      </div>` : ''}
     `;
     listaTercerosEl.appendChild(row);
   });
@@ -583,10 +584,10 @@ function renderIca(){
         <div class="sub">${tarifaTexto}${t.base_uvt ? ` · base ${t.base_uvt} UVT` : ' · sin base mínima'}${t.cuenta_puc ? ` · cuenta ${escapeHtml(t.cuenta_puc)}` : ''}</div>
         ${t.notas ? `<div class="sub">${escapeHtml(t.notas)}</div>` : ''}
       </div>
-      <div class="row-actions">
+      ${puedeAdministrar(miRol) ? `<div class="row-actions">
         <button class="del-btn edit-btn" data-action="editar-ica" data-id="${escapeHtml(t.id)}">editar</button>
         <button class="del-btn" data-action="eliminar-ica" data-id="${escapeHtml(t.id)}">eliminar</button>
-      </div>
+      </div>` : ''}
     `;
     listaIcaEl.appendChild(row);
   });
@@ -772,10 +773,10 @@ function renderAprendidas(){
         <div class="name">NIT ${escapeHtml(t.nit_proveedor)} -- ${escapeHtml(categoriaAprendidaLabel(t.categoria))}</div>
         <div class="sub">${pct} · ${vecesTexto}${fechaTexto ? ' · última vez ' + fechaTexto : ''}</div>
       </div>
-      <div class="row-actions">
+      ${puedeAdministrar(miRol) ? `<div class="row-actions">
         <button class="del-btn edit-btn" data-action="editar-aprendida" data-id="${escapeHtml(t.id)}">editar</button>
         <button class="del-btn" data-action="eliminar-aprendida" data-id="${escapeHtml(t.id)}">olvidar</button>
-      </div>
+      </div>` : ''}
     `;
     listaAprendidasEl.appendChild(row);
   });
@@ -859,6 +860,7 @@ async function requireAuthAndInit(){
     const res = await fetch('/api/me');
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
+    miRol = user.role;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
@@ -882,12 +884,14 @@ async function requireAuthAndInit(){
     renderIca();
     resetFormAprendida();
     renderAprendidas();
+    aplicarPermisosUI();
   } catch (e) {
     window.location.href = '/login.html';
   }
 }
 requireAuthAndInit();
 </script>
+<script src="/permisos-ui.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

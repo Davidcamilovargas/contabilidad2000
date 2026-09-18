@@ -387,6 +387,35 @@ footer{
 .stat-icon.moss{ background:var(--moss-tint); color:var(--moss-deep); }
 .stat-icon.clay{ background:var(--clay-tint); color:var(--clay-deep); }
 
+/* ---------- insignias de "excepciones" (Tarea 8: excepciones unificadas) ----------
+   Antes cada pantalla (Escanear, Carga masiva, Facturas) tenía su propio
+   aviso de "esto puede estar mal" con texto y colores levemente
+   distintos entre sí. Esta es la insignia compartida -- ver
+   public/excepciones.js para la definición única de qué cuenta como
+   excepción -- que usan facturas.html y revision.html para mostrarlas
+   siempre igual, sin importar en qué pantalla esté el contador. Mismo
+   tono de aviso (terracota) que ya usaba el antiguo .descuadre-badge de
+   Facturas y el .aviso-doc de Escanear/Carga masiva. */
+.exc-badge{
+  display:inline-flex; align-items:center; gap:4px;
+  font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600;
+  letter-spacing:.03em; white-space:nowrap;
+  padding:2px 7px; border-radius:100px;
+  background:#F7E3DC; color:#7A2E1B; border:1px solid #E3A489;
+  cursor:help;
+}
+.exc-lista{ display:flex; flex-wrap:wrap; gap:5px; }
+.exc-detalle{
+  font-family:'Inter',sans-serif; font-size:13px; color:#7A2E1B;
+  background:#F7E3DC; border:1px solid #E3A489; border-radius:8px;
+  padding:10px 12px;
+}
+.exc-detalle + .exc-detalle{ margin-top:6px; }
+.exc-detalle b{
+  display:inline-block; text-transform:uppercase; font-family:'JetBrains Mono',monospace;
+  font-size:10.5px; letter-spacing:.04em; margin-right:6px;
+}
+
 @media (prefers-reduced-motion: reduce){
   *, *::before, *::after{
     animation-duration:0.01ms !important;

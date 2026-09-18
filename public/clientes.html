@@ -427,6 +427,7 @@ let rutFileChanged = false;
 // null = modo "agregar cliente nuevo". Si tiene un id, el formulario
 // está editando ese cliente y el botón guarda con PATCH en vez de POST.
 let editingId = null;
+let miRol = null;
 
 inputCiiu.addEventListener('change', () => {
   ciiuOtroWrap.style.display = inputCiiu.value === 'otro' ? 'flex' : 'none';
@@ -643,8 +644,8 @@ function renderClients(){
         <div class="stats">${count} factura${count !== 1 ? 's' : ''}</div>
         <div class="row-actions">
           <a class="del-btn ficha-btn" href="/cliente.html?id=${c.id}">ver ficha →</a>
-          <button class="del-btn edit-btn" data-action="editar" data-id="${c.id}">editar</button>
-          <button class="del-btn" data-action="eliminar" data-id="${c.id}">eliminar</button>
+          ${puedeEscribir(miRol) ? `<button class="del-btn edit-btn" data-action="editar" data-id="${c.id}">editar</button>` : ''}
+          ${puedeAdministrar(miRol) ? `<button class="del-btn" data-action="eliminar" data-id="${c.id}">eliminar</button>` : ''}
         </div>
       </div>
       ${chips.length ? `<div class="client-chips">${chips.join('')}</div>` : ''}
@@ -767,6 +768,11 @@ function iniciarEdicion(id){
   formError.classList.remove('show');
   renderPlanBadge(); // el límite de plan no debe bloquear guardar una edición
 
+  // Editar SÍ está permitido para cualquier rol que pueda escribir (a
+  // diferencia de crear un cliente nuevo, que es solo administrador/
+  // contador) -- por eso el formulario se muestra aquí sin importar que
+  // aplicarVisibilidadForm() lo haya ocultado al cargar la página.
+  document.getElementById('addForm').style.display = '';
   document.getElementById('addForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -778,6 +784,18 @@ function cancelarEdicion(){
   btnCancelarEdicion.style.display = 'none';
   formError.classList.remove('show');
   renderPlanBadge();
+  aplicarVisibilidadForm();
+}
+
+// El formulario de "+ Agregar cliente" sirve también para editar uno
+// existente (mismo botón, mismo bloque) -- solo se oculta por completo
+// cuando está en modo CREAR y el rol no puede crear clientes nuevos
+// (administrador/contador). En modo editar se vuelve a mostrar sin
+// importar el rol, siempre que puedan escribir (ver iniciarEdicion).
+function aplicarVisibilidadForm(){
+  const addForm = document.getElementById('addForm');
+  if (!editingId && !puedeAdministrar(miRol)) addForm.style.display = 'none';
+  else addForm.style.display = '';
 }
 
 btnCancelarEdicion.addEventListener('click', cancelarEdicion);
@@ -919,6 +937,8 @@ async function requireAuthAndInit(){
     const res = await fetch('/api/me');
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
+    miRol = user.role;
+    aplicarVisibilidadForm();
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
@@ -935,6 +955,7 @@ async function requireAuthAndInit(){
 }
 requireAuthAndInit();
 </script>
+<script src="/permisos-ui.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

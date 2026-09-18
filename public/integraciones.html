@@ -66,6 +66,20 @@
   .proximamente .integ-icon{ background:var(--ink-faint); }
   .proximamente .estado{ background:#EAF3F7; color:var(--ink-faint); }
 
+  /* Igual al panel de "sin acceso" de Mi firma -- conectar/desconectar
+     el software contable es una decisión de administrador/contador,
+     no de quien solo escanea o solo consulta. */
+  .no-acceso{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:40px 30px; text-align:center; box-shadow:0 30px 60px -24px rgba(13,30,40,0.16);
+  }
+  .no-acceso h2{ font-family:'Archivo',sans-serif; font-size:18px; margin:0 0 8px; }
+  .no-acceso p{ color:var(--ink-soft,#4A5E68); font-size:13.5px; max-width:52ch; margin:0 auto; }
+  .no-acceso .mi-rol{
+    display:inline-block; margin-top:16px; font-family:'JetBrains Mono',monospace; font-size:11.5px;
+    padding:5px 12px; border-radius:100px; background:var(--petroleo-soft); color:var(--petroleo-deep);
+  }
+
   /* Segundo paso de conexión (hoy, solo Siigo): el contador elige de
      su PROPIA cuenta qué tipo de comprobante y qué forma de pago usar
      -- son ids que Enlaza nunca podría adivinar. */
@@ -112,6 +126,14 @@
     </div>
   </header>
   <div class="sub reveal">Conecta Enlaza con tu software contable para enviarle las facturas ya revisadas, sin volver a digitarlas.</div>
+
+  <div id="noAcceso" class="no-acceso" style="display:none;">
+    <h2>Esta pantalla es solo para administradores y contadores</h2>
+    <p>Conectar o desconectar el software contable de la firma es una decisión que solo puede tomar un administrador o un contador. Si necesitas enviar una factura a Alegra o Siigo, pídele a alguien con ese rol que conecte la cuenta primero.</p>
+    <span class="mi-rol" id="miRolTexto"></span>
+  </div>
+
+  <div id="contenido" style="display:none;">
 
   <div class="integ-card reveal" id="cardAlegra">
     <div class="integ-head">
@@ -209,6 +231,8 @@
   </div>
 
   <footer>Enviar una factura a tu software contable es una acción que tú decides, caso por caso, desde Facturas — nunca se manda sola al guardarla.</footer>
+  </div>
+
   </div>
 </div>
 
@@ -460,11 +484,14 @@ btnDesconectarSiigo.addEventListener('click', async () => {
   }
 });
 
+let miRol = null;
+
 async function requireAuthAndInit(){
   try {
     const res = await fetch('/api/me');
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
+    miRol = user.role;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
@@ -472,6 +499,12 @@ async function requireAuthAndInit(){
       await fetch('/auth/logout', { method: 'POST' });
       window.location.href = '/login.html';
     });
+    if (!puedeAdministrar(miRol)) {
+      document.getElementById('miRolTexto').textContent = 'Tu rol: ' + (NOMBRES_ROL[miRol] || miRol);
+      document.getElementById('noAcceso').style.display = 'block';
+      return;
+    }
+    document.getElementById('contenido').style.display = 'block';
     cargarIntegraciones();
   } catch (e) {
     window.location.href = '/login.html';
@@ -479,6 +512,7 @@ async function requireAuthAndInit(){
 }
 requireAuthAndInit();
 </script>
+<script src="/permisos-ui.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

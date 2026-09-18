@@ -84,6 +84,14 @@
   }
   .panel .panel-sub{ font-size:12.5px; color:var(--ink-soft); margin-bottom:16px; }
 
+  /* Aviso para el rol solo_lectura -- reemplaza el panel de subir/
+     conciliar extracto (el servidor bloquea esos POST igual). */
+  .panel-solo-lectura{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:22px 24px; margin-bottom:22px; text-align:center; color:var(--ink-soft);
+  }
+  .panel-solo-lectura p{ margin:0; font-size:13.5px; line-height:1.55; }
+
   .upload-actions{ display:flex; gap:10px; flex-wrap:wrap; }
   .upload-btn{
     display:flex; align-items:center; gap:8px; padding:11px 18px; border-radius:8px;
@@ -276,7 +284,10 @@
       </div>
     </div>
 
-    <div class="panel reveal">
+    <div class="panel-solo-lectura" id="panelExtractoSoloLectura" style="display:none;">
+      <p>Tu rol (solo lectura) no puede subir ni conciliar extractos bancarios -- solo consultar la cartera ya registrada.</p>
+    </div>
+    <div class="panel reveal" data-permiso="escritura">
       <h2>Subir extracto bancario</h2>
       <div class="panel-sub">La mayoría de bancos lo mandan por correo en PDF -- Enlaza lo lee con la misma IA que lee las facturas. Si tu banco también permite exportarlo en CSV, eso da un resultado más exacto (no depende de que la IA interprete la tabla).</div>
       <div class="upload-actions">
@@ -361,6 +372,7 @@ function formatCOP(value){
   return '$' + num.toLocaleString('es-CO');
 }
 
+let miRol = null; // rol del usuario logueado -- ver permisos-ui.js (puedeEscribir/puedeAdministrar)
 let myClients = [];
 let clienteActualId = null;
 let carteraData = null;
@@ -583,10 +595,10 @@ function renderSinConciliar(){
         <div class="mov-valor">${formatCOP(m.valor)}</div>
       </div>
       ${avisoHtml}
-      <div class="mov-actions">
+      ${puedeEscribir(miRol) ? `<div class="mov-actions">
         <select class="mov-select">${opcionesFacturaParaSelect(m, sug)}</select>
         <button class="mov-btn" data-action="confirmar-mov">Confirmar</button>
-      </div>
+      </div>` : ''}
     </div>`;
   }).join('');
 }
@@ -607,7 +619,7 @@ function renderConciliados(){
       <div class="cr-desc">${escapeHtml(m.fecha)} · ${escapeHtml(m.descripcion)} · ${formatCOP(m.valor)}</div>
       <div class="cr-right">
         <span>${estadoTxt}</span>
-        <button class="undo-btn" data-action="desconciliar-mov" data-id="${escapeHtml(m.id)}">Deshacer</button>
+        ${puedeEscribir(miRol) ? `<button class="undo-btn" data-action="desconciliar-mov" data-id="${escapeHtml(m.id)}">Deshacer</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -835,6 +847,7 @@ async function requireAuthAndInit(){
     const res = await fetch('/api/me');
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
+    miRol = user.role;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
@@ -842,6 +855,14 @@ async function requireAuthAndInit(){
       await fetch('/auth/logout', { method: 'POST' });
       window.location.href = '/login.html';
     });
+    // El rol solo_lectura no puede subir ni conciliar extractos (el
+    // servidor ya lo bloquea en requireAuth) -- se reemplaza el panel
+    // de carga por un aviso, y las filas de movimientos ya no muestran
+    // los botones de confirmar/deshacer (ver renderSinConciliar/renderConciliados).
+    if (!puedeEscribir(miRol)) {
+      document.getElementById('panelExtractoSoloLectura').style.display = 'block';
+    }
+    aplicarPermisosUI();
     init();
   } catch (e) {
     window.location.href = '/login.html';
@@ -849,6 +870,7 @@ async function requireAuthAndInit(){
 }
 requireAuthAndInit();
 </script>
+<script src="/permisos-ui.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

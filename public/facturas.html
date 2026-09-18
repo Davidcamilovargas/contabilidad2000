@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="/retenciones.js"></script>
+<script src="/excepciones.js"></script>
 <style>
   /* Esta página muestra una tabla de datos densa -- necesita mucho más
      espacio horizontal que el ancho angosto (900px) pensado para
@@ -62,18 +63,11 @@
   .mov-badge.ingreso{ background:#E9F0EB; color:#3E6053; }
   .mov-badge .mov-dot{ width:5px; height:5px; border-radius:50%; background:currentColor; }
 
-  /* "Valor sin IVA + IVA" no cuadra con "Valor con IVA" -- por eso, casi
-     siempre, esta factura tampoco tiene un asiento contable propuesto
-     (ver generarAsientoEgreso en asientos.js). Mismo tono de aviso que
-     ya usa Escanear para esta misma inconsistencia (#B0402D/#7A2E1B). */
-  .descuadre-badge{
-    display:inline-flex; align-items:center; gap:4px;
-    font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600;
-    letter-spacing:.03em; white-space:nowrap;
-    padding:2px 7px; border-radius:100px; margin-left:6px;
-    background:#F7E3DC; color:#7A2E1B; border:1px solid #E3A489;
-    cursor:help;
-  }
+  /* Las insignias de excepción (.exc-badge/.exc-lista) ya vienen de
+     styles.css -- ver Tarea 8 "excepciones unificadas" y
+     public/excepciones.js. Aquí solo se ajusta el espaciado para que
+     queden bien junto al nombre del proveedor. */
+  .proveedor-nombre .exc-lista{ display:inline-flex; margin-left:6px; vertical-align:middle; }
 
   table{
     width:100%; border-collapse:collapse;
@@ -356,8 +350,8 @@
           <div class="export-menu-label">Tus plantillas</div>
           <div id="exportMenuPlantillas"><div class="export-menu-empty">Todavía no tienes ninguna.</div></div>
           <div class="export-menu-sep"></div>
-          <button class="export-menu-item" id="btnNuevaPlantilla" type="button"><span>+ Nueva plantilla personalizada</span></button>
-          <button class="export-menu-item" id="btnPlantillaSiigo" type="button"><span>+ Empezar desde plantilla Siigo</span></button>
+          <button class="export-menu-item" id="btnNuevaPlantilla" type="button" data-permiso="escritura"><span>+ Nueva plantilla personalizada</span></button>
+          <button class="export-menu-item" id="btnPlantillaSiigo" type="button" data-permiso="escritura"><span>+ Empezar desde plantilla Siigo</span></button>
         </div>
       </div>
     </div>
@@ -522,6 +516,7 @@ const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','A
 // página, para que no queden versiones distintas si cambia la norma.
 
 let allInvoices = [];
+let miRol = null;
 let myClients = [];
 let tarifasAprendidas = {}; // clave: "NIT|categoria" -> tarifa exacta aprendida
 let proveedoresConectados = []; // ej. ['alegra', 'siigo'] -- los que tienen integración activa
@@ -547,6 +542,10 @@ function accionesIntegracionHtml(inv){
       if (inv[p.billField]) {
         return `<span class="alegra-sent" title="Ya se envió a ${escapeHtml(p.label)}">✓ ${escapeHtml(p.label)}</span>`;
       }
+      // Enviar dispara un POST -- el rol solo_lectura lo tiene bloqueado
+      // en el servidor igual que cualquier otro cambio, así que no vale
+      // la pena mostrarle el botón.
+      if (!puedeEscribir(miRol)) return '';
       return `<button class="alegra-btn" data-role="enviar-integracion" data-proveedor="${escapeHtml(p.key)}" data-id="${escapeHtml(inv.id)}">Enviar a ${escapeHtml(p.label)}</button>`;
     })
     .join('');
@@ -672,18 +671,19 @@ function renderTable(){
     const adquirienteTitle = inv.adquiriente_nombre
       ? `title="${escapeHtml('Adquiriente: ' + inv.adquiriente_nombre + (inv.adquiriente_nit ? ' · NIT ' + inv.adquiriente_nit : ''))}"`
       : '';
-    // "Valor sin IVA + IVA" no cuadró con "Valor con IVA" al guardarla
-    // (revisado por el servidor, no solo por el aviso de Escanear) --
-    // casi siempre significa que tampoco tiene un asiento contable
-    // propuesto. Se marca acá para que eso quede visible SIEMPRE, no
-    // solo en el momento de guardar.
-    const descuadreBadge = inv.valores_descuadrados
-      ? `<span class="descuadre-badge" title="Valor sin IVA + IVA (${formatCOP(sinIva + iva)}) no coincide con Valor con IVA (${formatCOP(conIva)}) -- por eso, si es egreso, probablemente no tiene asiento contable propuesto.">⚠ no cuadra</span>`
+    // Excepciones detectadas sobre esta factura YA GUARDADA (sin NIT,
+    // letras vs. números, saldo vencido, anticipo, valores descuadrados)
+    // -- ver public/excepciones.js (Tarea 8 "excepciones unificadas").
+    // Antes solo "no cuadra" se mostraba acá; las otras 4 solo se
+    // avisaban al momento de guardar y luego quedaban invisibles.
+    const excepcionesFactura = (typeof listaExcepciones === 'function') ? listaExcepciones(inv) : [];
+    const excepcionesBadges = excepcionesFactura.length > 0
+      ? `<span class="exc-lista">${excepcionesFactura.map((e) => `<span class="exc-badge" title="${escapeHtml(e.detalle)}">⚠ ${escapeHtml(e.etiqueta)}</span>`).join('')}</span>`
       : '';
     tr.innerHTML = `
       <td ${adquirienteTitle}><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
       <td>
-        <div class="proveedor-nombre">${escapeHtml(inv.nombre_razon_social) || '—'}${descuadreBadge}</div>
+        <div class="proveedor-nombre">${escapeHtml(inv.nombre_razon_social) || '—'}${excepcionesBadges}</div>
         <div class="proveedor-nit">${inv.tipo_doc ? 'Tipo ' + escapeHtml(inv.tipo_doc) + ' · ' : ''}NIT ${escapeHtml(inv.nit_cc) || '—'}${inv.dv ? '-' + escapeHtml(inv.dv) : ''}</div>
       </td>
       <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
@@ -695,7 +695,7 @@ function renderTable(){
       <td>
         <div class="row-actions">
           ${accionesIntegracionHtml(inv)}
-          <button class="del-btn" data-id="${escapeHtml(inv.id)}">eliminar</button>
+          ${puedeAdministrar(miRol) ? `<button class="del-btn" data-id="${escapeHtml(inv.id)}">eliminar</button>` : ''}
         </div>
       </td>
     `;
@@ -1135,10 +1135,10 @@ function renderMenuPlantillas() {
   el.innerHTML = misPlantillas.map(p => `
     <div class="export-menu-item" data-role="exportar-plantilla" data-id="${escapeHtml(p.id)}">
       <span>${escapeHtml(p.nombre)}</span>
-      <span>
+      ${puedeEscribir(miRol) ? `<span>
         <button type="button" class="emi-edit" data-role="editar-plantilla" data-id="${escapeHtml(p.id)}" title="Editar">✎</button>
         <button type="button" class="emi-del" data-role="borrar-plantilla" data-id="${escapeHtml(p.id)}" title="Eliminar">✕</button>
-      </span>
+      </span>` : ''}
     </div>
   `).join('');
 }
@@ -1398,11 +1398,11 @@ function renderValTable(){
       <td class="val-money-ro">${escapeHtml(inv.fecha_factura) || '—'}</td>
       <td class="val-money-ro">${formatCOP(sinIva)}</td>
       <td class="val-money-ro">${formatCOP(iva)}</td>
-      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_fuente') ? 'val-changed' : ''}" data-campo="rete_fuente" value="${inv.rete_fuente || 0}"></td>
-      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_iva') ? 'val-changed' : ''}" data-campo="rete_iva" value="${inv.rete_iva || 0}"></td>
-      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_ica') ? 'val-changed' : ''}" data-campo="rete_ica" value="${inv.rete_ica || 0}"></td>
+      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_fuente') ? 'val-changed' : ''}" data-campo="rete_fuente" value="${inv.rete_fuente || 0}" ${puedeEscribir(miRol) ? '' : 'disabled'}></td>
+      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_iva') ? 'val-changed' : ''}" data-campo="rete_iva" value="${inv.rete_iva || 0}" ${puedeEscribir(miRol) ? '' : 'disabled'}></td>
+      <td><input type="text" inputmode="numeric" class="val-input ${cambiado('rete_ica') ? 'val-changed' : ''}" data-campo="rete_ica" value="${inv.rete_ica || 0}" ${puedeEscribir(miRol) ? '' : 'disabled'}></td>
       <td class="val-total-cell" data-role="val-total">${formatCOP(valTotalAGirar(inv))}</td>
-      <td><button type="button" class="val-eximir-btn" data-role="val-eximir" title="Poner Rete Fuente, Rete IVA y Rete ICA de esta factura en 0">Eximir</button></td>
+      <td>${puedeEscribir(miRol) ? '<button type="button" class="val-eximir-btn" data-role="val-eximir" title="Poner Rete Fuente, Rete IVA y Rete ICA de esta factura en 0">Eximir</button>' : ''}</td>
     </tr>`;
   }).join('');
   renderValFooter();
@@ -1557,6 +1557,7 @@ async function requireAuthAndInit(){
     const res = await fetch('/api/me');
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
+    miRol = user.role;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
@@ -1564,6 +1565,10 @@ async function requireAuthAndInit(){
       await fetch('/auth/logout', { method: 'POST' });
       window.location.href = '/login.html';
     });
+    // "+ Nueva plantilla" / "+ Empezar desde plantilla Siigo" tienen
+    // data-permiso="escritura" -- solo_lectura no puede crear plantillas
+    // (el servidor lo bloquea igual que cualquier otro cambio).
+    aplicarPermisosUI();
     loadInvoices();
     cargarPlantillas();
   } catch (e) {
@@ -1572,6 +1577,7 @@ async function requireAuthAndInit(){
 }
 requireAuthAndInit();
 </script>
+<script src="/permisos-ui.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

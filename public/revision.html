@@ -33,6 +33,15 @@
     padding:8px 11px; border:1px solid var(--line); border-radius:7px; background:var(--paper-sunken); color:var(--ink);
   }
   .cola-buscar input:focus{ outline:none; border-color:var(--petroleo); background:#fff; }
+  /* Filtro rápido de triage -- ver Tarea 8 "excepciones unificadas": deja
+     ver de una sola vez qué facturas pendientes tienen algo para
+     revisar aparte de la aprobación normal (sin NIT, letras vs. números,
+     saldo vencido, anticipo, valores descuadrados). */
+  .cola-filtro-exc{
+    display:flex; align-items:center; gap:6px; margin-top:9px;
+    font-family:'Inter',sans-serif; font-size:12px; color:var(--ink-soft); cursor:pointer;
+  }
+  .cola-filtro-exc input{ accent-color:var(--coral); cursor:pointer; }
   .cola-lista{ max-height:640px; overflow-y:auto; }
   .cola-item{
     display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
@@ -105,6 +114,15 @@
   .tarifa-nota.encontrada{ background:var(--petroleo-soft); color:var(--petroleo-deep); }
   .tarifa-nota b{ font-family:'JetBrains Mono',monospace; }
 
+  /* Trazabilidad de la extracción -- qué modelo/versión del prompt de
+     Gemini generó esta factura (ver tarea "versión del prompt" de la
+     hoja de ruta). Discreto a propósito: es un dato para depurar, no
+     algo que el contador necesite ver a diario. */
+  .fd-trazabilidad{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-faint);
+    margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);
+  }
+
   #cargando{
     font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:30px 0;
@@ -155,6 +173,10 @@
       <div class="cola-head">
         <div class="cola-titulo">Pendientes <span class="cola-count" id="colaCount">0</span></div>
         <div class="cola-buscar"><input type="text" id="colaBuscar" placeholder="Buscar por nombre o NIT…"></div>
+        <label class="cola-filtro-exc">
+          <input type="checkbox" id="colaSoloExcepciones">
+          Solo con excepciones
+        </label>
       </div>
       <div class="cola-lista" id="colaLista"></div>
     </div>
@@ -171,6 +193,7 @@
   </div>
 </div>
 
+<script src="/excepciones.js"></script>
 <script>
 'use strict';
 
@@ -225,6 +248,7 @@ let allInvoices = [];
 let tarifasAprendidas = [];
 let seleccionadaId = null;
 let filtroTexto = '';
+let miRol = null;
 // asientoActual: { id, estado, lineas:[...] } | null | 'cargando'
 let asientoActual = null;
 
@@ -235,8 +259,11 @@ function parseConfianza(inv){
   } catch (e) { return {}; }
 }
 
+let soloConExcepciones = false;
+
 function pendientesFiltradas(){
-  const pendientes = allInvoices.filter((inv) => !inv.aprobado_por_contador);
+  let pendientes = allInvoices.filter((inv) => !inv.aprobado_por_contador);
+  if (soloConExcepciones) pendientes = pendientes.filter((inv) => listaExcepciones(inv).length > 0);
   const q = filtroTexto.trim().toLowerCase();
   if (!q) return pendientes;
   return pendientes.filter((inv) =>
@@ -255,10 +282,15 @@ function renderCola(){
   document.getElementById('colaCount').textContent = allInvoices.filter((i) => !i.aprobado_por_contador).length;
 
   if (lista.length === 0) {
-    document.getElementById('colaLista').innerHTML = `<div class="cola-vacia">${filtroTexto ? 'Ninguna pendiente coincide con la búsqueda.' : 'No hay facturas pendientes 🎉'}</div>`;
+    const vacioMsg = filtroTexto
+      ? 'Ninguna pendiente coincide con la búsqueda.'
+      : (soloConExcepciones ? 'Ninguna pendiente tiene excepciones -- todas están limpias 🎉' : 'No hay facturas pendientes 🎉');
+    document.getElementById('colaLista').innerHTML = `<div class="cola-vacia">${vacioMsg}</div>`;
   } else {
     document.getElementById('colaLista').innerHTML = lista.map((inv) => {
       const dudoso = tieneCampoDudoso(inv);
+      const excepciones = listaExcepciones(inv);
+      const excTitle = excepciones.map((e) => e.etiqueta).join(' · ');
       return `<button type="button" class="cola-item ${inv.id === seleccionadaId ? 'activo' : ''}" data-id="${inv.id}">
         <div class="ci-top">
           <span class="ci-nombre">${escapeHtml(inv.nombre_razon_social) || 'Sin nombre'}</span>
@@ -267,6 +299,7 @@ function renderCola(){
         <div class="ci-meta">
           <span>${escapeHtml(inv.fecha_factura) || '—'}</span>
           ${dudoso ? '<span class="ci-badge dudoso">⚠ revisar</span>' : ''}
+          ${excepciones.length > 0 ? `<span class="exc-badge" title="${escapeHtml(excTitle)}">⚠ ${excepciones.length === 1 ? excepciones[0].etiqueta : excepciones.length + ' excepciones'}</span>` : ''}
         </div>
       </button>`;
     }).join('');
@@ -318,7 +351,13 @@ function renderFichaFactura(inv){
       <div class="fd-value${c.money ? ' money' : ''}">${valor}${pill}</div>
     </div>`;
   }).join('');
-  return `<div class="factura-detalle"><div class="fd-table">${filas}</div></div>`;
+  // Facturas guardadas antes de esta función quedan con estas dos
+  // columnas vacías -- ahí no se muestra nada (mejor "no se sabe" que
+  // inventar un valor).
+  const traza = (inv.modelo_ia || inv.version_prompt)
+    ? `<div class="fd-trazabilidad">Leído por ${escapeHtml(inv.modelo_ia) || '—'}${inv.version_prompt ? ` · prompt ${escapeHtml(inv.version_prompt)}` : ''}</div>`
+    : '';
+  return `<div class="factura-detalle"><div class="fd-table">${filas}</div>${traza}</div>`;
 }
 
 function renderAsientoSeccion(inv){
@@ -345,9 +384,9 @@ function renderAsientoSeccion(inv){
     <h3>Asiento contable</h3>
     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
       <span class="estado-badge ${escapeHtml(asientoActual.estado)}">${aprobado ? 'Aprobado' : 'Propuesto'}</span>
-      ${aprobado
-        ? ''
-        : '<button type="button" class="btn secondary" id="btnAprobarAsiento" style="padding:8px 16px; font-size:12.5px;">Aprobar asiento</button>'}
+      ${(!aprobado && puedeAdministrar(miRol))
+        ? '<button type="button" class="btn secondary" id="btnAprobarAsiento" style="padding:8px 16px; font-size:12.5px;">Aprobar asiento</button>'
+        : ''}
     </div>
     <table class="asiento-tabla">
       <thead><tr><th>Cuenta</th><th>Nombre</th><th>Débito</th><th>Crédito</th></tr></thead>
@@ -355,6 +394,18 @@ function renderAsientoSeccion(inv){
       <tfoot><tr><td colspan="2">Total</td><td class="num">${formatCOP(debe)}</td><td class="num">${formatCOP(haber)}</td></tr></tfoot>
     </table>
   </div>`;
+}
+
+// Tarea 8 de la hoja de ruta ("excepciones unificadas") -- las mismas 5
+// excepciones que antes solo se avisaban en Escanear/Carga masiva, al
+// momento de digitar la factura, y luego se perdían. Con
+// public/excepciones.js como fuente única, ahora quedan visibles aquí
+// también, en cualquier momento después de guardada.
+function renderExcepcionesSeccion(inv){
+  const excepciones = listaExcepciones(inv);
+  if (excepciones.length === 0) return '';
+  const filas = excepciones.map((e) => `<div class="exc-detalle"><b>${escapeHtml(e.etiqueta)}</b>${escapeHtml(e.detalle)}</div>`).join('');
+  return `<div class="det-seccion"><h3>Excepciones detectadas</h3>${filas}</div>`;
 }
 
 function renderTarifaSeccion(inv){
@@ -386,9 +437,10 @@ function renderDetalle(){
         <div class="det-sub">NIT ${escapeHtml(inv.nit_cc) || '—'} · ${escapeHtml(inv.fecha_factura) || '—'} · ${inv.tipo_movimiento === 'ingreso' ? 'Ingreso' : 'Egreso'}</div>
       </div>
       <div class="det-acciones">
-        <button type="button" class="btn primary" id="btnAprobarFactura">Aprobar factura</button>
+        ${puedeAdministrar(miRol) ? '<button type="button" class="btn primary" id="btnAprobarFactura">Aprobar factura</button>' : ''}
       </div>
     </div>
+    ${renderExcepcionesSeccion(inv)}
     <div class="det-seccion">
       <h3>Datos extraídos por la IA</h3>
       ${renderFichaFactura(inv)}
@@ -399,7 +451,8 @@ function renderDetalle(){
 
   const btnAsiento = document.getElementById('btnAprobarAsiento');
   if (btnAsiento) btnAsiento.addEventListener('click', () => aprobarAsiento(asientoActual.id, btnAsiento));
-  document.getElementById('btnAprobarFactura').addEventListener('click', (e) => aprobarFactura(inv.id, e.target));
+  const btnFactura = document.getElementById('btnAprobarFactura');
+  if (btnFactura) btnFactura.addEventListener('click', (e) => aprobarFactura(inv.id, e.target));
 }
 
 async function aprobarFactura(id, btn){
@@ -454,6 +507,10 @@ document.getElementById('colaBuscar').addEventListener('input', (e) => {
   clearTimeout(filtroTimeout);
   filtroTimeout = setTimeout(renderCola, 120);
 });
+document.getElementById('colaSoloExcepciones').addEventListener('change', (e) => {
+  soloConExcepciones = e.target.checked;
+  renderCola();
+});
 
 async function cargarDatos(){
   try {
@@ -478,6 +535,7 @@ async function requireAuthAndInit(){
     const res = await fetch('/api/me');
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
+    miRol = user.role;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
@@ -492,6 +550,7 @@ async function requireAuthAndInit(){
 }
 requireAuthAndInit();
 </script>
+<script src="/permisos-ui.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>
