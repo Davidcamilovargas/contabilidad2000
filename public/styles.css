@@ -115,16 +115,23 @@ body{
 .sidebar-brand .brand-text{
   font-family:'Archivo',sans-serif; font-weight:800; font-size:15.5px; letter-spacing:-0.01em; color:#fff;
 }
-.sidebar-nav{ display:flex; flex-direction:column; gap:3px; }
+.sidebar-nav{ display:flex; flex-direction:column; gap:22px; }
+.sidebar-group{ display:flex; flex-direction:column; gap:2px; }
+.sidebar-group-label{
+  font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600;
+  letter-spacing:.09em; text-transform:uppercase;
+  color:rgba(255,255,255,0.4);
+  padding:0 12px 7px;
+}
 .sidebar-link{
   display:flex; align-items:center; gap:11px;
   padding:10px 12px; border-radius:8px;
   font-family:'Inter',sans-serif; font-size:13.5px; font-weight:600;
   color:rgba(255,255,255,0.72); text-decoration:none;
-  transition:background .15s var(--ease), color .15s var(--ease);
+  transition:background .18s var(--ease), color .18s var(--ease), transform .18s var(--ease);
 }
-.sidebar-link svg{ flex-shrink:0; opacity:.85; }
-.sidebar-link:hover{ background:rgba(255,255,255,0.10); color:#fff; }
+.sidebar-link svg{ flex-shrink:0; opacity:.85; transition:opacity .18s var(--ease); }
+.sidebar-link:hover{ background:rgba(255,255,255,0.10); color:#fff; transform:translateX(3px); }
 .sidebar-link.active{ background:rgba(255,255,255,0.16); color:#fff; box-shadow:inset 3px 0 0 var(--coral); }
 .sidebar-link.active svg{ opacity:1; }
 .sidebar-spacer{ flex:1; }
@@ -162,7 +169,7 @@ body{
   .sidebar-brand{ flex:1; justify-content:space-between; }
   .sidebar-hamburger{ display:flex; }
   .sidebar-nav{
-    display:none; flex-direction:column; gap:3px;
+    display:none; flex-direction:column; gap:18px;
     position:absolute; top:100%; left:0; right:0; margin-top:1px;
     background:var(--petroleo); border-bottom:1px solid var(--petroleo-deep);
     padding:8px 12px 14px; box-shadow:0 24px 44px -20px rgba(0,0,0,0.45);
@@ -170,6 +177,7 @@ body{
   }
   .sidebar.nav-open .sidebar-nav{ display:flex; }
   .sidebar-link{ white-space:normal; padding:11px 12px; }
+  .sidebar-link:hover{ transform:none; }
   .sidebar-spacer{ display:none; }
   .sidebar-foot{ display:none; }
 }

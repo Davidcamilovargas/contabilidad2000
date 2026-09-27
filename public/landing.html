@@ -72,6 +72,11 @@
     position:sticky; top:0; z-index:50;
     background:var(--petroleo);
     border-bottom:1px solid var(--petroleo-deep);
+    transition:box-shadow .3s var(--ease), background .3s var(--ease);
+  }
+  nav.scrolled{
+    background:var(--petroleo-deep);
+    box-shadow:0 18px 40px -22px rgba(8,58,79,0.55);
   }
   nav .logo-text{ color:#fff; }
   nav .nav-links{ color:rgba(255,255,255,0.78); }
@@ -79,6 +84,7 @@
   .nav-inner{
     max-width:1180px; margin:0 auto; padding:18px 28px;
     display:flex; align-items:center; justify-content:space-between;
+    position:relative;
   }
   .logo{ display:flex; align-items:center; gap:9px; }
   .logo-mark{
@@ -91,11 +97,49 @@
   .logo-mark img{ width:20px; height:20px; display:block; object-fit:contain; }
   .logo-text{ font-family:'Archivo',sans-serif; font-weight:800; font-size:17px; letter-spacing:-0.02em; color:var(--ink); }
   .nav-links{ display:flex; gap:32px; font-size:14px; color:var(--ink-soft); }
-  .nav-links a{ text-decoration:none; transition:color .2s var(--ease); }
-  .nav-links a:hover{ color:var(--petroleo-deep); }
+  .nav-links a{
+    position:relative; text-decoration:none; padding:4px 0;
+    transition:color .2s var(--ease);
+  }
+  .nav-links a::after{
+    content:""; position:absolute; left:0; right:100%; bottom:-2px; height:2px;
+    background:var(--coral); border-radius:2px;
+    transition:right .28s var(--ease);
+  }
+  .nav-links a:hover{ color:#fff; }
+  .nav-links a:hover::after,
+  .nav-links a.current::after{ right:0; }
+  .nav-links a.current{ color:#fff; }
   .nav-cta{ display:flex; align-items:center; gap:16px; }
+  .nav-hamburger{
+    display:none; width:38px; height:38px; border-radius:8px; border:1.5px solid rgba(255,255,255,0.3);
+    background:none; align-items:center; justify-content:center; cursor:pointer;
+    flex-direction:column; gap:4px; transition:background .18s var(--ease);
+  }
+  .nav-hamburger span{ display:block; width:17px; height:1.6px; background:#fff; border-radius:2px; transition:transform .25s var(--ease), opacity .25s var(--ease); }
+  .nav-hamburger:hover{ background:rgba(255,255,255,0.12); }
+  nav.menu-open .nav-hamburger span:nth-child(1){ transform:translateY(5.6px) rotate(45deg); }
+  nav.menu-open .nav-hamburger span:nth-child(2){ opacity:0; }
+  nav.menu-open .nav-hamburger span:nth-child(3){ transform:translateY(-5.6px) rotate(-45deg); }
 
-  @media (max-width:760px){ .nav-links{ display:none; } }
+  @media (max-width:760px){
+    .nav-links{
+      display:flex; flex-direction:column; gap:2px; color:rgba(255,255,255,0.85);
+      position:absolute; top:100%; left:0; right:0; margin-top:1px;
+      background:var(--petroleo-deep); padding:10px 28px 18px;
+      box-shadow:0 24px 44px -20px rgba(0,0,0,0.45);
+      max-height:0; overflow:hidden; opacity:0;
+      transition:max-height .3s var(--ease), opacity .25s var(--ease);
+    }
+    .nav-links a{ padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.1); }
+    .nav-links a::after{ display:none; }
+    nav.menu-open .nav-links{ max-height:320px; opacity:1; }
+    .nav-hamburger{ display:flex; }
+    .nav-cta{ gap:8px; }
+  }
+  @media (max-width:480px){
+    .nav-cta .btn-ghost{ display:none; }
+  }
 
   /* ---------- buttons ---------- */
   .btn{
@@ -163,7 +207,30 @@
     box-shadow:0 60px 120px -34px rgba(13,30,40,0.30), 0 0 0 1px var(--line);
     overflow:hidden;
     position:relative;
+    transition:transform .4s var(--ease), box-shadow .4s var(--ease);
   }
+  .mockup:hover{
+    transform:translateY(-6px);
+    box-shadow:0 70px 130px -30px rgba(13,30,40,0.36), 0 0 0 1px var(--line);
+  }
+
+  /* ---------- franja "compatible con" (honesta -- sin logos ajenos) --- */
+  .compat-strip{ padding:26px 0 8px; }
+  .compat-strip .wrap{
+    display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap;
+  }
+  .compat-label{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--ink-faint); margin-right:4px;
+  }
+  .compat-chip{
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:'JetBrains Mono',monospace; font-size:12.5px; font-weight:600; color:var(--ink-soft);
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:100px;
+    padding:8px 15px;
+    transition:transform .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
+  }
+  .compat-chip:hover{ transform:translateY(-2px); border-color:var(--petroleo); color:var(--petroleo-deep); }
   .mockup-scan{
     position:absolute; left:0; right:0; height:2.5px; top:64px;
     background:linear-gradient(90deg, transparent, var(--petroleo), transparent);
@@ -226,7 +293,8 @@
 
   .stat-grid{ margin-top:60px; display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); }
   @media (max-width:760px){ .stat-grid{ grid-template-columns:1fr; } }
-  .stat{ background:var(--paper-sunken); padding:34px 8px 34px 0; }
+  .stat{ background:var(--paper-sunken); padding:34px 8px 34px 0; transition:background .25s var(--ease), transform .25s var(--ease); }
+  .stat:hover{ background:var(--paper-raised); transform:translateY(-3px); }
   .stat .num{ font-family:'Archivo',sans-serif; font-weight:900; font-size:clamp(2.2rem,3.6vw,3rem); color:var(--petroleo); letter-spacing:-0.02em; }
   .stat:nth-child(2) .num{ color:var(--coral-deep); }
   .stat:nth-child(3) .num{ color:var(--moss-deep); }
@@ -289,6 +357,33 @@
   .plan-list div::before{ content:"✓"; color:var(--moss-deep); font-weight:700; flex-shrink:0; }
   .plan .btn{ margin-top:28px; width:100%; justify-content:center; }
 
+  /* ---------- faq (acordeón) ---------- */
+  .faq{ background:var(--paper-sunken); padding:104px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .faq-head{ max-width:640px; margin:0 auto; text-align:center; }
+  .faq-head h2{ font-size:clamp(2rem,4vw,2.9rem); color:var(--ink); margin-top:20px; }
+  .faq-list{ max-width:760px; margin:52px auto 0; display:flex; flex-direction:column; gap:12px; }
+  .faq-item{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    overflow:hidden; transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  .faq-item:hover{ border-color:var(--ink-faint); }
+  .faq-item.open{ border-color:var(--petroleo); box-shadow:0 18px 36px -22px rgba(11,79,108,0.25); }
+  .faq-q{
+    width:100%; display:flex; align-items:center; justify-content:space-between; gap:16px;
+    background:none; border:none; cursor:pointer; text-align:left;
+    padding:20px 24px; font-family:'Inter',sans-serif; font-size:15.5px; font-weight:700; color:var(--ink);
+  }
+  .faq-chev{ flex-shrink:0; color:var(--ink-faint); transition:transform .3s var(--ease), color .3s var(--ease); }
+  .faq-item.open .faq-chev{ transform:rotate(180deg); color:var(--petroleo); }
+  .faq-a{
+    display:grid; grid-template-rows:0fr; opacity:0;
+    transition:grid-template-rows .3s var(--ease), opacity .25s var(--ease);
+  }
+  .faq-item.open .faq-a{ grid-template-rows:1fr; opacity:1; }
+  .faq-a p{
+    overflow:hidden; margin:0; padding:0 24px 22px; font-size:14.5px; line-height:1.65; color:var(--ink-soft); max-width:640px;
+  }
+
   /* ---------- cta final ---------- */
   .cta-final{
     padding:120px 0; text-align:center; margin-top:20px;
@@ -305,27 +400,47 @@
 
   /* ---------- footer ---------- */
   footer{ padding:44px 0; border-top:1px solid var(--line); background:var(--paper); }
-  .footer-inner{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; }
   .footer-inner .mono{ font-size:11.5px; color:var(--ink-faint); letter-spacing:.04em; }
+  .footer-top{
+    display:grid; grid-template-columns:1.4fr 1fr 1fr 1fr; gap:32px;
+    padding-bottom:40px; margin-bottom:28px; border-bottom:1px solid var(--line);
+  }
+  @media (max-width:760px){ .footer-top{ grid-template-columns:1fr 1fr; } }
+  .footer-brand p{ font-size:13.5px; color:var(--ink-soft); line-height:1.6; margin:14px 0 0; max-width:240px; }
+  .footer-col h5{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--ink-faint); margin:0 0 14px;
+  }
+  .footer-col{ display:flex; flex-direction:column; gap:10px; }
+  .footer-col a{
+    font-size:13.5px; color:var(--ink-soft); text-decoration:none; width:fit-content;
+    transition:color .18s var(--ease);
+  }
+  .footer-col a:hover{ color:var(--petroleo-deep); text-decoration:underline; }
+  .footer-bottom{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; }
 </style>
 </head>
 <body>
 
-<nav>
+<nav id="siteNav">
   <div class="nav-inner">
     <div class="logo">
       <div class="logo-mark"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
       <span class="logo-text">Enlaza</span>
     </div>
-    <div class="nav-links">
-      <a href="#problema">El problema</a>
-      <a href="#como-funciona">Cómo funciona</a>
-      <a href="#diferencia">Por qué Enlaza</a>
-      <a href="#precios">Precios</a>
+    <div class="nav-links" id="navLinks">
+      <a href="#problema" data-section="problema">El problema</a>
+      <a href="#como-funciona" data-section="como-funciona">Cómo funciona</a>
+      <a href="#diferencia" data-section="diferencia">Por qué Enlaza</a>
+      <a href="#precios" data-section="precios">Precios</a>
+      <a href="#faq" data-section="faq">Preguntas</a>
     </div>
     <div class="nav-cta">
       <a href="/" class="btn btn-ghost btn-sm">Entrar</a>
       <a href="/" class="btn btn-ember btn-sm">Prueba gratis</a>
+      <button class="nav-hamburger" id="navHamburger" aria-label="Abrir menú" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
     </div>
   </div>
 </nav>
@@ -368,6 +483,16 @@
         </div>
       </div>
     </div>
+  </div>
+</section>
+
+<section class="compat-strip">
+  <div class="wrap reveal-observe">
+    <span class="compat-label">Funciona junto con</span>
+    <span class="compat-chip">Siigo</span>
+    <span class="compat-chip">Alegra</span>
+    <span class="compat-chip">Excel / Google Sheets</span>
+    <span class="compat-chip">Tu contador de siempre</span>
   </div>
 </section>
 
@@ -484,6 +609,52 @@
   </div>
 </section>
 
+<section class="faq" id="faq">
+  <div class="wrap">
+    <div class="faq-head reveal-observe">
+      <span class="eyebrow"><span class="dot"></span>Justo es preguntar</span>
+      <h2>Preguntas frecuentes.</h2>
+    </div>
+    <div class="faq-list">
+      <div class="faq-item reveal-observe">
+        <button class="faq-q" aria-expanded="false">
+          <span>¿Enlaza reemplaza a Siigo o Alegra?</span>
+          <svg class="faq-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="faq-a"><p>No. Enlaza es la capa de captura — lee tus facturas con IA y las deja organizadas por cliente y por mes, listas para exportar a Excel o pasar a tu software contable de siempre. No reemplaza nada de lo que ya usas.</p></div>
+      </div>
+      <div class="faq-item reveal-observe">
+        <button class="faq-q" aria-expanded="false">
+          <span>¿Necesito tarjeta de crédito para probarlo?</span>
+          <svg class="faq-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="faq-a"><p>No. Empiezas gratis sin poner ningún medio de pago. Si luego decides seguir, el precio de renovación es el mismo que el del primer mes — sin letra pequeña.</p></div>
+      </div>
+      <div class="faq-item reveal-observe">
+        <button class="faq-q" aria-expanded="false">
+          <span>¿Qué pasa si mi cliente me manda la factura por WhatsApp o foto de celular?</span>
+          <svg class="faq-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="faq-a"><p>Perfecto, para eso está pensado. Subes esa misma foto o el PDF tal como llegó — la IA lee los datos igual, sin importar la calidad del celular con la que se tomó.</p></div>
+      </div>
+      <div class="faq-item reveal-observe">
+        <button class="faq-q" aria-expanded="false">
+          <span>¿La IA se puede equivocar leyendo una factura?</span>
+          <svg class="faq-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="faq-a"><p>Sí puede pasar, por eso nada se guarda automáticamente: tú siempre revisas y confirmas cada dato extraído antes de que quede guardado en el kárdex del cliente.</p></div>
+      </div>
+      <div class="faq-item reveal-observe">
+        <button class="faq-q" aria-expanded="false">
+          <span>¿Puedo cancelar cuando quiera?</span>
+          <svg class="faq-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="faq-a"><p>Sí, sin permanencia. Cancelas cuando quieras desde tu cuenta, sin llamada de ventas ni proceso complicado.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="cta-final">
   <div class="wrap">
     <h2 class="reveal-observe">La próxima factura que te manden, que la lea la IA.</h2>
@@ -496,12 +667,37 @@
 </section>
 
 <footer>
-  <div class="wrap footer-inner">
-    <div class="logo">
-      <div class="logo-mark" style="width:24px;height:24px;"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
-      <span class="logo-text" style="font-size:15px;">Enlaza</span>
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <div class="logo">
+          <div class="logo-mark" style="width:24px;height:24px;"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
+          <span class="logo-text" style="font-size:15px;">Enlaza</span>
+        </div>
+        <p>La IA lee tus facturas, tú conservas el control. Hecho para contadores en Colombia.</p>
+      </div>
+      <div class="footer-col">
+        <h5>Producto</h5>
+        <a href="#como-funciona">Cómo funciona</a>
+        <a href="#diferencia">Por qué Enlaza</a>
+        <a href="#precios">Precios</a>
+        <a href="#faq">Preguntas frecuentes</a>
+      </div>
+      <div class="footer-col">
+        <h5>Cuenta</h5>
+        <a href="/">Entrar</a>
+        <a href="/">Prueba gratis</a>
+      </div>
+      <div class="footer-col">
+        <h5>Legal &amp; ayuda</h5>
+        <a href="/privacidad.html">Privacidad</a>
+        <a href="/terminos.html">Términos</a>
+        <a href="https://wa.me/573142471758" target="_blank" rel="noopener">Soporte por WhatsApp</a>
+      </div>
     </div>
-    <span class="mono">© 2026 ENLAZA · HECHO EN COLOMBIA</span>
+    <div class="footer-bottom">
+      <span class="mono">© 2026 ENLAZA · HECHO EN COLOMBIA</span>
+    </div>
   </div>
 </footer>
 
@@ -516,6 +712,59 @@
   }, { threshold: 0.15, rootMargin: '0px 0px -60px 0px' });
 
   document.querySelectorAll('.reveal-observe').forEach(el => observer.observe(el));
+
+  // ---------- Nav: fondo sólido al hacer scroll + menú hamburguesa (móvil) ----------
+  const siteNav = document.getElementById('siteNav');
+  const navHamburger = document.getElementById('navHamburger');
+  window.addEventListener('scroll', () => {
+    siteNav.classList.toggle('scrolled', window.scrollY > 12);
+  }, { passive: true });
+
+  navHamburger.addEventListener('click', () => {
+    const abierto = siteNav.classList.toggle('menu-open');
+    navHamburger.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+  });
+  document.querySelectorAll('#navLinks a').forEach(a => {
+    a.addEventListener('click', () => {
+      siteNav.classList.remove('menu-open');
+      navHamburger.setAttribute('aria-expanded', 'false');
+    });
+  });
+
+  // ---------- Nav: resalta el enlace de la sección visible ----------
+  const seccionesNav = ['problema', 'como-funciona', 'diferencia', 'precios', 'faq']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  const navLinkPorSeccion = {};
+  document.querySelectorAll('#navLinks a[data-section]').forEach(a => {
+    navLinkPorSeccion[a.dataset.section] = a;
+  });
+  const navObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const link = navLinkPorSeccion[entry.target.id];
+      if (!link) return;
+      if (entry.isIntersecting) {
+        Object.values(navLinkPorSeccion).forEach(a => a.classList.remove('current'));
+        link.classList.add('current');
+      }
+    });
+  }, { threshold: 0, rootMargin: '-45% 0px -50% 0px' });
+  seccionesNav.forEach(sec => navObserver.observe(sec));
+
+  // ---------- FAQ: acordeón (una abierta a la vez) ----------
+  document.querySelectorAll('.faq-item').forEach(item => {
+    const boton = item.querySelector('.faq-q');
+    boton.addEventListener('click', () => {
+      const yaAbierto = item.classList.contains('open');
+      document.querySelectorAll('.faq-item.open').forEach(otro => {
+        otro.classList.remove('open');
+        otro.querySelector('.faq-q').setAttribute('aria-expanded', 'false');
+      });
+      if (!yaAbierto) {
+        item.classList.add('open');
+        boton.setAttribute('aria-expanded', 'true');
+      }
+    });
+  });
 </script>
 
 </body>
