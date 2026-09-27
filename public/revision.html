@@ -135,7 +135,7 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <div class="logo-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="16" r="7" stroke="#0B4F6C" stroke-width="3"/><circle cx="20" cy="16" r="7" stroke="#FF6B4A" stroke-width="3"/></svg></div>
+      <div class="logo-mark"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
       <span class="brand-text">Enlaza</span>
     </div>
     <nav class="sidebar-nav">
@@ -467,8 +467,9 @@ async function aprobarFactura(id, btn){
     if (inv) { inv.aprobado_por_contador = true; inv.aprobado_at = data.aprobado_at; }
     seleccionadaId = null; // que renderDetalle elija la siguiente pendiente sola
     renderDetalle();
+    Aviso.mostrar('Factura aprobada.');
   } catch (err) {
-    alert('No se pudo aprobar: ' + err.message);
+    Aviso.mostrar('No se pudo aprobar: ' + err.message, { tipo: 'error' });
     btn.disabled = false;
     btn.textContent = original;
   }
@@ -485,8 +486,9 @@ async function aprobarAsiento(id, btn){
     asientoActual.estado = data.estado;
     asientoActual.aprobado_at = data.aprobado_at;
     renderDetalle();
+    Aviso.mostrar('Asiento contable aprobado.');
   } catch (err) {
-    alert('No se pudo aprobar el asiento: ' + err.message);
+    Aviso.mostrar('No se pudo aprobar el asiento: ' + err.message, { tipo: 'error' });
     btn.disabled = false;
     btn.textContent = original;
   }
@@ -551,6 +553,7 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/permisos-ui.js"></script>
+<script src="/ui-feedback.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

@@ -11,23 +11,79 @@
 <style>
   .wrap{ max-width:1240px; }
 
-  .quick-actions{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:28px; }
-  @media (max-width:700px){ .quick-actions{ grid-template-columns:1fr; } }
-  .quick-card{
-    display:flex; align-items:center; gap:16px;
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
-    padding:22px 24px; text-decoration:none; transition:border-color .15s ease, transform .15s ease, box-shadow .15s ease;
-    box-shadow:var(--shadow-sm);
+  .ia-hero{
+    position:relative; overflow:hidden; isolation:isolate;
+    display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;
+    background:var(--paper-raised);
+    border:1px solid var(--line); border-radius:18px;
+    padding:30px 34px; margin-bottom:28px;
+    box-shadow:0 30px 60px -30px rgba(13,30,40,0.22);
   }
-  .quick-card:hover{ border-color:var(--petroleo); transform:translateY(-2px); box-shadow:var(--shadow-md); }
-  .quick-card .icon{
-    font-size:22px; line-height:1; flex-shrink:0; width:48px; height:48px; border-radius:11px;
-    display:flex; align-items:center; justify-content:center;
-    background:var(--petroleo-tint, #EAF3F7);
+  .ia-hero-glow{
+    position:absolute; inset:0; z-index:-1; pointer-events:none;
+    background:
+      radial-gradient(340px 260px at 88% 8%, rgba(255,107,74,0.16), transparent 68%),
+      radial-gradient(360px 300px at 78% 92%, rgba(11,79,108,0.10), transparent 65%),
+      url('/img/pattern-bg.png');
+    background-repeat:no-repeat, no-repeat, no-repeat;
+    background-position:right top, right bottom, right -60px top -40px;
+    background-size:auto, auto, 480px auto;
+    opacity:1;
   }
-  .quick-card:nth-child(2) .icon{ background:var(--clay-tint, #F6ECE7); }
-  .quick-card .txt h3{ font-family:'Archivo',sans-serif; font-size:15.5px; color:var(--ink); margin:0 0 4px; }
-  .quick-card .txt p{ font-size:12.5px; color:var(--ink-soft); margin:0; }
+  .ia-hero-content{ position:relative; z-index:2; min-width:210px; }
+  .ia-hero-label{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--ink-faint); margin-bottom:8px;
+  }
+  .ia-hero-number{
+    font-family:'Archivo',sans-serif; font-weight:900; font-size:52px; line-height:1;
+    color:var(--petroleo-deep, var(--petroleo)); font-variant-numeric:tabular-nums;
+    margin-bottom:16px;
+  }
+  .ia-hero-pills{ display:flex; gap:9px; flex-wrap:wrap; }
+  .ia-pill{
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft);
+    background:var(--petroleo-tint, #EAF3F7); border:1px solid var(--line);
+    padding:7px 13px; border-radius:100px; white-space:nowrap;
+  }
+  .ia-pill strong{ font-weight:800; color:var(--coral-deep, #E0512F); margin-right:5px; }
+  .ia-hero-mascot-wrap{
+    position:relative; z-index:2; flex-shrink:0; width:168px; height:190px;
+  }
+  .ia-hero-confetti{ position:absolute; inset:-20px; pointer-events:none; overflow:visible; }
+  .confetti-bit{
+    position:absolute; width:8px; height:8px; border-radius:3px; opacity:0;
+  }
+  .confetti-bit.pop{ animation:confettiPop .85s ease-out forwards; }
+  @keyframes confettiPop{
+    0%{ opacity:1; transform:translate(0,0) scale(.6) rotate(0deg); }
+    100%{ opacity:0; transform:translate(var(--dx),var(--dy)) scale(1) rotate(var(--rot)); }
+  }
+  .ia-hero-mascot{
+    width:100%; display:block; filter:drop-shadow(0 16px 20px rgba(13,30,40,0.20));
+    opacity:0; transform:scale(.5) translateY(26px) rotate(-8deg);
+  }
+  .ia-hero-mascot.enter{
+    animation:mascotEnter .8s cubic-bezier(.34,1.56,.64,1) forwards,
+              mascotIdle 4.4s ease-in-out .8s infinite;
+  }
+  @keyframes mascotEnter{
+    0%{ opacity:0; transform:scale(.5) translateY(26px) rotate(-8deg); }
+    100%{ opacity:1; transform:scale(1) translateY(0) rotate(0deg); }
+  }
+  @keyframes mascotIdle{
+    0%,100%{ transform:translateY(0) rotate(-1.5deg); }
+    50%{ transform:translateY(-9px) rotate(1.5deg); }
+  }
+  @media (max-width:700px){
+    .ia-hero{ padding:24px; }
+    .ia-hero-number{ font-size:40px; }
+    .ia-hero-mascot-wrap{ width:120px; height:140px; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    .ia-hero-mascot, .ia-hero-mascot.enter{ animation:none; opacity:1; transform:none; }
+    .confetti-bit.pop{ animation:none; opacity:0; }
+  }
 
   #clientSection, #clientList, #clientEmpty{
     --paper-raised:#FFFFFF;
@@ -98,7 +154,7 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <div class="logo-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="16" r="7" stroke="#0B4F6C" stroke-width="3"/><circle cx="20" cy="16" r="7" stroke="#FF6B4A" stroke-width="3"/></svg></div>
+      <div class="logo-mark"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
       <span class="brand-text">Enlaza</span>
     </div>
     <nav class="sidebar-nav">
@@ -129,23 +185,22 @@
   </div>
 </div>
   </header>
-  <div class="sub reveal">Tus clientes, y acceso rápido para escanear o cargar facturas. Entra a la ficha de cada cliente para ver su contabilidad completa.</div>
+  <div class="sub reveal">Tus clientes. Entra a la ficha de cada uno para escanear, cargar facturas o ver su contabilidad completa.</div>
 
-  <div class="quick-actions reveal">
-    <a class="quick-card" href="/escanear.html">
-      <span class="icon">📸</span>
-      <span class="txt">
-        <h3>Escanear una factura</h3>
-        <p>Sube o toma foto de una factura para leerla con IA.</p>
-      </span>
-    </a>
-    <a class="quick-card" href="/masivo.html">
-      <span class="icon">📦</span>
-      <span class="txt">
-        <h3>Carga masiva</h3>
-        <p>Sube varias facturas de una vez.</p>
-      </span>
-    </a>
+  <div class="ia-hero reveal" id="iaStatCard" style="display:none;">
+    <div class="ia-hero-glow" aria-hidden="true"></div>
+    <div class="ia-hero-content">
+      <div class="ia-hero-label">Documentos leídos por la IA</div>
+      <div class="ia-hero-number" id="iaStatTotal">0</div>
+      <div class="ia-hero-pills">
+        <span class="ia-pill"><strong id="iaStatSemana">0</strong>esta semana</span>
+        <span class="ia-pill"><strong id="iaStatMes">0</strong>este mes</span>
+      </div>
+    </div>
+    <div class="ia-hero-mascot-wrap">
+      <div class="ia-hero-confetti" id="iaConfetti" aria-hidden="true"></div>
+      <img class="ia-hero-mascot" id="iaMascot" src="/img/mascot-hero.png" alt="Mascota de Enlaza celebrando el total de documentos procesados">
+    </div>
   </div>
 
   <div id="clientSection" class="reveal">
@@ -241,9 +296,96 @@ async function loadAll(){
 
     loadingEl.style.display = 'none';
     renderClients();
+    renderIaStat();
   } catch (e) {
     loadingEl.innerHTML = 'No se pudieron cargar los clientes: ' + e.message;
   }
+}
+
+// ---------- Tarjeta "Documentos leídos por la IA" ----------
+//
+// Todas las facturas de Enlaza entran por la IA (no hay formulario para
+// digitar una a mano), así que el total de facturas guardadas ES el total
+// de documentos leídos por la IA. En vez de un histórico mensual en
+// barras (se sentía plano), la mascota "presenta" el número grande con
+// un par de píldoras de contexto (esta semana / este mes) y reacciona con
+// una animación de celebración + confeti apenas termina de contar.
+function animarNumero(el, destino, alTerminar){
+  const inicio = 0;
+  const duracion = 700;
+  const t0 = performance.now();
+  function paso(t){
+    const p = Math.min(1, (t - t0) / duracion);
+    const facil = 1 - Math.pow(1 - p, 3); // ease-out cúbico
+    el.textContent = Math.round(inicio + (destino - inicio) * facil).toLocaleString('es-CO');
+    if (p < 1) requestAnimationFrame(paso);
+    else if (alTerminar) alTerminar();
+  }
+  requestAnimationFrame(paso);
+}
+
+function celebrarMascota(){
+  const mascota = document.getElementById('iaMascot');
+  // Se anima con la Web Animations API (en vez de una clase CSS) para que
+  // este "brinco" quede POR ENCIMA del flotado continuo (mascotIdle) sin
+  // interrumpirlo -- al terminar, el control vuelve solo al flotado, sin
+  // el parpadeo que daba pisar la propiedad "animation" completa.
+  if (mascota.animate) {
+    mascota.animate([
+      { transform: 'translateY(0) scale(1) rotate(0deg)' },
+      { transform: 'translateY(-18px) scale(1.08) rotate(-5deg)', offset: 0.28 },
+      { transform: 'translateY(0) scale(.97) rotate(4deg)', offset: 0.52 },
+      { transform: 'translateY(-7px) scale(1.03) rotate(-2deg)', offset: 0.76 },
+      { transform: 'translateY(0) scale(1) rotate(0deg)' },
+    ], { duration: 750, easing: 'ease-in-out' });
+  }
+
+  const cont = document.getElementById('iaConfetti');
+  cont.innerHTML = '';
+  const colores = ['#FF6B4A', '#0B4F6C', '#5B8072', '#8AA0AC'];
+  const centroX = cont.clientWidth * 0.52, centroY = cont.clientHeight * 0.5;
+  for (let i = 0; i < 14; i++) {
+    const bit = document.createElement('span');
+    bit.className = 'confetti-bit pop';
+    const angulo = Math.random() * Math.PI * 2;
+    const dist = 36 + Math.random() * 64;
+    bit.style.setProperty('--dx', (Math.cos(angulo) * dist) + 'px');
+    bit.style.setProperty('--dy', (Math.sin(angulo) * dist - 18) + 'px');
+    bit.style.setProperty('--rot', (Math.random() * 360 - 180) + 'deg');
+    bit.style.background = colores[i % colores.length];
+    bit.style.left = centroX + 'px';
+    bit.style.top = centroY + 'px';
+    bit.style.animationDelay = (Math.random() * 0.12) + 's';
+    cont.appendChild(bit);
+  }
+}
+
+function renderIaStat(){
+  const card = document.getElementById('iaStatCard');
+  if (allInvoices.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = 'flex';
+
+  const mascota = document.getElementById('iaMascot');
+  requestAnimationFrame(() => mascota.classList.add('enter'));
+  animarNumero(document.getElementById('iaStatTotal'), allInvoices.length, celebrarMascota);
+
+  const ahora = new Date();
+  const esteMes = allInvoices.filter(inv => {
+    const d = new Date(inv.saved_at);
+    return !isNaN(d) && d.getFullYear() === ahora.getFullYear() && d.getMonth() === ahora.getMonth();
+  }).length;
+
+  // "Esta semana" = desde el lunes más reciente 00:00 (semana laboral
+  // colombiana empieza en lunes, no en domingo).
+  const diaSemanaIso = (ahora.getDay() + 6) % 7; // lunes=0 ... domingo=6
+  const inicioSemana = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate() - diaSemanaIso);
+  const estaSemana = allInvoices.filter(inv => {
+    const d = new Date(inv.saved_at);
+    return !isNaN(d) && d >= inicioSemana;
+  }).length;
+
+  document.getElementById('iaStatMes').textContent = esteMes.toLocaleString('es-CO');
+  document.getElementById('iaStatSemana').textContent = estaSemana.toLocaleString('es-CO');
 }
 
 async function requireAuthAndInit(){

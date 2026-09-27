@@ -76,6 +76,45 @@
     cursor:pointer; padding:6px 10px; transition:color .15s ease; flex-shrink:0;
   }
   .del-btn:hover{ color:#B0402D; }
+
+  .clientes-btn{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.02em;
+    padding:5px 11px; border-radius:100px; cursor:pointer; flex-shrink:0;
+    border:1px solid var(--line); background:#fff; color:var(--ink-soft);
+    transition:border-color .15s ease, color .15s ease;
+  }
+  .clientes-btn:hover{ border-color:var(--petroleo); color:var(--petroleo-deep); }
+  .clientes-btn.restringido{ background:var(--clay-tint,#FBEEE6); border-color:var(--clay,#D98E5F); color:var(--clay-deep,#9A4E1C); }
+
+  .overlay-clientes{
+    position:fixed; inset:0; background:rgba(13,30,40,.42); display:none;
+    align-items:center; justify-content:center; z-index:200; padding:20px;
+  }
+  .overlay-clientes.show{ display:flex; }
+  .modal-clientes{
+    background:#fff; border-radius:14px; width:100%; max-width:440px; max-height:82vh;
+    display:flex; flex-direction:column; box-shadow:0 40px 80px -20px rgba(13,30,40,0.35);
+  }
+  .modal-clientes-head{ padding:20px 22px 4px; }
+  .modal-clientes-head h3{ font-family:'Archivo',sans-serif; font-size:16.5px; margin:0 0 4px; color:var(--ink); }
+  .modal-clientes-head p{ font-size:12.5px; color:var(--ink-soft); margin:0; }
+  .modal-clientes-lista{ padding:12px 22px; overflow-y:auto; flex:1; }
+  .modal-cliente-item{
+    display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line);
+    font-size:13.5px; color:var(--ink);
+  }
+  .modal-cliente-item:last-child{ border-bottom:none; }
+  .modal-cliente-item input[type="checkbox"]{ width:16px; height:16px; flex-shrink:0; accent-color:var(--petroleo); }
+  .modal-cliente-item label{ cursor:pointer; flex:1; }
+  .modal-clientes-vacio{ padding:16px 0; color:var(--ink-faint); font-size:12.5px; text-align:center; }
+  .modal-clientes-foot{
+    padding:14px 22px 20px; display:flex; justify-content:space-between; align-items:center; gap:12px;
+  }
+  .modal-clientes-foot .toggle-todos{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--petroleo,#0B4F6C); background:none; border:none; cursor:pointer; padding:0;
+  }
+  .modal-clientes-foot .botones{ display:flex; gap:8px; }
+  .modal-clientes-foot .btn{ padding:9px 16px; height:auto; font-size:13px; }
   .reenviar-btn{
     background:none; border:none; color:var(--ink-faint);
     font-family:'JetBrains Mono',monospace; font-size:11.5px;
@@ -120,7 +159,7 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <div class="logo-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="16" r="7" stroke="#0B4F6C" stroke-width="3"/><circle cx="20" cy="16" r="7" stroke="#FF6B4A" stroke-width="3"/></svg></div>
+      <div class="logo-mark"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
       <span class="brand-text">Enlaza</span>
     </div>
     <nav class="sidebar-nav">
@@ -219,6 +258,23 @@
   </div>
 </div>
 
+<div class="overlay-clientes" id="overlayClientes">
+  <div class="modal-clientes">
+    <div class="modal-clientes-head">
+      <h3>¿A cuáles clientes tiene acceso <span id="modalClientesNombre"></span>?</h3>
+      <p>Si no marcas ninguno, ve todos los clientes de tu firma (lo normal). Si marcas uno o más, solo va a ver esos -- el resto desaparece de sus listados, facturas y reportes.</p>
+    </div>
+    <div class="modal-clientes-lista" id="modalClientesLista"></div>
+    <div class="modal-clientes-foot">
+      <button type="button" class="toggle-todos" id="btnToggleTodos">Marcar todos</button>
+      <div class="botones">
+        <button type="button" class="btn" id="btnCancelarClientes">Cancelar</button>
+        <button type="button" class="btn primary" id="btnGuardarClientes">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 (function animateTitle(){
   const text = "Enlaza";
@@ -245,6 +301,7 @@ const NOMBRES_ROL = {
 };
 
 let miUserId = null;
+let listaClientesFirma = null; // se carga perezosamente, una sola vez
 
 function inicialesDe(nombre, email){
   const base = (nombre || email || '?').trim();
@@ -256,7 +313,10 @@ function selectRolHtml(idSel, rolActual){
     `<option value="${valor}"${valor === rolActual ? ' selected' : ''}>${etiqueta}</option>`).join('')}</select>`;
 }
 
+let miembrosActuales = [];
+
 function renderMiembros(miembros){
+  miembrosActuales = miembros;
   const cont = document.getElementById('listaMiembros');
   if (miembros.length === 0) {
     cont.innerHTML = '<div class="config-empty">Todavía no hay miembros.</div>';
@@ -275,6 +335,7 @@ function renderMiembros(miembros){
         ${m.id === miUserId
           ? `<span class="sub">${escapeHtml(NOMBRES_ROL[m.role] || m.role)} (tú)</span>`
           : selectRolHtml(m.id, m.role)}
+        ${m.id === miUserId ? '' : `<button type="button" class="clientes-btn${(m.clientes_asignados||[]).length > 0 ? ' restringido' : ''}" data-action="clientes" data-id="${m.id}" data-nombre="${escapeHtml(m.nombre || m.email)}">${(m.clientes_asignados||[]).length > 0 ? `${m.clientes_asignados.length} cliente${m.clientes_asignados.length === 1 ? '' : 's'}` : 'Todos los clientes'}</button>`}
         ${m.id === miUserId ? '' : `<button type="button" class="del-btn" data-action="quitar" data-id="${m.id}">Quitar</button>`}
       </div>
     </div>
@@ -289,19 +350,25 @@ function renderMiembros(miembros){
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rol }),
         });
         const data = await res.json();
-        if (!res.ok) { alert(data.error || 'No se pudo cambiar el rol.'); await cargar(); return; }
-      } catch (e) { alert('No se pudo cambiar el rol: ' + e.message); await cargar(); }
+        if (!res.ok) { Aviso.mostrar(data.error || 'No se pudo cambiar el rol.', { tipo: 'error' }); await cargar(); return; }
+        Aviso.mostrar('Rol actualizado.');
+      } catch (e) { Aviso.mostrar('No se pudo cambiar el rol: ' + e.message, { tipo: 'error' }); await cargar(); }
     });
+  });
+  cont.querySelectorAll('button[data-action="clientes"]').forEach((btn) => {
+    btn.addEventListener('click', () => abrirModalClientes(btn.dataset.id, btn.dataset.nombre));
   });
   cont.querySelectorAll('button[data-action="quitar"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('¿Quitar a esta persona de tu firma? Deja de ver los clientes y facturas de la firma, pero no se le borra la cuenta.')) return;
+      const ok = await Aviso.confirmarEliminar('¿Quitar a esta persona de tu firma? Deja de ver los clientes y facturas de la firma, pero no se le borra la cuenta.', { titulo: 'Quitar miembro', textoConfirmar: 'Quitar' });
+      if (!ok) return;
       try {
         const res = await fetch(`/api/firma/miembros/${btn.dataset.id}`, { method: 'DELETE' });
         const data = await res.json();
-        if (!res.ok) { alert(data.error || 'No se pudo quitar.'); return; }
+        if (!res.ok) { Aviso.mostrar(data.error || 'No se pudo quitar.', { tipo: 'error' }); return; }
         await cargar();
-      } catch (e) { alert('No se pudo quitar: ' + e.message); }
+        Aviso.mostrar('Se quitó a la persona de tu firma.');
+      } catch (e) { Aviso.mostrar('No se pudo quitar: ' + e.message, { tipo: 'error' }); }
     });
   });
 }
@@ -328,12 +395,15 @@ function renderInvitaciones(invitaciones){
   `).join('');
   cont.querySelectorAll('button[data-action="cancelar"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      const ok = await Aviso.confirmarEliminar('¿Cancelar esta invitación? La persona invitada ya no podrá unirse a tu firma con ese correo.', { titulo: 'Cancelar invitación', textoConfirmar: 'Cancelar invitación' });
+      if (!ok) return;
       try {
         const res = await fetch(`/api/firma/invitaciones/${btn.dataset.id}`, { method: 'DELETE' });
         const data = await res.json();
-        if (!res.ok) { alert(data.error || 'No se pudo cancelar.'); return; }
+        if (!res.ok) { Aviso.mostrar(data.error || 'No se pudo cancelar.', { tipo: 'error' }); return; }
         await cargar();
-      } catch (e) { alert('No se pudo cancelar: ' + e.message); }
+        Aviso.mostrar('Invitación cancelada.');
+      } catch (e) { Aviso.mostrar('No se pudo cancelar: ' + e.message, { tipo: 'error' }); }
     });
   });
   cont.querySelectorAll('button[data-action="reenviar"]').forEach((btn) => {
@@ -343,16 +413,100 @@ function renderInvitaciones(invitaciones){
       try {
         const res = await fetch(`/api/firma/invitaciones/${btn.dataset.id}/reenviar`, { method: 'POST' });
         const data = await res.json();
-        if (!res.ok) { alert(data.error || 'No se pudo reenviar.'); return; }
-        alert(data.correoEnviado ? 'Correo reenviado.' : 'No se pudo enviar el correo -- revisa la configuración de correo del servidor.');
+        if (!res.ok) { Aviso.mostrar(data.error || 'No se pudo reenviar.', { tipo: 'error' }); return; }
+        Aviso.mostrar(data.correoEnviado ? 'Correo reenviado.' : 'No se pudo enviar el correo -- revisa la configuración de correo del servidor.', { tipo: data.correoEnviado ? 'exito' : 'advertencia' });
       } catch (e) {
-        alert('No se pudo reenviar: ' + e.message);
+        Aviso.mostrar('No se pudo reenviar: ' + e.message, { tipo: 'error' });
       } finally {
         btn.disabled = false; btn.textContent = textoOriginal;
       }
     });
   });
 }
+
+// ---------- Modal: restringir a un miembro a ciertos clientes ----------
+
+let editandoClientesDeId = null;
+
+async function obtenerClientesFirma(){
+  if (listaClientesFirma) return listaClientesFirma;
+  const res = await fetch('/api/clients');
+  listaClientesFirma = res.ok ? await res.json() : [];
+  return listaClientesFirma;
+}
+
+async function abrirModalClientes(id, nombre){
+  editandoClientesDeId = id;
+  document.getElementById('modalClientesNombre').textContent = nombre || '';
+  const lista = document.getElementById('modalClientesLista');
+  lista.innerHTML = '<div class="modal-clientes-vacio">Cargando…</div>';
+  document.getElementById('overlayClientes').classList.add('show');
+
+  const [clientes, miembro] = [await obtenerClientesFirma(), miembrosActuales.find((m) => m.id === id)];
+  const asignados = new Set((miembro && miembro.clientes_asignados) || []);
+
+  if (clientes.length === 0) {
+    lista.innerHTML = '<div class="modal-clientes-vacio">Todavía no tienes clientes registrados.</div>';
+    return;
+  }
+  lista.innerHTML = clientes.map((c) => `
+    <div class="modal-cliente-item">
+      <input type="checkbox" id="chkCliente-${c.id}" value="${c.id}" ${asignados.has(c.id) ? 'checked' : ''}>
+      <label for="chkCliente-${c.id}">${escapeHtml(c.nombre || c.nit || 'Sin nombre')}</label>
+    </div>
+  `).join('');
+  actualizarTextoToggleTodos();
+}
+
+function checksClientesModal(){
+  return Array.from(document.querySelectorAll('#modalClientesLista input[type="checkbox"]'));
+}
+
+function actualizarTextoToggleTodos(){
+  const checks = checksClientesModal();
+  const todosMarcados = checks.length > 0 && checks.every((c) => c.checked);
+  document.getElementById('btnToggleTodos').textContent = todosMarcados ? 'Desmarcar todos' : 'Marcar todos';
+}
+
+function cerrarModalClientes(){
+  document.getElementById('overlayClientes').classList.remove('show');
+  editandoClientesDeId = null;
+}
+
+document.getElementById('overlayClientes').addEventListener('click', (e) => {
+  if (e.target.id === 'overlayClientes') cerrarModalClientes();
+});
+document.getElementById('btnCancelarClientes').addEventListener('click', cerrarModalClientes);
+document.getElementById('btnToggleTodos').addEventListener('click', () => {
+  const checks = checksClientesModal();
+  const todosMarcados = checks.length > 0 && checks.every((c) => c.checked);
+  checks.forEach((c) => { c.checked = !todosMarcados; });
+  actualizarTextoToggleTodos();
+});
+document.getElementById('modalClientesLista').addEventListener('change', (e) => {
+  if (e.target.matches('input[type="checkbox"]')) actualizarTextoToggleTodos();
+});
+document.getElementById('btnGuardarClientes').addEventListener('click', async () => {
+  const id = editandoClientesDeId;
+  if (!id) return;
+  const clienteIds = checksClientesModal().filter((c) => c.checked).map((c) => c.value);
+  const btn = document.getElementById('btnGuardarClientes');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/firma/miembros/${id}/clientes`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clienteIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) { Aviso.mostrar(data.error || 'No se pudo guardar.', { tipo: 'error' }); return; }
+    cerrarModalClientes();
+    await cargar();
+    Aviso.mostrar(clienteIds.length > 0 ? 'Acceso restringido guardado.' : 'Ahora ve todos los clientes de la firma.');
+  } catch (e) {
+    Aviso.mostrar('No se pudo guardar: ' + e.message, { tipo: 'error' });
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 async function cargar(){
   const res = await fetch('/api/firma/miembros');
@@ -361,7 +515,7 @@ async function cargar(){
     document.getElementById('noAcceso').style.display = 'block';
     return;
   }
-  if (!res.ok) { alert('No se pudo cargar tu firma.'); return; }
+  if (!res.ok) { Aviso.mostrar('No se pudo cargar tu firma.', { tipo: 'error' }); return; }
   const data = await res.json();
   renderMiembros(data.miembros || []);
   renderInvitaciones(data.invitaciones || []);
@@ -421,5 +575,6 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/soporte-chat.js"></script>
+<script src="/ui-feedback.js"></script>
 </body>
 </html>

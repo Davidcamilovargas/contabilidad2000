@@ -278,7 +278,7 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <div class="logo-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="16" r="7" stroke="#0B4F6C" stroke-width="3"/><circle cx="20" cy="16" r="7" stroke="#FF6B4A" stroke-width="3"/></svg></div>
+      <div class="logo-mark"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
       <span class="brand-text">Enlaza</span>
     </div>
     <nav class="sidebar-nav">
@@ -984,9 +984,10 @@ async function generarYDescargarExcelDefault(filtered, month){
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    Aviso.mostrar('Excel generado y descargado.');
 
   } catch (err) {
-    alert('No se pudo generar el Excel: ' + err.message);
+    Aviso.mostrar('No se pudo generar el Excel: ' + err.message, { tipo: 'error' });
   } finally {
     btnExport.disabled = false;
     btnExport.textContent = 'Formato Enlaza (el de siempre)';
@@ -1002,7 +1003,7 @@ btnExport.addEventListener('click', () => {
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
 
   if (filtered.length === 0) {
-    alert('No hay facturas en este mes para exportar.');
+    Aviso.mostrar('No hay facturas en este mes para exportar.', { tipo: 'advertencia' });
     return;
   }
 
@@ -1159,7 +1160,7 @@ function exportarConPlantilla(plantilla) {
   const clientInvoices = invoicesForSelectedClient();
   const monthInvoices = clientInvoices.filter(inv => monthKeyFromFecha(inv.fecha_factura) === month);
   const filtered = tipo === 'todos' ? monthInvoices : monthInvoices.filter(inv => (inv.tipo_movimiento || 'egreso') === tipo);
-  if (filtered.length === 0) { alert('No hay facturas en este mes para exportar.'); return; }
+  if (filtered.length === 0) { Aviso.mostrar('No hay facturas en este mes para exportar.', { tipo: 'advertencia' }); return; }
 
   abrirPanelValidacion(filtered, {
     titulo: `Revisar antes de exportar -- ${plantilla.nombre}`,
@@ -1192,8 +1193,9 @@ async function generarYDescargarExcelPlantilla(plantilla, filtered, month) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    Aviso.mostrar('Excel generado y descargado.');
   } catch (err) {
-    alert('No se pudo generar el archivo: ' + err.message);
+    Aviso.mostrar('No se pudo generar el archivo: ' + err.message, { tipo: 'error' });
   }
 }
 
@@ -1319,10 +1321,10 @@ document.getElementById('modalPlantillaBackdrop').addEventListener('click', cerr
 
 document.getElementById('btnGuardarPlantilla').addEventListener('click', async () => {
   const nombre = document.getElementById('plantillaNombre').value.trim();
-  if (!nombre) { alert('Ponle un nombre a la plantilla.'); return; }
-  if (columnasEnEdicion.length === 0) { alert('Agrega al menos una columna.'); return; }
+  if (!nombre) { Aviso.mostrar('Ponle un nombre a la plantilla.', { tipo: 'advertencia' }); return; }
+  if (columnasEnEdicion.length === 0) { Aviso.mostrar('Agrega al menos una columna.', { tipo: 'advertencia' }); return; }
   const columnasSinEncabezado = columnasEnEdicion.some(c => !c.encabezado || !c.encabezado.trim());
-  if (columnasSinEncabezado) { alert('Todas las columnas necesitan un encabezado.'); return; }
+  if (columnasSinEncabezado) { Aviso.mostrar('Todas las columnas necesitan un encabezado.', { tipo: 'advertencia' }); return; }
 
   const btn = document.getElementById('btnGuardarPlantilla');
   btn.disabled = true;
@@ -1338,8 +1340,9 @@ document.getElementById('btnGuardarPlantilla').addEventListener('click', async (
     if (!res.ok) throw new Error(data.error || 'No se pudo guardar la plantilla.');
     await cargarPlantillas();
     cerrarModalPlantilla();
+    Aviso.mostrar('Plantilla guardada.');
   } catch (err) {
-    alert('No se pudo guardar: ' + err.message);
+    Aviso.mostrar('No se pudo guardar: ' + err.message, { tipo: 'error' });
   } finally {
     btn.disabled = false;
     btn.textContent = 'Guardar plantilla';
@@ -1347,14 +1350,19 @@ document.getElementById('btnGuardarPlantilla').addEventListener('click', async (
 });
 
 async function borrarPlantillaActual(nombre) {
-  if (!confirm(`¿Eliminar la plantilla "${nombre}"? Esto no borra ninguna factura, solo la configuración de columnas.`)) return;
+  const ok = await Aviso.confirmarEliminar(
+    `¿Eliminar la plantilla "${nombre}"? Esto no borra ninguna factura, solo la configuración de columnas.`,
+    { titulo: 'Eliminar plantilla' }
+  );
+  if (!ok) return;
   try {
     const res = await fetch(`/api/plantillas-exportacion/${plantillaEnEdicionId}`, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json()).error || 'No se pudo eliminar.');
     await cargarPlantillas();
     cerrarModalPlantilla();
+    Aviso.mostrar('Plantilla eliminada.');
   } catch (err) {
-    alert('No se pudo eliminar: ' + err.message);
+    Aviso.mostrar('No se pudo eliminar: ' + err.message, { tipo: 'error' });
   }
 }
 document.getElementById('btnEliminarPlantilla').addEventListener('click', () => {
@@ -1494,7 +1502,7 @@ document.getElementById('btnConfirmarValidacion').addEventListener('click', asyn
     cerrarPanelValidacion();
     if (seguir) await seguir(facturasFinal);
   } catch (err) {
-    alert('No se pudo continuar: ' + err.message);
+    Aviso.mostrar('No se pudo continuar: ' + err.message, { tipo: 'error' });
   } finally {
     btn.disabled = false;
     btn.textContent = textoOriginal;
@@ -1504,15 +1512,17 @@ document.getElementById('btnConfirmarValidacion').addEventListener('click', asyn
 tbody.addEventListener('click', async (e) => {
   if (e.target.classList.contains('del-btn')) {
     const id = e.target.dataset.id;
-    if (!confirm('¿Eliminar esta factura del kárdex?')) return;
+    const ok = await Aviso.confirmarEliminar('¿Eliminar esta factura del kárdex? Esta acción no se puede deshacer.', { titulo: 'Eliminar factura' });
+    if (!ok) return;
 
     try {
       const res = await fetch('/api/invoices/' + id, { method: 'DELETE' });
       if (!res.ok) throw new Error('No se pudo eliminar.');
       allInvoices = allInvoices.filter(inv => inv.id !== id);
       renderTable();
+      Aviso.mostrar('Factura eliminada.');
     } catch (err) {
-      alert('No se pudo eliminar: ' + err.message);
+      Aviso.mostrar('No se pudo eliminar: ' + err.message, { tipo: 'error' });
     }
     return;
   }
@@ -1542,10 +1552,12 @@ tbody.addEventListener('click', async (e) => {
           renderTable();
 
           if (data.avisos && data.avisos.length > 0) {
-            alert(`Se envió a ${label}, pero revisa esto manualmente allá:\n\n` + data.avisos.join('\n'));
+            Aviso.mostrar(`Se envió a ${label}, pero revisa esto manualmente allá:\n` + data.avisos.join('\n'), { tipo: 'advertencia', duracion: 9000 });
+          } else {
+            Aviso.mostrar(`Enviado a ${label}.`);
           }
         } catch (err) {
-          alert(`No se pudo enviar a ${label}: ` + err.message);
+          Aviso.mostrar(`No se pudo enviar a ${label}: ` + err.message, { tipo: 'error' });
         }
       },
     });
@@ -1578,6 +1590,7 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/permisos-ui.js"></script>
+<script src="/ui-feedback.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 <script src="/lote-aviso.js"></script>

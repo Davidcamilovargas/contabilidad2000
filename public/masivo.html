@@ -338,7 +338,7 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <div class="logo-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="16" r="7" stroke="#0B4F6C" stroke-width="3"/><circle cx="20" cy="16" r="7" stroke="#FF6B4A" stroke-width="3"/></svg></div>
+      <div class="logo-mark"><img src="/img/logo-icon.png" alt="Enlaza" draggable="false"></div>
       <span class="brand-text">Enlaza</span>
     </div>
     <nav class="sidebar-nav">
@@ -1316,8 +1316,8 @@ function mostrarFormNuevaTarifaIcaMasivo(estIcaEl, d, icaInput){
     const tarifaPorMil = parseFloat((document.getElementById('icaNuevaTarifaM').value || '').replace(',', '.'));
     const baseUvt = parseFloat((document.getElementById('icaNuevaBaseUvtM').value || '0').replace(',', '.')) || 0;
     const cuentaPuc = document.getElementById('icaNuevaCuentaPucM').value.trim();
-    if (!municipio) { alert('Ponle un municipio.'); return; }
-    if (!tarifaPorMil || tarifaPorMil <= 0) { alert('La tarifa por mil debe ser un número mayor a 0.'); return; }
+    if (!municipio) { Aviso.mostrar('Ponle un municipio.', { tipo: 'advertencia' }); return; }
+    if (!tarifaPorMil || tarifaPorMil <= 0) { Aviso.mostrar('La tarifa por mil debe ser un número mayor a 0.', { tipo: 'advertencia' }); return; }
     const btn = document.getElementById('icaGuardarM');
     btn.disabled = true;
     try {
@@ -1331,8 +1331,9 @@ function mostrarFormNuevaTarifaIcaMasivo(estIcaEl, d, icaInput){
       if (idx >= 0) tarifasIca[idx] = saved; else tarifasIca.push(saved);
       d.tarifa_ica_id = saved.id;
       renderEstimadoIcaMasivo(estIcaEl, d, icaInput);
+      Aviso.mostrar('Tarifa de ICA guardada.');
     } catch (e) {
-      alert('No se pudo guardar la tarifa de ICA: ' + e.message);
+      Aviso.mostrar('No se pudo guardar la tarifa de ICA: ' + e.message, { tipo: 'error' });
       btn.disabled = false;
     }
   });
@@ -1692,6 +1693,7 @@ async function eliminarItemServidor(idx){
   } catch (err) { /* el próximo refresco lo refleja igual */ }
   borrarEdicionItem(item.id);
   await refrescarLoteActivo();
+  Aviso.mostrar('Documento quitado del lote.', { duracion: 2200 });
 }
 
 function renderSummary(){
@@ -2333,6 +2335,7 @@ async function requireAuthAndInit(){
 requireAuthAndInit();
 </script>
 <script src="/permisos-ui.js"></script>
+<script src="/ui-feedback.js"></script>
 <script src="/soporte-chat.js"></script>
 <script src="/nav-mobile.js"></script>
 </body>

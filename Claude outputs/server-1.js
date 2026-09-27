@@ -690,25 +690,6 @@ async function ensureSchema() {
   // Facturas pueda mostrar una alerta que no dependa de que el
   // contador se acuerde de ir a revisar por qué falta un asiento.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS valores_descuadrados BOOLEAN NOT NULL DEFAULT false;`);
-
-  // ---------- Restricción de un miembro de la firma a ciertos clientes ----------
-  // Por defecto CUALQUIER miembro de una firma ve TODOS los clientes de esa
-  // firma (así ha sido siempre -- el aislamiento real es entre firmas, vía
-  // contador_id/firma_id). Esta tabla es la excepción explícita: si un
-  // usuario tiene UNA O MÁS filas acá, queda restringido a ver/tocar SOLO
-  // esos clientes (en todas las pantallas y endpoints), sin importar que
-  // pertenezca a una firma con más clientes. Si no tiene ninguna fila, no
-  // cambia nada (sigue viendo todo, como hoy). Ver requireAuth() más abajo,
-  // donde se resuelve req.clientesAsignados a partir de esta tabla.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS miembro_clientes (
-      usuario_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      cliente_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-      creado_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (usuario_id, cliente_id)
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_miembro_clientes_usuario ON miembro_clientes (usuario_id);`);
 }
 
 // Nombres de columna (whitelisteados, nunca vienen del usuario) donde
@@ -839,13 +820,6 @@ async function requireAuth(req, res, next) {
     if (req.rol === 'solo_lectura' && !['GET', 'HEAD'].includes(req.method)) {
       return res.status(403).json({ error: 'Tu rol es de solo lectura -- no puedes crear, editar ni eliminar nada.' });
     }
-    // req.clientesAsignados: null = sin restricción (ve todos los clientes
-    // de su firma, como siempre). Si el usuario tiene filas en
-    // miembro_clientes, queda restringido a SOLO esos ids -- se resuelve
-    // acá, una sola vez por request, para no repetir esta consulta en cada
-    // endpoint. Ver puedeAccederCliente() y filtrarPorClienteAsignado().
-    const asignados = await pool.query('SELECT cliente_id FROM miembro_clientes WHERE usuario_id = $1', [req.userId]);
-    req.clientesAsignados = asignados.rows.length > 0 ? asignados.rows.map(r => r.cliente_id) : null;
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Tu sesión expiró o no es válida. Inicia sesión de nuevo.' });
@@ -859,34 +833,6 @@ function requireRole(...rolesPermitidos) {
   return function (req, res, next) {
     if (!rolesPermitidos.includes(req.rol)) {
       return res.status(403).json({ error: 'Tu rol dentro de la firma no tiene permiso para hacer esto.' });
-    }
-    next();
-  };
-}
-
-// ---------- Restricción por cliente asignado ----------
-//
-// true si este usuario puede ver/tocar este cliente: sin restricción
-// (req.clientesAsignados === null) siempre true; restringido, solo si el
-// id está en su lista. clienteId null/undefined/'' -> false cuando hay
-// restricción (una factura sin cliente_id identificado no es de nadie en
-// particular, así que un usuario restringido no la ve).
-function puedeAccederCliente(req, clienteId) {
-  if (!req.clientesAsignados) return true;
-  if (!clienteId) return false;
-  return req.clientesAsignados.includes(clienteId);
-}
-
-// Para una ruta que actúa sobre UN cliente identificado por :id (o por un
-// clienteId explícito en el body/query) -- responde 404 y corta si el
-// usuario está restringido y ese cliente no es suyo. 404 (no 403) a
-// propósito: para un usuario restringido, un cliente ajeno no debe ni
-// insinuar que existe.
-function requireClienteAsignado(obtenerClienteId) {
-  return function (req, res, next) {
-    const clienteId = obtenerClienteId(req);
-    if (!puedeAccederCliente(req, clienteId)) {
-      return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
     next();
   };
@@ -1136,21 +1082,6 @@ app.get('/api/firma/miembros', requireAuth, requireRole('administrador'), async 
     // BY es más frágil de mantener que esto, y el resultado es idéntico.
     miembros.forEach((m) => { m.es_fundador = m.id === req.firmaId; });
     miembros.sort((a, b) => (Number(b.es_fundador) - Number(a.es_fundador)) || String(a.nombre || '').localeCompare(String(b.nombre || '')));
-
-    // Clientes asignados por miembro (restricción opcional) -- se trae
-    // en una sola consulta para toda la firma y se reparte en memoria,
-    // en vez de una consulta por miembro.
-    const { rows: asignaciones } = await pool.query(
-      `SELECT usuario_id, cliente_id FROM miembro_clientes WHERE usuario_id = ANY($1)`,
-      [miembros.map((m) => m.id)]
-    );
-    const asignadosPorUsuario = new Map();
-    for (const a of asignaciones) {
-      if (!asignadosPorUsuario.has(a.usuario_id)) asignadosPorUsuario.set(a.usuario_id, []);
-      asignadosPorUsuario.get(a.usuario_id).push(a.cliente_id);
-    }
-    miembros.forEach((m) => { m.clientes_asignados = asignadosPorUsuario.get(m.id) || []; });
-
     const { rows: invitaciones } = await pool.query(
       `SELECT id, email, rol, created_at FROM invitaciones_firma WHERE firma_id = $1 ORDER BY created_at DESC`,
       [req.firmaId]
@@ -1159,45 +1090,6 @@ app.get('/api/firma/miembros', requireAuth, requireRole('administrador'), async 
   } catch (err) {
     console.error('Error listando miembros de la firma:', err);
     res.status(500).json({ error: 'No se pudieron leer los miembros de la firma.' });
-  }
-});
-
-// Reemplaza el conjunto de clientes a los que un miembro de la firma
-// queda restringido. Un arreglo vacío significa "sin restricción" --
-// vuelve a ver todos los clientes de la firma, el comportamiento de
-// siempre (ver puedeAccederCliente()).
-app.put('/api/firma/miembros/:id/clientes', requireAuth, requireRole('administrador'), async (req, res) => {
-  try {
-    if (req.params.id === req.firmaId) {
-      return res.status(400).json({ error: 'No puedes restringirte a ti mismo -- eres quien fundó esta firma.' });
-    }
-    const clienteIds = Array.isArray(req.body.clienteIds) ? req.body.clienteIds.filter((id) => typeof id === 'string' && id) : null;
-    if (!clienteIds) return res.status(400).json({ error: 'Formato inválido.' });
-
-    const { rows: miembroRows } = await pool.query('SELECT id FROM users WHERE id = $1 AND firma_id = $2', [req.params.id, req.firmaId]);
-    if (miembroRows.length === 0) return res.status(404).json({ error: 'Miembro no encontrado en tu firma.' });
-
-    if (clienteIds.length > 0) {
-      // Todos los clientes que se van a asignar deben ser de ESTA firma
-      // -- si no, alguien podría restringir a un miembro a un cliente
-      // ajeno usando un UUID adivinado (o de otra pestaña abierta).
-      const { rows: validos } = await pool.query(
-        'SELECT id FROM clients WHERE id = ANY($1) AND contador_id = $2',
-        [clienteIds, req.firmaId]
-      );
-      if (validos.length !== clienteIds.length) {
-        return res.status(400).json({ error: 'Uno o más clientes no pertenecen a tu firma.' });
-      }
-    }
-
-    await pool.query('DELETE FROM miembro_clientes WHERE usuario_id = $1', [req.params.id]);
-    for (const clienteId of clienteIds) {
-      await pool.query('INSERT INTO miembro_clientes (usuario_id, cliente_id) VALUES ($1, $2)', [req.params.id, clienteId]);
-    }
-    res.json({ ok: true, clientes_asignados: clienteIds });
-  } catch (err) {
-    console.error('Error asignando clientes a miembro:', err);
-    res.status(500).json({ error: 'No se pudo guardar la asignación de clientes.' });
   }
 });
 
@@ -1556,12 +1448,7 @@ async function buscarFacturaPorHash(contadorId, fileHash) {
 app.get('/api/clients', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM clients WHERE contador_id = $1 ORDER BY nombre ASC', [req.firmaId]);
-    // Si este usuario está restringido a ciertos clientes (miembro_clientes),
-    // la lista se recorta acá -- un solo lugar, y clientes.html/index.html/
-    // etc. automáticamente solo muestran lo que les corresponde, sin tener
-    // que tocar cada pantalla que consume este endpoint.
-    const visibles = req.clientesAsignados ? rows.filter(c => req.clientesAsignados.includes(c.id)) : rows;
-    res.json(visibles);
+    res.json(rows);
   } catch (err) {
     console.error('Error leyendo clientes:', err);
     res.status(500).json({ error: 'No se pudieron leer los clientes.' });
@@ -1631,9 +1518,6 @@ app.post('/api/clients', requireAuth, requireRole('administrador', 'contador'), 
 // Eliminar un cliente (solo si es de este contador)
 app.delete('/api/clients/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
-    if (!puedeAccederCliente(req, req.params.id)) {
-      return res.status(404).json({ error: 'Cliente no encontrado.' });
-    }
     const { rowCount } = await pool.query('DELETE FROM clients WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
     if (rowCount === 0) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
@@ -1664,9 +1548,6 @@ const CLIENT_EDITABLE_FIELDS = [
 
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
   try {
-    if (!puedeAccederCliente(req, req.params.id)) {
-      return res.status(404).json({ error: 'Cliente no encontrado.' });
-    }
     const updates = {};
     for (const field of CLIENT_EDITABLE_FIELDS) {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
@@ -1730,7 +1611,7 @@ const PUC_COLUMNAS_CONCEPTO = ['concepto', 'nombre', 'descripcion', 'descripció
 // por categoria_concepto (el navegador los agrupa para mostrarlos).
 app.get('/api/clients/:id/puc', requireAuth, async (req, res) => {
   try {
-    if (!(await clienteEsDelContador(req, req.params.id))) {
+    if (!(await clienteEsDelContador(req.firmaId, req.params.id))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
     const { rows } = await pool.query(
@@ -1749,7 +1630,7 @@ app.get('/api/clients/:id/puc', requireAuth, async (req, res) => {
 // cargar varios de una vez, ver /importar más abajo).
 app.post('/api/clients/:id/puc', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
-    if (!(await clienteEsDelContador(req, req.params.id))) {
+    if (!(await clienteEsDelContador(req.firmaId, req.params.id))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
     const categoria = String(req.body.categoria_concepto || '').trim().toLowerCase();
@@ -1786,7 +1667,7 @@ app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrado
   try {
     const { csvTexto } = req.body;
     if (!csvTexto) return res.status(400).json({ error: 'Falta el contenido del archivo.' });
-    if (!(await clienteEsDelContador(req, req.params.id))) {
+    if (!(await clienteEsDelContador(req.firmaId, req.params.id))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
 
@@ -1842,9 +1723,6 @@ app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrado
 // Elimina un código personalizado puntual.
 app.delete('/api/clients/:id/puc/:pucId', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
-    if (!puedeAccederCliente(req, req.params.id)) {
-      return res.status(404).json({ error: 'Cliente no encontrado.' });
-    }
     const { rowCount } = await pool.query(
       `DELETE FROM puc_personalizado_cliente WHERE id = $1 AND contador_id = $2 AND cliente_id = $3`,
       [req.params.pucId, req.firmaId, req.params.id]
@@ -1861,11 +1739,7 @@ app.delete('/api/clients/:id/puc/:pucId', requireAuth, requireRole('administrado
 app.get('/api/invoices', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM invoices WHERE contador_id = $1 ORDER BY saved_at DESC', [req.firmaId]);
-    // Restringido a ciertos clientes -> nunca ve una factura de otro
-    // cliente de la firma, ni tampoco una sin cliente_id identificado
-    // (esa no es de nadie en particular, ver puedeAccederCliente()).
-    const rowsVisibles = req.clientesAsignados ? rows.filter(r => puedeAccederCliente(req, r.cliente_id)) : rows;
-    const invoices = rowsVisibles.map(rowToInvoice);
+    const invoices = rows.map(rowToInvoice);
     const { month } = req.query;
     if (!month) return res.json(invoices);
 
@@ -2016,16 +1890,12 @@ app.get('/api/acumulado-categoria', requireAuth, async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT id, valor_sin_iva, categoria_concepto, desglose_categorias, fecha_factura, cliente_id
+      `SELECT id, valor_sin_iva, categoria_concepto, desglose_categorias, fecha_factura
        FROM invoices WHERE contador_id = $1 AND nit_cc = $2`,
       [req.firmaId, nit]
     );
     let acumulado = 0;
     for (const row of rows) {
-      // Restringido a ciertos clientes -> el acumulado anual solo suma lo
-      // pagado por SUS clientes a este proveedor, no lo que le pagó el
-      // resto de la firma (que ni siquiera debería poder ver que existe).
-      if (req.clientesAsignados && !puedeAccederCliente(req, row.cliente_id)) continue;
       if (excluirId && String(row.id) === excluirId) continue;
       if (anioDeFechaFactura(row.fecha_factura) !== anio) continue;
       acumulado += montoCategoriaEnFactura(row, categoria);
@@ -2046,9 +1916,6 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
     // ejemplo adivinando o copiando un UUID) y la factura quedaría
     // asociada al cliente de otro contador en vez de quedar sin asignar.
     if (req.body.cliente_id) {
-      if (!puedeAccederCliente(req, req.body.cliente_id)) {
-        return res.status(400).json({ error: 'El cliente indicado no existe o no te pertenece.' });
-      }
       const clienteRes = await pool.query(
         'SELECT 1 FROM clients WHERE id = $1 AND contador_id = $2',
         [req.body.cliente_id, req.firmaId]
@@ -2217,12 +2084,6 @@ app.post('/api/invoices', requireAuth, async (req, res) => {
 // Eliminar una factura guardada (solo si es de este contador)
 app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
-    if (req.clientesAsignados) {
-      const previa = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
-      if (previa.rows.length === 0 || !puedeAccederCliente(req, previa.rows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Factura no encontrada.' });
-      }
-    }
     const { rowCount } = await pool.query('DELETE FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
     if (rowCount === 0) {
       return res.status(404).json({ error: 'Factura no encontrada.' });
@@ -2244,12 +2105,6 @@ app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'conta
 const CAMPOS_EDITABLES_RETENCION = ['rete_fuente', 'rete_iva', 'rete_ica'];
 app.put('/api/invoices/:id', requireAuth, async (req, res) => {
   try {
-    if (req.clientesAsignados) {
-      const previa = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
-      if (previa.rows.length === 0 || !puedeAccederCliente(req, previa.rows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
-      }
-    }
     const sets = [];
     const values = [];
     let i = 1;
@@ -2294,11 +2149,10 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
 app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const factura = await pool.query(
-      'SELECT id, aprobado_por_contador, cliente_id FROM invoices WHERE id = $1 AND contador_id = $2',
+      'SELECT id, aprobado_por_contador FROM invoices WHERE id = $1 AND contador_id = $2',
       [req.params.id, req.firmaId]
     );
     if (factura.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
-    if (!puedeAccederCliente(req, factura.rows[0].cliente_id)) return res.status(404).json({ error: 'Factura no encontrada.' });
     if (factura.rows[0].aprobado_por_contador) {
       return res.status(400).json({ error: 'Esta factura ya estaba aprobada.' });
     }
@@ -2318,12 +2172,6 @@ app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 
 // contador_id guardado en cada ítem, no hace falta el join con invoices.
 app.get('/api/invoices/:id/items', requireAuth, async (req, res) => {
   try {
-    if (req.clientesAsignados) {
-      const factura = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
-      if (factura.rows.length === 0 || !puedeAccederCliente(req, factura.rows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Factura no encontrada.' });
-      }
-    }
     const { rows } = await pool.query(
       'SELECT * FROM factura_items WHERE invoice_id = $1 AND contador_id = $2 ORDER BY orden ASC',
       [req.params.id, req.firmaId]
@@ -2363,29 +2211,19 @@ app.get('/api/plan-cuentas', requireAuth, async (req, res) => {
 // a usar en el día a día.
 app.get('/api/asientos', requireAuth, async (req, res) => {
   try {
-    const condiciones = ['a.contador_id = $1'];
+    const condiciones = ['contador_id = $1'];
     const valores = [req.firmaId];
     if (req.query.estado) {
       valores.push(req.query.estado);
-      condiciones.push(`a.estado = $${valores.length}`);
+      condiciones.push(`estado = $${valores.length}`);
     }
     if (req.query.invoice_id) {
       valores.push(req.query.invoice_id);
-      condiciones.push(`a.invoice_id = $${valores.length}`);
-    }
-    // Restringido a ciertos clientes -> un asiento solo es visible si la
-    // factura de la que viene es de uno de esos clientes (join contra
-    // invoices, que es donde vive cliente_id -- asientos_contables no lo
-    // tiene directamente).
-    if (req.clientesAsignados) {
-      valores.push(req.clientesAsignados);
-      condiciones.push(`i.cliente_id = ANY($${valores.length})`);
+      condiciones.push(`invoice_id = $${valores.length}`);
     }
     const { rows } = await pool.query(
-      `SELECT a.id, a.invoice_id, a.fecha, a.descripcion, a.estado, a.generado_por, a.aprobado_at, a.creado_at
-       FROM asientos_contables a
-       ${req.clientesAsignados ? 'JOIN invoices i ON i.id = a.invoice_id' : ''}
-       WHERE ${condiciones.join(' AND ')} ORDER BY a.creado_at DESC`,
+      `SELECT id, invoice_id, fecha, descripcion, estado, generado_por, aprobado_at, creado_at
+       FROM asientos_contables WHERE ${condiciones.join(' AND ')} ORDER BY creado_at DESC`,
       valores
     );
     res.json(rows);
@@ -2405,12 +2243,6 @@ app.get('/api/asientos/:id', requireAuth, async (req, res) => {
       [req.params.id, req.firmaId]
     );
     if (cabecera.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
-    if (req.clientesAsignados) {
-      const fac = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1', [cabecera.rows[0].invoice_id]);
-      if (fac.rows.length === 0 || !puedeAccederCliente(req, fac.rows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Asiento no encontrado.' });
-      }
-    }
     const lineas = await pool.query(
       'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
       [req.params.id]
@@ -2431,16 +2263,10 @@ app.get('/api/asientos/:id', requireAuth, async (req, res) => {
 app.post('/api/asientos/:id/aprobar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const asiento = await pool.query(
-      'SELECT id, estado, invoice_id FROM asientos_contables WHERE id = $1 AND contador_id = $2',
+      'SELECT id, estado FROM asientos_contables WHERE id = $1 AND contador_id = $2',
       [req.params.id, req.firmaId]
     );
     if (asiento.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
-    if (req.clientesAsignados) {
-      const fac = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1', [asiento.rows[0].invoice_id]);
-      if (fac.rows.length === 0 || !puedeAccederCliente(req, fac.rows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Asiento no encontrado.' });
-      }
-    }
     if (asiento.rows[0].estado === 'aprobado') {
       return res.status(400).json({ error: 'Este asiento ya estaba aprobado.' });
     }
@@ -2582,9 +2408,6 @@ app.post('/api/invoices/:id/enviar/:proveedor', requireAuth, async (req, res) =>
       return res.status(404).json({ error: 'Factura no encontrada.' });
     }
     const factura = facturaRes.rows[0];
-    if (!puedeAccederCliente(req, factura.cliente_id)) {
-      return res.status(404).json({ error: 'Factura no encontrada.' });
-    }
 
     const integracionRes = await pool.query(
       'SELECT email, token_cifrado, configuracion FROM integraciones_contables WHERE contador_id = $1 AND proveedor = $2 AND activo = true',
@@ -2661,7 +2484,24 @@ async function llamarGeminiJSON(base64, effectiveMediaType, prompt) {
     } catch (_) { /* dejar el texto crudo si no es JSON */ }
     const err = new Error(detail);
     err.status = response.status;
-    err.publicMessage = `Error de la API de Gemini (${response.status}): ${detail}`;
+    if (response.status === 429) {
+      // Límite de solicitudes de la API GRATUITA de Gemini (hoy, 15 por
+      // minuto para este modelo) -- no es un error de Enlaza, es el tope
+      // de la cuenta de Google. Antes esto se mostraba tal cual lo manda
+      // Google (JSON en inglés, con un link de soporte de Google) --
+      // aquí se traduce a algo que el contador puede entender y resolver
+      // solo. Google normalmente dice cuánto esperar ("retry in 42.1s"
+      // dentro del mismo mensaje) -- si se puede leer ese número, se le
+      // muestra al contador en vez de un genérico "espera un momento".
+      const esperaMatch = detail.match(/retry in ([\d.]+)\s*s/i);
+      const segundos = esperaMatch ? Math.ceil(Number(esperaMatch[1])) : null;
+      err.publicMessage = 'Se alcanzó el límite de solicitudes gratuitas a la IA por este minuto '
+        + (segundos ? `-- espera ${segundos} segundos` : '-- espera un momento')
+        + ' y vuelve a intentarlo. No es un error de Enlaza: es el límite de la cuenta gratuita de Gemini (Google), que permite pocas solicitudes por minuto. '
+        + 'Si vas a procesar muchos documentos seguidos, activa facturación en tu cuenta de Google AI Studio (sigue siendo muy económico) para subir ese límite.';
+    } else {
+      err.publicMessage = `Error de la API de Gemini (${response.status}): ${detail}`;
+    }
     throw err;
   }
 
@@ -3254,15 +3094,8 @@ app.post('/api/extract-rut', requireAuth, limitadorIA, async (req, res) => {
 
 // ---------- Cartera / conciliación bancaria ----------
 
-// Punto único: además de "¿este cliente es de esta firma?", ahora también
-// revisa "¿este usuario en particular puede ver este cliente?" (si está
-// restringido a ciertos clientes vía miembro_clientes). Como esta función
-// ya se llamaba antes de CUALQUIER operación sobre un cliente puntual (PUC
-// personalizado, cartera, extractos...), extenderla acá blinda todos esos
-// puntos de una sola vez, sin tener que tocar cada ruta por separado.
-async function clienteEsDelContador(req, clienteId) {
-  if (!puedeAccederCliente(req, clienteId)) return false;
-  const { rows } = await pool.query('SELECT 1 FROM clients WHERE id = $1 AND contador_id = $2', [clienteId, req.firmaId]);
+async function clienteEsDelContador(contadorId, clienteId) {
+  const { rows } = await pool.query('SELECT 1 FROM clients WHERE id = $1 AND contador_id = $2', [clienteId, contadorId]);
   return rows.length > 0;
 }
 
@@ -3302,7 +3135,7 @@ async function facturasConSaldo(contadorId, clienteId) {
 app.get('/api/cartera/:clienteId', requireAuth, async (req, res) => {
   try {
     const clienteId = req.params.clienteId;
-    if (!(await clienteEsDelContador(req, clienteId))) {
+    if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
 
@@ -3381,7 +3214,7 @@ app.post('/api/extracto/leer-pdf', requireAuth, limitadorIA, async (req, res) =>
   if (!base64 || !mediaType || !clienteId) {
     return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
   }
-  if (!(await clienteEsDelContador(req, clienteId))) {
+  if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
     return res.status(404).json({ error: 'Cliente no encontrado.' });
   }
 
@@ -3420,7 +3253,7 @@ app.post('/api/extracto/leer-csv', requireAuth, async (req, res) => {
   if (!csvTexto || !clienteId) {
     return res.status(400).json({ error: 'Faltan datos del archivo o del cliente.' });
   }
-  if (!(await clienteEsDelContador(req, clienteId))) {
+  if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
     return res.status(404).json({ error: 'Cliente no encontrado.' });
   }
 
@@ -3463,7 +3296,7 @@ app.post('/api/extracto/guardar', requireAuth, async (req, res) => {
     if (!/^\d{4}-\d{2}$/.test(mes || '')) {
       return res.status(400).json({ error: 'Falta indicar a qué mes contable corresponde este extracto.' });
     }
-    if (!(await clienteEsDelContador(req, clienteId))) {
+    if (!(await clienteEsDelContador(req.firmaId, clienteId))) {
       return res.status(404).json({ error: 'Cliente no encontrado.' });
     }
 
@@ -3502,7 +3335,6 @@ app.post('/api/movimientos/:id/confirmar', requireAuth, async (req, res) => {
     );
     if (movRows.length === 0) return res.status(404).json({ error: 'Movimiento no encontrado.' });
     const mov = movRows[0];
-    if (!puedeAccederCliente(req, mov.cliente_id)) return res.status(404).json({ error: 'Movimiento no encontrado.' });
 
     const { rows: facRows } = await pool.query(
       'SELECT * FROM invoices WHERE id = $1 AND contador_id = $2 AND cliente_id = $3',
@@ -3543,15 +3375,6 @@ app.post('/api/movimientos/:id/confirmar', requireAuth, async (req, res) => {
 // de aparecer como pendiente de revisar.
 app.post('/api/movimientos/:id/ignorar', requireAuth, async (req, res) => {
   try {
-    if (req.clientesAsignados) {
-      const { rows: movRows } = await pool.query(
-        'SELECT cliente_id FROM movimientos_banco WHERE id = $1 AND contador_id = $2',
-        [req.params.id, req.firmaId]
-      );
-      if (movRows.length === 0 || !puedeAccederCliente(req, movRows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Movimiento no encontrado.' });
-      }
-    }
     const { rowCount } = await pool.query(
       `UPDATE movimientos_banco SET estado = 'ignorado', invoice_id = NULL WHERE id = $1 AND contador_id = $2`,
       [req.params.id, req.firmaId]
@@ -3569,15 +3392,6 @@ app.post('/api/movimientos/:id/ignorar', requireAuth, async (req, res) => {
 // error.
 app.post('/api/movimientos/:id/desconciliar', requireAuth, async (req, res) => {
   try {
-    if (req.clientesAsignados) {
-      const { rows: movRows } = await pool.query(
-        'SELECT cliente_id FROM movimientos_banco WHERE id = $1 AND contador_id = $2',
-        [req.params.id, req.firmaId]
-      );
-      if (movRows.length === 0 || !puedeAccederCliente(req, movRows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Movimiento no encontrado.' });
-      }
-    }
     const { rowCount } = await pool.query(
       `UPDATE movimientos_banco SET estado = 'sin_conciliar', invoice_id = NULL WHERE id = $1 AND contador_id = $2`,
       [req.params.id, req.firmaId]
@@ -3844,13 +3658,6 @@ app.post('/api/lotes', requireAuth, async (req, res) => {
   if (archivos.length > 100) {
     return res.status(400).json({ error: 'Máximo 100 archivos por lote -- sube el resto en un segundo lote.' });
   }
-  // Un miembro restringido solo puede procesar un lote ya fijado a uno
-  // de sus clientes permitidos -- un lote sin cliente (o de otro
-  // cliente) podría detectar y guardar facturas de cualquier cliente
-  // de la firma al desglosar los documentos.
-  if (!puedeAccederCliente(req, clienteId)) {
-    return res.status(403).json({ error: 'Debes escoger uno de tus clientes asignados para cargar documentos.' });
-  }
   try {
     const loteId = await lotes.crearLote(req.firmaId, clienteId || null, archivos);
     res.status(201).json({ loteId });
@@ -3866,12 +3673,6 @@ app.post('/api/lotes', requireAuth, async (req, res) => {
 app.get('/api/lotes/activo', requireAuth, async (req, res) => {
   try {
     const lote = await lotes.obtenerLoteActivoOUltimo(req.firmaId);
-    // Un miembro restringido no debe ver el lote de otro cliente (ni uno
-    // sin cliente fijo, que puede traer documentos de cualquier cliente
-    // de la firma) -- para él, simplemente no hay lote activo.
-    if (lote && !puedeAccederCliente(req, lote.cliente_id)) {
-      return res.json(null);
-    }
     res.json(lote || null);
   } catch (err) {
     console.error('Error leyendo el lote activo:', err);
@@ -3879,30 +3680,8 @@ app.get('/api/lotes/activo', requireAuth, async (req, res) => {
   }
 });
 
-// El lote (padre) de un ítem puede no tener cliente fijo (cliente_id
-// NULL) pero cada documento ya trae su propio cliente_id_detectado --
-// para un miembro restringido, cualquiera de los dos que apunte a un
-// cliente fuera de lo permitido bloquea el acceso a ese ítem.
-async function puedeAccederItemLote(req, itemId) {
-  if (!req.clientesAsignados) return true;
-  const { rows } = await pool.query(
-    `SELECT lp.cliente_id AS lote_cliente_id, li.cliente_id_detectado
-     FROM lote_items li JOIN lotes_procesamiento lp ON lp.id = li.lote_id
-     WHERE li.id = $1 AND lp.contador_id = $2`,
-    [itemId, req.firmaId]
-  );
-  if (rows.length === 0) return false;
-  const { lote_cliente_id, cliente_id_detectado } = rows[0];
-  if (lote_cliente_id && !puedeAccederCliente(req, lote_cliente_id)) return false;
-  if (cliente_id_detectado && !puedeAccederCliente(req, cliente_id_detectado)) return false;
-  return true;
-}
-
 app.post('/api/lotes/items/:id/reintentar', requireAuth, async (req, res) => {
   try {
-    if (!(await puedeAccederItemLote(req, req.params.id))) {
-      return res.status(404).json({ error: 'No se encontró este archivo.' });
-    }
     await lotes.reintentarItem(req.params.id, req.firmaId, !!req.body.forzar);
     res.json({ ok: true });
   } catch (err) {
@@ -3913,9 +3692,6 @@ app.post('/api/lotes/items/:id/reintentar', requireAuth, async (req, res) => {
 
 app.delete('/api/lotes/items/:id', requireAuth, async (req, res) => {
   try {
-    if (!(await puedeAccederItemLote(req, req.params.id))) {
-      return res.status(404).json({ error: 'No se encontró este archivo.' });
-    }
     await lotes.eliminarItem(req.params.id, req.firmaId);
     res.json({ ok: true });
   } catch (err) {
@@ -3926,9 +3702,6 @@ app.delete('/api/lotes/items/:id', requireAuth, async (req, res) => {
 
 app.get('/api/lotes/items/:id/archivo', requireAuth, async (req, res) => {
   try {
-    if (!(await puedeAccederItemLote(req, req.params.id))) {
-      return res.status(404).json({ error: 'No se encontró el archivo.' });
-    }
     const archivo = await lotes.obtenerArchivoItem(req.params.id, req.firmaId);
     if (!archivo) return res.status(404).json({ error: 'No se encontró el archivo.' });
     res.json(archivo);
