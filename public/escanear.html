@@ -382,20 +382,33 @@
      visible, la detección automática de cliente (por NIT) no busca
      entre todos los clientes: solo confirma si esta factura es un
      ingreso o un egreso PARA este cliente en concreto. */
-  .cliente-fijo{
-    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
-    font-family:'JetBrains Mono',monospace; font-size:12.5px;
-    border:1px solid var(--moss); background:var(--moss-soft); color:#fff;
-    padding:11px 16px; border-radius:8px; margin-bottom:20px;
+  .client-tabbar{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:14px 18px 16px; margin-bottom:20px;
   }
-  .cliente-fijo b{ color:#fff; }
-  .cliente-fijo a{
-    color:var(--ink-soft); text-decoration:underline; text-underline-offset:2px;
+  .client-tabbar .ctb-head{
+    display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:12px;
   }
-  .cliente-fijo a:hover{ color:var(--ink); }
-  .cliente-fijo .cf-links{ display:flex; gap:14px; flex-wrap:wrap; }
-  .cliente-fijo .cf-links a{ text-decoration:none; opacity:.85; }
-  .cliente-fijo .cf-links a:hover{ opacity:1; text-decoration:underline; }
+  .client-tabbar .ctb-cliente-label{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-faint);
+  }
+  .client-tabbar .ctb-cliente-nombre{
+    font-family:'Archivo',sans-serif; font-weight:800; font-size:15px; color:var(--ink); margin-right:auto;
+  }
+  .client-tabbar .ctb-exit{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-exit:hover{ color:var(--petroleo); text-decoration:underline; }
+  .client-tabbar .ctb-links{ display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+  .client-tabbar .ctb-links a{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
+    color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:100px;
+    transition:all .15s ease; white-space:nowrap;
+  }
+  .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
+  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
+  .client-tabbar .ctb-divider{ width:1px; height:16px; background:var(--line); margin:0 2px; flex-shrink:0; }
 
   .mov-confirmed{
     display:flex; align-items:center; gap:10px;
@@ -559,17 +572,27 @@
   </header>
   <div class="sub reveal">Enlaza — sube o fotografía una factura o cuenta de cobro, revisa lo que leyó la IA, y guárdala en tu kárdex del mes. Otro tipo de documento (comprobantes de pago, extractos, cotizaciones...) se rechaza automáticamente.</div>
 
-  <div class="cliente-fijo reveal" id="clienteFijoBanner" style="display:none;">
-    <span>📌 Escaneando para <b id="clienteFijoNombre"></b></span>
-    <span class="cf-links" id="clienteFijoLinks">
+  <div class="client-tabbar reveal" id="clienteFijoBanner" style="display:none;">
+    <div class="ctb-head">
+      <span class="ctb-cliente-label">Cliente</span>
+      <span class="ctb-cliente-nombre" id="clienteFijoNombre"></span>
+      <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
+    </div>
+    <nav class="ctb-links">
       <a href="#" id="cfFicha">Ficha</a>
       <a href="#" id="cfFacturas">Facturas</a>
       <a href="#" id="cfKardex">Kárdex</a>
       <a href="#" id="cfIngresos">Ingresos</a>
       <a href="#" id="cfEgresos">Egresos</a>
       <a href="#" id="cfBalance">Balance</a>
-    </span>
-    <a href="/clientes.html" id="clienteFijoQuitar">Cambiar cliente</a>
+      <span class="ctb-divider"></span>
+      <a href="#" id="cfEscanear" class="active">Escanear</a>
+      <a href="#" id="cfMasivo">Carga masiva</a>
+      <span class="ctb-divider"></span>
+      <a href="#" id="cfCartera">Cartera</a>
+      <a href="#" id="cfAuditoria">Auditoría</a>
+      <a href="#" id="cfRetenciones">Retenciones</a>
+    </nav>
   </div>
 
   <div class="intake-solo-lectura" id="intakeSoloLectura" style="display:none;">
@@ -879,6 +902,10 @@ function aplicarClientePreseleccionado(){
   document.getElementById('cfIngresos').href = '/ingresos.html' + qs;
   document.getElementById('cfEgresos').href = '/egresos.html' + qs;
   document.getElementById('cfBalance').href = '/balance.html' + qs;
+  document.getElementById('cfMasivo').href = '/masivo.html' + qs;
+  document.getElementById('cfCartera').href = '/cartera.html' + qs;
+  document.getElementById('cfAuditoria').href = '/informe-auditoria.html' + qs;
+  document.getElementById('cfRetenciones').href = '/listado-retenciones.html' + qs;
 }
 
 // Tarifas ya confirmadas antes por el contador para un proveedor
@@ -1145,97 +1172,49 @@ function detectClient(data){
 // El contador la abre con un clic y sigue exactamente el mismo
 // formulario de revisar/guardar de siempre -- esto solo evita que
 // capturar la próxima tenga que esperar a que la anterior se lea.
-// Se guarda en el navegador (IndexedDB) -- no en el servidor, a
-// diferencia del lote de Carga masiva -- así que si el contador sale
-// de esta pantalla (ej. a Editar clientes) y vuelve, o refresca sin
-// querer, las capturas siguen ahí tal como las dejó. Solo desaparecen
-// cuando él mismo las quita con el botón ✕ o cuando ya quedaron
-// guardadas en el kárdex.
+//
+// Vive SOLO en la memoria de esta pestaña (un array de JS), nunca en
+// el servidor ni en un almacenamiento del navegador que sobreviva a la
+// pestaña -- así que mientras el contador se queda en esta página
+// (revisando una captura, tomando otra, etc.) la lista sigue ahí, pero
+// en cuanto sale de esta pantalla o cierra la pestaña, desaparece por
+// completo. Esto es a propósito: son facturas reales de un cliente, y
+// nunca deben poder quedar visibles para otro usuario que abra esta
+// misma página después en el mismo navegador.
+//
+// (Antes se guardaba en IndexedDB para sobrevivir a un refresh -- se
+// quitó porque esa persistencia sobrevivía también el cambio de sesión
+// entre dos usuarios distintos en el mismo navegador, y una factura ya
+// leída de un cliente podía quedar visible para el siguiente usuario
+// que entrara a escanear para ese mismo cliente.)
 let colaCapturas = [];
 let capturaAbiertaId = null; // cuál de la lista está mostrada ahora mismo en el formulario
 let procesandoCaptura = false;
 let siguienteCapturaId = 1;
 const colaInfoEl = document.getElementById('colaInfo');
 
-// --- Persistencia local de la cola (IndexedDB) ---------------------
-const COLA_DB_NOMBRE = 'enlaza_escanear_cola';
-const COLA_DB_VERSION = 1;
-let colaDbPromise = null;
+// --- Purga de datos heredados de la versión anterior (IndexedDB) ---
+// Algunos navegadores todavía pueden tener facturas guardadas de la
+// versión anterior de esta cola (ver comentario de arriba). Se borra
+// esa base de datos por completo la primera vez que se carga esta
+// página con el código nuevo, para que ningún dato de un cliente quede
+// disponible para otro usuario que use después ese mismo navegador.
+try {
+  indexedDB.deleteDatabase('enlaza_escanear_cola');
+} catch (e) { /* navegador sin IndexedDB -- no había nada que purgar */ }
+try { localStorage.removeItem('escanearCapturaAbiertaId'); } catch (e) {}
 
-function abrirColaDB(){
-  if (colaDbPromise) return colaDbPromise;
-  colaDbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(COLA_DB_NOMBRE, COLA_DB_VERSION);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains('capturas')) {
-        req.result.createObjectStore('capturas', { keyPath: 'id' });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  }).catch((e) => { console.warn('No se pudo abrir el almacenamiento local de capturas:', e); return null; });
-  return colaDbPromise;
-}
-
-async function guardarCapturaEnDB(entry){
-  try {
-    const db = await abrirColaDB();
-    if (!db) return;
-    // Copia plana -- nunca la referencia viva, para no arrastrar
-    // propiedades temporales como __forzar.
-    const copia = { ...entry };
-    delete copia.__forzar;
-    db.transaction('capturas', 'readwrite').objectStore('capturas').put(copia);
-  } catch (e) { console.warn('No se pudo guardar la captura localmente:', e); }
-}
-
-async function eliminarCapturaDeDB(id){
-  try {
-    const db = await abrirColaDB();
-    if (!db) return;
-    db.transaction('capturas', 'readwrite').objectStore('capturas').delete(id);
-  } catch (e) { console.warn('No se pudo quitar la captura del almacenamiento local:', e); }
-}
-
-async function cargarCapturasDeDB(){
-  try {
-    const db = await abrirColaDB();
-    if (!db) return [];
-    return await new Promise((resolve) => {
-      const req = db.transaction('capturas', 'readonly').objectStore('capturas').getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => resolve([]);
-    });
-  } catch (e) { console.warn('No se pudieron cargar las capturas guardadas:', e); return []; }
-}
-
-// Al entrar a la página, si había capturas de una visita anterior (se
-// fue a otra pantalla y volvió, o refrescó sin querer), se recuperan
-// tal como quedaron. Las que ya estaban "guardada" no hace falta
-// traerlas de vuelta -- esas ya quedaron en el kárdex y se borran de
-// este almacenamiento apenas se guardan.
 async function restaurarColaDesdeDB(){
-  const guardadas = await cargarCapturasDeDB();
-  if (guardadas.length === 0) return;
-  guardadas.sort((a, b) => a.id - b.id);
-  guardadas.forEach((c) => {
-    // Si se quedó "leyendo" a medias (la pestaña se cerró o navegó justo
-    // en ese momento), esa lectura en curso se perdió -- se vuelve a
-    // poner en fila para que el motor la retome solo.
-    if (c.estado === 'leyendo') c.estado = 'pendiente';
-  });
-  colaCapturas = guardadas;
-  siguienteCapturaId = Math.max(...guardadas.map((c) => c.id), 0) + 1;
-  renderColaCapturas();
-
-  let idAbiertaGuardada = null;
-  try { idAbiertaGuardada = Number(localStorage.getItem('escanearCapturaAbiertaId')); } catch (e) {}
-  const candidata = colaCapturas.find((c) => c.id === idAbiertaGuardada) ||
-    colaCapturas.find((c) => c.estado !== 'guardada');
-  if (candidata) abrirCaptura(candidata.id);
-
-  motorCola();
+  // Ya no se restaura nada -- cada carga de esta página empieza con la
+  // cola vacía (ver comentario de arriba). Se deja esta función (sin
+  // cuerpo real) para no tener que tocar el punto donde se llama.
 }
+
+// Ya no se persiste nada de la cola fuera de esta pestaña (ver
+// comentario de más arriba) -- se dejan estas dos funciones sin cuerpo
+// para no tener que tocar cada uno de los puntos donde se llamaban.
+async function guardarCapturaEnDB(entry){}
+async function eliminarCapturaDeDB(id){}
 
 function agregarCapturasACola(files){
   const lista = Array.from(files || []);
@@ -1317,7 +1296,6 @@ function quitarCaptura(id){
   eliminarCapturaDeDB(id);
   if (capturaAbiertaId === id) {
     capturaAbiertaId = null;
-    try { localStorage.removeItem('escanearCapturaAbiertaId'); } catch (e) {}
     previewWrap.classList.remove('show');
     resultEl.classList.remove('show');
     errEl.classList.remove('show');
@@ -1380,7 +1358,6 @@ function abrirCaptura(id){
   if (!entry || !entry.base64) return; // todavía convirtiéndose a base64 -- un instante
   const yaEstabaAbierta = capturaAbiertaId === id;
   capturaAbiertaId = id;
-  try { localStorage.setItem('escanearCapturaAbiertaId', String(id)); } catch (e) {}
   renderColaCapturas();
 
   if (!yaEstabaAbierta) {
@@ -1516,7 +1493,6 @@ function resetAll(){
   savedMsg.classList.remove('show');
   dupWarnEl.classList.remove('show');
   capturaAbiertaId = null;
-  try { localStorage.removeItem('escanearCapturaAbiertaId'); } catch (e) {}
   renderColaCapturas();
   document.getElementById('retencionHint').classList.remove('show');
   movStatusEl.classList.remove('show');

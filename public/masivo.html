@@ -320,18 +320,33 @@
      antes desde la ficha de ese cliente en Inicio. Mientras esté
      visible, cada factura del lote se asigna directamente a este
      cliente -- ya no hay que elegirlo fila por fila. */
-  .cliente-fijo{
-    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
-    font-family:'JetBrains Mono',monospace; font-size:12.5px;
-    border:1px solid var(--moss); background:var(--moss-soft); color:#fff;
-    padding:11px 16px; border-radius:8px; margin-bottom:20px;
+  .client-tabbar{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:14px 18px 16px; margin-bottom:20px;
   }
-  .cliente-fijo b{ color:#fff; }
-  .cliente-fijo a{ color:var(--ink-soft); text-decoration:underline; text-underline-offset:2px; }
-  .cliente-fijo a:hover{ color:var(--ink); }
-  .cliente-fijo .cf-links{ display:flex; gap:14px; flex-wrap:wrap; }
-  .cliente-fijo .cf-links a{ text-decoration:none; opacity:.85; }
-  .cliente-fijo .cf-links a:hover{ opacity:1; text-decoration:underline; }
+  .client-tabbar .ctb-head{
+    display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:12px;
+  }
+  .client-tabbar .ctb-cliente-label{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-faint);
+  }
+  .client-tabbar .ctb-cliente-nombre{
+    font-family:'Archivo',sans-serif; font-weight:800; font-size:15px; color:var(--ink); margin-right:auto;
+  }
+  .client-tabbar .ctb-exit{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-exit:hover{ color:var(--petroleo); text-decoration:underline; }
+  .client-tabbar .ctb-links{ display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+  .client-tabbar .ctb-links a{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
+    color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:100px;
+    transition:all .15s ease; white-space:nowrap;
+  }
+  .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
+  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
+  .client-tabbar .ctb-divider{ width:1px; height:16px; background:var(--line); margin:0 2px; flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -371,17 +386,27 @@
   </header>
   <div class="sub reveal">Sube varias facturas o cuentas de cobro de una vez — el sistema las procesa en fila y te muestra un resumen para revisar rápido. Otro tipo de documento (comprobantes de pago, extractos, cotizaciones...) se rechaza automáticamente.</div>
 
-  <div class="cliente-fijo reveal" id="clienteFijoBanner" style="display:none;">
-    <span>📌 Cargando facturas para <b id="clienteFijoNombre"></b></span>
-    <span class="cf-links" id="clienteFijoLinks">
+  <div class="client-tabbar reveal" id="clienteFijoBanner" style="display:none;">
+    <div class="ctb-head">
+      <span class="ctb-cliente-label">Cliente</span>
+      <span class="ctb-cliente-nombre" id="clienteFijoNombre"></span>
+      <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
+    </div>
+    <nav class="ctb-links">
       <a href="#" id="cfFicha">Ficha</a>
       <a href="#" id="cfFacturas">Facturas</a>
       <a href="#" id="cfKardex">Kárdex</a>
       <a href="#" id="cfIngresos">Ingresos</a>
       <a href="#" id="cfEgresos">Egresos</a>
       <a href="#" id="cfBalance">Balance</a>
-    </span>
-    <a href="/clientes.html" id="clienteFijoQuitar">Cambiar cliente</a>
+      <span class="ctb-divider"></span>
+      <a href="#" id="cfEscanear">Escanear</a>
+      <a href="#" id="cfMasivo" class="active">Carga masiva</a>
+      <span class="ctb-divider"></span>
+      <a href="#" id="cfCartera">Cartera</a>
+      <a href="#" id="cfAuditoria">Auditoría</a>
+      <a href="#" id="cfRetenciones">Retenciones</a>
+    </nav>
   </div>
 
   <div id="uploadZoneSoloLectura" style="display:none;">
@@ -608,6 +633,10 @@ function aplicarClientePreseleccionado(){
   document.getElementById('cfIngresos').href = '/ingresos.html' + qs;
   document.getElementById('cfEgresos').href = '/egresos.html' + qs;
   document.getElementById('cfBalance').href = '/balance.html' + qs;
+  document.getElementById('cfEscanear').href = '/escanear.html' + qs;
+  document.getElementById('cfCartera').href = '/cartera.html' + qs;
+  document.getElementById('cfAuditoria').href = '/informe-auditoria.html' + qs;
+  document.getElementById('cfRetenciones').href = '/listado-retenciones.html' + qs;
 }
 
 // Vista completa del archivo original de una fila del lote -- se pide

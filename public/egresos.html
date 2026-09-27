@@ -89,26 +89,32 @@
   }
 
   .client-tabbar{
-    display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
-    background:var(--paper-raised); border:1px solid var(--line); border-radius:10px;
-    padding:12px 18px; margin-bottom:20px; box-shadow:var(--shadow-sm);
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+    padding:14px 18px 16px; margin-bottom:20px; box-shadow:var(--shadow-sm);
   }
-  .client-tabbar .ctb-back{
-    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink); font-weight:600; text-decoration:none; white-space:nowrap;
+  .client-tabbar .ctb-head{
+    display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:12px;
   }
-  .client-tabbar .ctb-back:hover{ color:var(--ember); }
-  .client-tabbar .ctb-links{ display:flex; gap:6px; flex-wrap:wrap; }
+  .client-tabbar .ctb-cliente-label{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-faint);
+  }
+  .client-tabbar .ctb-cliente-nombre{
+    font-family:'Archivo',sans-serif; font-weight:800; font-size:15px; color:var(--ink); margin-right:auto;
+  }
+  .client-tabbar .ctb-exit{
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
+  }
+  .client-tabbar .ctb-exit:hover{ color:var(--petroleo); text-decoration:underline; }
+  .client-tabbar .ctb-links{ display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
   .client-tabbar .ctb-links a{
-    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
     color:var(--ink-soft); text-decoration:none; padding:6px 12px; border:1px solid var(--line); border-radius:100px;
-    transition:all .15s ease;
+    transition:all .15s ease; white-space:nowrap;
   }
   .client-tabbar .ctb-links a:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
-  .client-tabbar .ctb-links a.active{ background:var(--ember); border-color:var(--ember); color:#fff; }
-  .client-tabbar .ctb-exit{
-    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint); text-decoration:none; white-space:nowrap;
-  }
-  .client-tabbar .ctb-exit:hover{ color:var(--ink); }
+  .client-tabbar .ctb-links a.active{ background:var(--petroleo); border-color:var(--petroleo); color:#fff; }
+  .client-tabbar .ctb-divider{ width:1px; height:16px; background:var(--line); margin:0 2px; flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -147,20 +153,26 @@
   <div class="sub reveal">Estadísticas de todo lo que tus clientes han comprado — Enlaza lo agrupa por mes, proveedor y categoría.</div>
 
   <div class="client-tabbar reveal" id="clientTabbar" style="display:none;">
-    <a href="#" class="ctb-back" id="ctbFicha">← Ficha del cliente</a>
-    <span class="ctb-links">
+    <div class="ctb-head">
+      <span class="ctb-cliente-label">Cliente</span>
+      <span class="ctb-cliente-nombre" id="ctbClienteNombre"></span>
+      <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
+    </div>
+    <nav class="ctb-links">
+      <a href="#" id="ctbFicha">Ficha</a>
       <a href="#" id="ctbFacturas">Facturas</a>
       <a href="#" id="ctbKardex">Kárdex</a>
       <a href="#" id="ctbIngresos">Ingresos</a>
       <a href="#" id="ctbEgresos">Egresos</a>
       <a href="#" id="ctbBalance">Balance</a>
+      <span class="ctb-divider"></span>
       <a href="#" id="ctbEscanear">Escanear</a>
       <a href="#" id="ctbMasivo">Carga masiva</a>
+      <span class="ctb-divider"></span>
       <a href="#" id="ctbCartera">Cartera</a>
       <a href="#" id="ctbAuditoria">Auditoría</a>
       <a href="#" id="ctbRetenciones">Retenciones</a>
-    </span>
-    <a href="/clientes.html" class="ctb-exit">Ver todos los clientes</a>
+    </nav>
   </div>
 
   <div id="loading"><span class="dot"></span> Cargando egresos…</div>
@@ -273,6 +285,8 @@ function invoicesDelClienteSeleccionado(){
 // particular.
 function aplicarClientTabbar(clienteId){
   const qs = '?cliente=' + encodeURIComponent(clienteId);
+  const clienteTabbar = myClients.find(c => c.id === clienteId);
+  document.getElementById('ctbClienteNombre').textContent = clienteTabbar ? clienteTabbar.nombre : '';
   document.getElementById('ctbFicha').href = '/cliente.html?id=' + encodeURIComponent(clienteId);
   document.getElementById('ctbFacturas').href = '/facturas.html' + qs;
   document.getElementById('ctbKardex').href = '/kardex.html' + qs;
