@@ -1782,6 +1782,44 @@ app.post('/api/clients/:id/puc', requireAuth, requireRole('administrador', 'cont
 // categoría fiscal desconocida se reportan como error en vez de
 // guardarse a medias, para que el contador las corrija en el archivo y
 // vuelva a intentar.
+// Valida y guarda un lote de filas {categoria, codigo, concepto} ya
+// extraídas (sea del CSV con columnas conocidas, o de lo que devolvió la
+// IA al leer un PDF/foto/Excel) -- centraliza la regla de negocio para
+// que /importar (CSV) y /leer-ia (PDF, imagen) no la dupliquen. La
+// categoría es OPCIONAL: si viene vacía (el documento de origen no tenía
+// esa columna, o la IA no pudo inferirla) se guarda como "otro" en vez
+// de rechazar la fila completa -- lo único realmente indispensable para
+// un código personalizado es el código y el concepto.
+async function guardarFilasPucValidas(contadorId, clienteId, filasCrudas) {
+  const validas = [];
+  const errores = [];
+  filasCrudas.forEach((fila, i) => {
+    const numeroFila = fila.numeroFila || i + 1;
+    let categoria = String(fila.categoria || '').trim().toLowerCase();
+    const codigo = String(fila.codigo || '').trim();
+    const concepto = String(fila.concepto || '').trim();
+    if (!categoria && !codigo && !concepto) return; // fila vacía
+    if (!codigo || !concepto) { errores.push({ fila: numeroFila, motivo: 'Falta código o concepto.' }); return; }
+    if (!categoria) categoria = 'otro';
+    if (!CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
+      errores.push({ fila: numeroFila, motivo: `"${categoria}" no es una categoría fiscal válida.` });
+      return;
+    }
+    validas.push({ categoria, codigo, concepto });
+  });
+
+  for (const v of validas) {
+    await pool.query(
+      `INSERT INTO puc_personalizado_cliente (id, contador_id, cliente_id, categoria_concepto, codigo, concepto)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (contador_id, cliente_id, codigo) DO UPDATE SET categoria_concepto = $4, concepto = $6`,
+      [crypto.randomUUID(), contadorId, clienteId, v.categoria, v.codigo, v.concepto]
+    );
+  }
+
+  return { importados: validas.length, errores };
+}
+
 app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const { csvTexto } = req.body;
@@ -1795,47 +1833,111 @@ app.post('/api/clients/:id/puc/importar', requireAuth, requireRole('administrado
       return res.status(400).json({ error: 'El archivo no parece tener datos -- se necesita una fila de encabezados y al menos una fila con un código.' });
     }
     const encabezados = filas[0].map(cartera.normalizarEncabezado);
-    const idx = (lista) => encabezados.findIndex((h) => lista.includes(h));
-    const iCategoria = idx(PUC_COLUMNAS_CATEGORIA);
-    const iCodigo = idx(PUC_COLUMNAS_CODIGO);
-    const iConcepto = idx(PUC_COLUMNAS_CONCEPTO);
-    if (iCategoria === -1 || iCodigo === -1 || iConcepto === -1) {
-      return res.status(400).json({ error: 'No se reconocieron las columnas del CSV -- se necesitan "categoria_fiscal", "codigo" y "concepto" en la primera fila.' });
+    // La columna de categoría es OPCIONAL -- distintos sistemas externos
+    // (Contaia, Siigo, Excel armado a mano...) no siempre la traen, y
+    // antes el importador rechazaba el archivo completo si no aparecía
+    // con uno de estos nombres exactos. Ahora, si no se encuentra, cada
+    // fila se guarda con categoría "otro" (se puede reclasificar luego a
+    // mano desde la tabla de arriba).
+    //
+    // Además de los sinónimos de una sola palabra (PUC_COLUMNAS_*), un
+    // plan de cuentas real (ej. exportado de Siigo) suele traer el
+    // encabezado en DOS palabras -- "Código Cuenta", "Nombre Cuenta" --
+    // que no calza con una igualdad exacta. encontrarColumnaPuc() primero
+    // intenta la igualdad exacta de siempre y, si no la encuentra, cae a
+    // buscar la palabra clave COMO SUBSTRING dentro del encabezado
+    // completo (ignorando acentos), sin repetir una columna ya asignada.
+    const quitarAcentos = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    function encontrarColumnaPuc(listaExacta, palabrasClaveSubstring, usados) {
+      let i = encabezados.findIndex((h, pos) => !usados.includes(pos) && listaExacta.includes(h));
+      if (i !== -1) return i;
+      return encabezados.findIndex((h, pos) => !usados.includes(pos) && palabrasClaveSubstring.some((p) => quitarAcentos(h).includes(p)));
+    }
+    const iCategoria = encontrarColumnaPuc(PUC_COLUMNAS_CATEGORIA, ['categoria'], []);
+    const usadosTrasCategoria = iCategoria === -1 ? [] : [iCategoria];
+    const iCodigo = encontrarColumnaPuc(PUC_COLUMNAS_CODIGO, ['codigo'], usadosTrasCategoria);
+    const usadosTrasCodigo = iCodigo === -1 ? usadosTrasCategoria : [...usadosTrasCategoria, iCodigo];
+    const iConcepto = encontrarColumnaPuc(PUC_COLUMNAS_CONCEPTO, ['nombre', 'concepto', 'descripcion'], usadosTrasCodigo);
+    if (iCodigo === -1 || iConcepto === -1) {
+      return res.status(400).json({ error: 'No se reconocieron las columnas del archivo -- se necesita al menos una columna de "codigo" y una de "concepto" en la primera fila.' });
     }
 
-    const validas = [];
-    const errores = [];
+    const filasCrudas = [];
     for (let r = 1; r < filas.length; r++) {
       const fila = filas[r];
-      const categoria = String(fila[iCategoria] || '').trim().toLowerCase();
-      const codigo = String(fila[iCodigo] || '').trim();
-      const concepto = String(fila[iConcepto] || '').trim();
-      if (!categoria && !codigo && !concepto) continue; // fila vacía
-      if (!codigo || !concepto) { errores.push({ fila: r + 1, motivo: 'Falta código o concepto.' }); continue; }
-      if (!CATEGORIAS_CONCEPTO_VALIDAS.includes(categoria)) {
-        errores.push({ fila: r + 1, motivo: `"${categoria}" no es una categoría fiscal válida.` });
-        continue;
-      }
-      validas.push({ categoria, codigo, concepto });
+      filasCrudas.push({
+        numeroFila: r + 1,
+        categoria: iCategoria === -1 ? '' : fila[iCategoria],
+        codigo: fila[iCodigo],
+        concepto: fila[iConcepto],
+      });
     }
 
-    if (validas.length === 0) {
-      return res.status(400).json({ error: 'Ninguna fila del archivo se pudo importar.', errores });
+    const resultado = await guardarFilasPucValidas(req.firmaId, req.params.id, filasCrudas);
+    if (resultado.importados === 0) {
+      return res.status(400).json({ error: 'Ninguna fila del archivo se pudo importar.', errores: resultado.errores });
     }
-
-    for (const v of validas) {
-      await pool.query(
-        `INSERT INTO puc_personalizado_cliente (id, contador_id, cliente_id, categoria_concepto, codigo, concepto)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (contador_id, cliente_id, codigo) DO UPDATE SET categoria_concepto = $4, concepto = $6`,
-        [crypto.randomUUID(), req.firmaId, req.params.id, v.categoria, v.codigo, v.concepto]
-      );
-    }
-
-    res.json({ importados: validas.length, errores });
+    res.json(resultado);
   } catch (err) {
     console.error('Error importando el PUC personalizado:', err);
     res.status(500).json({ error: 'No se pudo importar el archivo.' });
+  }
+});
+
+// Prompt para leer un PDF o una foto de un plan de cuentas externo (ej.
+// una captura de pantalla de Contaia/Siigo, o una lista escrita a mano)
+// y sacarle código + concepto -- la categoría fiscal se arma dinámicamente
+// con la MISMA lista que ya valida /puc e /importar (CATEGORIAS_CONCEPTO_VALIDAS)
+// para que nunca se desincronicen entre sí.
+const PUC_IMPORT_PROMPT = `Eres un asistente contable colombiano. Vas a recibir un documento (PDF, foto o captura de pantalla) con una lista de códigos de cuenta contable de un sistema externo (ej. Contaia, Siigo, o un plan de cuentas hecho a mano).
+
+Tu tarea es extraer CADA código de esa lista y devolver SOLO un arreglo JSON válido, sin texto adicional, sin markdown, sin backticks:
+
+[
+  {
+    "codigo": "el código de cuenta tal como aparece (ej. '51058')",
+    "concepto": "el nombre o descripción de ese código, tal como aparece",
+    "categoria_concepto": "tu mejor estimación de a cuál de estas categorías fiscales pertenece este concepto -- usa EXACTAMENTE uno de estos valores: ${CATEGORIAS_CONCEPTO_VALIDAS.join(', ')}. Si el documento no trae una columna de categoría, o no estás seguro, usa 'otro'"
+  }
+]
+
+No inventes filas que no estén en el documento. Si una fila no tiene código o no tiene concepto, no la incluyas. Si genuinamente no logras identificar ninguna lista de códigos de cuenta, devuelve un arreglo vacío [].`;
+
+// Lee un PDF o una foto/captura de un plan de cuentas externo con la
+// misma IA que lee facturas y extractos -- para cuando el contador no
+// tiene el archivo como CSV/Excel y solo puede exportar o fotografiar la
+// lista tal cual la ve en el otro sistema.
+app.post('/api/clients/:id/puc/leer-ia', requireAuth, requireRole('administrador', 'contador'), limitadorIA, async (req, res) => {
+  try {
+    const { base64, mediaType, isPdf } = req.body;
+    if (!base64 || !mediaType) {
+      return res.status(400).json({ error: 'Falta el contenido del archivo.' });
+    }
+    if (!(await clienteEsDelContador(req, req.params.id))) {
+      return res.status(404).json({ error: 'Cliente no encontrado.' });
+    }
+
+    const effectiveMediaType = isPdf ? 'application/pdf' : mediaType;
+    const parsed = await llamarGeminiJSON(base64, effectiveMediaType, PUC_IMPORT_PROMPT);
+    const filasCrudas = (Array.isArray(parsed) ? parsed : []).map((item, i) => ({
+      numeroFila: i + 1,
+      categoria: item && item.categoria_concepto,
+      codigo: item && item.codigo,
+      concepto: item && item.concepto,
+    }));
+
+    if (filasCrudas.length === 0) {
+      return res.status(400).json({ error: 'No se pudo identificar ningún código de cuenta en este documento.' });
+    }
+
+    const resultado = await guardarFilasPucValidas(req.firmaId, req.params.id, filasCrudas);
+    if (resultado.importados === 0) {
+      return res.status(400).json({ error: 'Ninguna fila del documento se pudo importar.', errores: resultado.errores });
+    }
+    res.json(resultado);
+  } catch (err) {
+    console.error('Error leyendo el PUC personalizado con IA:', err);
+    res.status(err.status || 500).json({ error: err.publicMessage || 'No se pudo leer el archivo.' });
   }
 });
 

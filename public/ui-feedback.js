@@ -91,7 +91,7 @@
   function mostrar(mensaje, opciones) {
     opciones = opciones || {};
     const tipo = opciones.tipo || 'exito'; // 'exito' | 'error' | 'info' | 'advertencia'
-    const duracion = opciones.duracion != null ? opciones.duracion : (tipo === 'error' ? 5200 : 3600);
+    const duracion = opciones.duracion != null ? opciones.duracion : (tipo === 'error' ? 9000 : 5000);
     inyectarEstilos();
     const pila = obtenerPila();
 
@@ -109,6 +109,8 @@
     pila.appendChild(toast);
 
     let cerrado = false;
+    let temporizador = null;
+    const barra = toast.querySelector('.uif-barra');
     function cerrar() {
       if (cerrado) return;
       cerrado = true;
@@ -116,8 +118,16 @@
       setTimeout(() => toast.remove(), 220);
     }
     toast.querySelector('.uif-cerrar').addEventListener('click', cerrar);
-    const temporizador = setTimeout(cerrar, duracion);
-    toast.addEventListener('mouseenter', () => clearTimeout(temporizador));
+    temporizador = setTimeout(cerrar, duracion);
+    toast.addEventListener('mouseenter', () => {
+      clearTimeout(temporizador);
+      barra.style.animationPlayState = 'paused';
+    });
+    toast.addEventListener('mouseleave', () => {
+      if (cerrado) return;
+      barra.style.animationPlayState = 'running';
+      temporizador = setTimeout(cerrar, duracion);
+    });
   }
 
   function confirmar(opciones) {
