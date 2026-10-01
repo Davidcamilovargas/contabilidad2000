@@ -1607,6 +1607,57 @@ function mapearItemsServidor(itemsServidor){
   });
 }
 
+// Las fotos de celular modernas pueden pesar varios MB cada una -- un
+// lote de 20-30 fotos así de una sola vez puede superar fácilmente el
+// límite del cuerpo de la petición (y antes se caía con un error poco
+// claro, como si no se pudiera leer nada). Antes de subir, cada imagen
+// (los PDF no se tocan -- no se pueden recomprimir así de fácil en el
+// navegador) se reduce a un tamaño razonable para que la IA la siga
+// leyendo perfectamente bien, mientras el lote completo pesa mucho menos.
+const COMPRESION_MAX_LADO = 2000; // px, lado más largo de la imagen
+const COMPRESION_CALIDAD = 0.82;
+const COMPRESION_UMBRAL_BYTES = 900 * 1024; // no vale la pena tocar fotos ya livianas
+
+function esImagenComprimible(file){
+  return /^image\/(jpe?g|png|webp)$/i.test(file.type || '') || /\.(jpe?g|png|webp)$/i.test(file.name || '');
+}
+
+function comprimirImagenSiHaceFalta(file){
+  if (!esImagenComprimible(file) || file.size <= COMPRESION_UMBRAL_BYTES) {
+    return Promise.resolve(file);
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > COMPRESION_MAX_LADO || height > COMPRESION_MAX_LADO) {
+        if (width >= height) {
+          height = Math.round(height * (COMPRESION_MAX_LADO / width));
+          width = COMPRESION_MAX_LADO;
+        } else {
+          width = Math.round(width * (COMPRESION_MAX_LADO / height));
+          height = COMPRESION_MAX_LADO;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        // Si la "compresión" salió más pesada (pasa con fotos que ya
+        // venían muy comprimidas), se manda la original -- mejor eso que
+        // arriesgar perder calidad sin ganar nada de peso.
+        if (!blob || blob.size >= file.size) { resolve(file); return; }
+        resolve(new File([blob], file.name, { type: 'image/jpeg' }));
+      }, 'image/jpeg', COMPRESION_CALIDAD);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); }; // si no se puede leer como imagen, se manda tal cual
+    img.src = url;
+  });
+}
+
 // Sube todos los archivos de una sola vez -- el servidor los recibe,
 // responde de inmediato con el id del lote, y de ahí en adelante los
 // va leyendo con la IA en segundo plano, sin que el navegador tenga
@@ -1615,12 +1666,32 @@ async function subirLote(files){
   progressArea.classList.add('show');
   summaryWrap.classList.remove('show');
   summaryBody.innerHTML = '';
-  progressText.textContent = `Subiendo ${files.length} archivo(s)...`;
+  progressText.textContent = `Optimizando ${files.length} archivo(s)...`;
   progressBarInner.style.width = '0%';
   fileInput.value = '';
 
-  const archivos = [];
+  const archivosListos = [];
   for (const file of files) {
+    archivosListos.push(await comprimirImagenSiHaceFalta(file));
+  }
+
+  // Si aun después de comprimir las fotos el lote completo pesa demasiado
+  // para subirlo de una sola vez (ej. muchos PDF pesados, o fotos que no
+  // se pudieron comprimir), se avisa ANTES de intentar subirlo -- así el
+  // contador sabe exactamente qué pasó y qué hacer, en vez de ver un
+  // error genérico después de esperar toda la subida.
+  const pesoTotalBytes = archivosListos.reduce((s, f) => s + f.size, 0);
+  const LIMITE_SEGURO_BYTES = 42 * 1024 * 1024;
+  if (pesoTotalBytes > LIMITE_SEGURO_BYTES) {
+    const pesoMb = (pesoTotalBytes / (1024 * 1024)).toFixed(1);
+    progressText.textContent = `Este lote pesa ${pesoMb} MB en total -- es demasiado para subirlo de una sola vez. Divídelo en lotes más pequeños (menos archivos, o fotos de menor resolución) e intenta de nuevo.`;
+    return;
+  }
+
+  progressText.textContent = `Subiendo ${archivosListos.length} archivo(s)...`;
+
+  const archivos = [];
+  for (const file of archivosListos) {
     const base64 = await fileToBase64(file);
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
     archivos.push({ nombre: file.name, base64, mediaType: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'), isPdf });
@@ -1633,12 +1704,20 @@ async function subirLote(files){
       body: JSON.stringify({ clienteId: clientePreseleccionado ? clientePreseleccionado.id : null, archivos }),
     });
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error((data && data.error) || 'No se pudo iniciar el procesamiento.');
+    if (!res.ok) {
+      if (data && data.error) throw new Error(data.error);
+      if (res.status === 413) throw new Error('El lote pesa demasiado para el servidor -- divídelo en lotes más pequeños e intenta de nuevo.');
+      throw new Error('No se pudo iniciar el procesamiento.');
+    }
 
     loteId = data.loteId;
     iniciarPolling();
   } catch (err) {
     progressText.textContent = 'No se pudo subir el lote: ' + err.message;
+    // Además del mensaje en pantalla, que la mascota se ofrezca a ayudar
+    // -- este es justo el tipo de falla (lote pesado, red caída, etc.)
+    // que vale la pena no dejar solo en un texto rojo.
+    window.EnlazaMascota && window.EnlazaMascota.avisarError('No se pudo subir tu lote: ' + err.message);
   }
 }
 

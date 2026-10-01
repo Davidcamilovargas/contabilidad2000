@@ -373,12 +373,17 @@ function celebrarMascota(){
 
 function renderIaStat(){
   const card = document.getElementById('iaStatCard');
-  if (allInvoices.length === 0) { card.style.display = 'none'; return; }
+  // Antes esta tarjeta se ocultaba por completo si el contador todavía no
+  // había leído ningún documento -- un usuario nuevo nunca la veía, ni
+  // siquiera para saber que existe. Ahora se muestra siempre (con 0 si
+  // hace falta); la celebración con confeti solo se dispara si de verdad
+  // hay documentos leídos (ver más abajo), para no celebrar un 0.
   card.style.display = 'flex';
 
   const mascota = document.getElementById('iaMascot');
   requestAnimationFrame(() => mascota.classList.add('enter'));
-  animarNumero(document.getElementById('iaStatTotal'), allInvoices.length, celebrarMascota);
+  const totalDocumentos = allInvoices.length;
+  animarNumero(document.getElementById('iaStatTotal'), totalDocumentos, totalDocumentos > 0 ? celebrarMascota : null);
 
   const ahora = new Date();
   const esteMes = allInvoices.filter(inv => {

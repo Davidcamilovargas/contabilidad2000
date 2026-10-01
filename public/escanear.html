@@ -2384,7 +2384,7 @@ function renderEstimadoIca(estIcaEl, invParaCalculo){
     }
     const tarifa = tarifasIca.find(t => t.id === currentTarifaIcaId);
     if (!tarifa) return;
-    const sugerido = (typeof calcularReteIcaSugerido === 'function') ? calcularReteIcaSugerido(invParaCalculo, tarifa) : null;
+    const sugerido = (typeof calcularReteIcaSugerido === 'function') ? calcularReteIcaSugerido(invParaCalculo, tarifa, cliente) : null;
     if (sugerido) {
       const b = document.createElement('b');
       b.textContent = `≈ $${sugerido.monto.toLocaleString('es-CO')}`;

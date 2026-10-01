@@ -13,7 +13,7 @@ const { cabecerasSeguridad, crearCors, crearLimitador } = require('./seguridad')
 // Única fuente de verdad de tarifas de retención (ver public/retenciones.js
 // -- se carga como <script> en el navegador Y aquí con require(), misma
 // tabla en los dos lados).
-const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCategoriaCriterioAcumulado } = require('./public/retenciones');
+const { TARIFAS_RETENCION, montoCategoriaEnFactura, anioDeFechaFactura, esCategoriaCriterioAcumulado, itemsParaGuardar } = require('./public/retenciones');
 // Motor contable mínimo (PUC + asientos de partida doble) -- ver
 // asientos.js para el alcance exacto de esta primera versión.
 const { PLAN_CUENTAS_SEMILLA, generarAsientoEgreso } = require('./asientos');
@@ -730,7 +730,7 @@ app.use(cabecerasSeguridad);
 // "https://app.enlaza.co,https://socios.enlaza.co". Vacío por defecto:
 // hoy nadie más que el propio frontend de Enlaza llama a esta API.
 app.use(crearCors((process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim())));
-app.use(express.json({ limit: '20mb' })); // las facturas en base64 pueden pesar varios MB
+app.use(express.json({ limit: '60mb' })); // las facturas en base64 pueden pesar varios MB -- 60mb da margen a lotes de fotos ya comprimidas en el navegador (ver masivo.html)
 app.use(cookieParser());
 
 // Límite de tasa general para toda la API -- una primera barrera contra
@@ -1581,6 +1581,13 @@ app.post('/api/clients', requireAuth, requireRole('administrador', 'contador'), 
     if (!nombre || !nit) {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
     }
+    // El contacto principal es obligatorio al crear un cliente -- sin
+    // esto no hay forma de avisarle cuando deje de usar Enlaza ni de
+    // pedirle retroalimentación. Se valida también acá (no solo en el
+    // frontend) por si alguien llama a la API directamente.
+    if (!contacto_nombre || (!contacto_telefono && !contacto_correo)) {
+      return res.status(400).json({ error: 'El contacto principal es obligatorio: nombre y al menos un teléfono o correo.' });
+    }
 
     const userRes = await pool.query('SELECT plan FROM users WHERE id = $1', [req.firmaId]);
     const plan = userRes.rows[0]?.plan || 'solo';
@@ -2343,28 +2350,67 @@ app.delete('/api/invoices/:id', requireAuth, requireRole('administrador', 'conta
 // retención de esa factura puntual sin tener que borrarla y registrarla de
 // nuevo. A propósito solo acepta estos 3 campos -- no es un endpoint
 // general de edición de factura, es específico para este checkpoint.
-const CAMPOS_EDITABLES_RETENCION = ['rete_fuente', 'rete_iva', 'rete_ica'];
+// Campos de cabecera que el contador puede corregir después de guardada
+// la factura, desde la pantalla de Revisión -- a propósito deja afuera
+// tipo_doc/tipo_movimiento/cliente_id/file_hash y similares (cambiarlos
+// después de guardada abriría más problemas de los que resuelve; para
+// eso existe borrar y volver a escanear).
+// A propósito deja AFUERA nit_cc y nombre_razon_social -- identifican
+// quién emitió el documento (dato del documento físico, no una
+// clasificación que el contador decide), y dejarlos editables podría
+// reasignar sin querer una factura a otro tercero, desalineando tarifas
+// ya aprendidas para ese proveedor y la trazabilidad fiscal del
+// documento. Si esos dos datos quedaron mal leídos, la salida es borrar
+// la factura y volver a escanearla/digitarla -- no corregirlos acá.
+const CAMPOS_EDITABLES_FACTURA = [
+  'dv', 'fecha_factura', 'concepto',
+  'categoria_concepto', 'subcuenta_gasto',
+  'rete_fuente', 'rete_iva', 'rete_ica', 'valor_iva',
+];
+// valor_sin_iva (el subtotal) solo se deja editar directo desde acá
+// cuando la factura NO tiene ítems línea por línea -- si los tiene, el
+// subtotal es la SUMA de esos ítems (ver PUT .../items abajo) y no un
+// número que el contador pueda pisar por separado, o quedaría
+// desincronizado de los ítems reales.
+
 app.put('/api/invoices/:id', requireAuth, async (req, res) => {
   try {
-    if (req.clientesAsignados) {
-      const previa = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
-      if (previa.rows.length === 0 || !puedeAccederCliente(req, previa.rows[0].cliente_id)) {
-        return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
-      }
+    const previa = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
+    if (previa.rows.length === 0 || (req.clientesAsignados && !puedeAccederCliente(req, previa.rows[0].cliente_id))) {
+      return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
     }
+
+    const { rows: itemsExistentes } = await pool.query('SELECT 1 FROM factura_items WHERE invoice_id = $1 LIMIT 1', [req.params.id]);
+    const tieneItems = itemsExistentes.length > 0;
+    const camposPermitidos = tieneItems ? CAMPOS_EDITABLES_FACTURA : [...CAMPOS_EDITABLES_FACTURA, 'valor_sin_iva'];
+
     const sets = [];
     const values = [];
     let i = 1;
-    for (const campo of CAMPOS_EDITABLES_RETENCION) {
+    for (const campo of camposPermitidos) {
       if (Object.prototype.hasOwnProperty.call(req.body, campo)) {
         sets.push(`${campo} = $${i}`);
         values.push(String(req.body[campo] ?? ''));
         i++;
       }
     }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'valor_sin_iva') && tieneItems) {
+      return res.status(400).json({ error: 'Esta factura tiene ítems línea por línea -- el subtotal se edita ahí (PUT /api/invoices/:id/items), no directo en la cabecera.' });
+    }
     if (sets.length === 0) {
       return res.status(400).json({ error: 'No se envió ningún campo válido para actualizar.' });
     }
+
+    // valor_con_iva siempre se deriva de subtotal + IVA -- nunca se deja
+    // que el contador lo escriba aparte, o podría quedar un total que no
+    // cuadra con sus propias partes (justo lo que valida asientos.js
+    // antes de proponer un asiento).
+    const subtotalFinal = Number(Object.prototype.hasOwnProperty.call(req.body, 'valor_sin_iva') ? req.body.valor_sin_iva : previa.rows[0].valor_sin_iva) || 0;
+    const ivaFinal = Number(Object.prototype.hasOwnProperty.call(req.body, 'valor_iva') ? req.body.valor_iva : previa.rows[0].valor_iva) || 0;
+    sets.push(`valor_con_iva = $${i}`);
+    values.push(String(subtotalFinal + ivaFinal));
+    i++;
+
     values.push(req.params.id, req.firmaId);
     const { rows } = await pool.query(
       `UPDATE invoices SET ${sets.join(', ')} WHERE id = $${i} AND contador_id = $${i + 1} RETURNING *`,
@@ -2373,15 +2419,72 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
     }
-    // Los 3 valores de retención son justo lo que decide cuánto se le
-    // acredita a cada cuenta de retención por pagar en el asiento -- si
-    // cambiaron, la propuesta anterior (si no estaba aprobada todavía)
-    // queda desactualizada y hay que regenerarla.
+    // Cualquiera de estos campos puede cambiar qué cuentas o montos
+    // aplican en el asiento (categoría/subcuenta -> cuenta de gasto,
+    // retenciones -> créditos, IVA/subtotal -> los débitos) -- si la
+    // propuesta anterior no estaba aprobada todavía, se reemplaza.
     await generarYGuardarAsientoParaFactura(req.firmaId, rows[0]);
     res.json(rowToInvoice(rows[0]));
   } catch (err) {
-    console.error('Error actualizando retención de factura:', err);
+    console.error('Error actualizando factura:', err);
     res.status(500).json({ error: 'No se pudo actualizar la factura.' });
+  }
+});
+
+// Reemplaza por completo los ítems línea por línea de una factura ya
+// guardada (ej. el contador se da cuenta de que una línea quedó en la
+// categoría equivocada, o que faltó/sobró un ítem). El IVA de cabecera
+// se reprorratea entre los ítems nuevos con la MISMA función que ya usa
+// Escanear al guardar por primera vez (itemsParaGuardar, public/
+// retenciones.js) -- así una edición nunca queda calculada con un
+// criterio distinto al de un guardado normal. El subtotal y el total de
+// la cabecera se recalculan solos a partir de los ítems -- nunca se
+// reciben del cliente acá, para que nunca queden desincronizados.
+app.put('/api/invoices/:id/items', requireAuth, async (req, res) => {
+  try {
+    const previa = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
+    if (previa.rows.length === 0 || (req.clientesAsignados && !puedeAccederCliente(req, previa.rows[0].cliente_id))) {
+      return res.status(404).json({ error: 'Factura no encontrada o no te pertenece.' });
+    }
+    const factura = previa.rows[0];
+
+    const itemsEntrantes = Array.isArray(req.body.items) ? req.body.items : null;
+    if (!itemsEntrantes || itemsEntrantes.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar al menos un ítem -- si la factura ya no debería tener desglose por ítems, bórrala y vuelve a guardarla sin ítems.' });
+    }
+
+    const ivaCabecera = Number(factura.valor_iva) || 0;
+    const itemsConIva = itemsParaGuardar(itemsEntrantes, ivaCabecera);
+
+    await pool.query('DELETE FROM factura_items WHERE invoice_id = $1', [req.params.id]);
+    let orden = 0;
+    for (const item of itemsConIva) {
+      await pool.query(
+        `INSERT INTO factura_items
+          (id, invoice_id, contador_id, orden, descripcion, cantidad, valor_unitario, subtotal, categoria_concepto, subcuenta_gasto, valor_iva, iva_mayor_valor, aiu)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          crypto.randomUUID(), req.params.id, req.firmaId, orden++,
+          String(item.descripcion ?? ''), String(item.cantidad ?? ''), String(item.valor_unitario ?? ''),
+          String(item.subtotal ?? ''), String(item.categoria_concepto ?? '').toLowerCase(),
+          String(item.subcuenta_gasto ?? ''), String(item.valor_iva ?? ''),
+          item.iva_mayor_valor === true || item.iva_mayor_valor === 'true',
+          String(item.aiu ?? ''),
+        ]
+      );
+    }
+
+    const nuevoSubtotal = itemsConIva.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+    const { rows } = await pool.query(
+      `UPDATE invoices SET valor_sin_iva = $1, valor_con_iva = $2 WHERE id = $3 AND contador_id = $4 RETURNING *`,
+      [String(nuevoSubtotal), String(nuevoSubtotal + ivaCabecera), req.params.id, req.firmaId]
+    );
+
+    await generarYGuardarAsientoParaFactura(req.firmaId, rows[0]);
+    res.json({ factura: rowToInvoice(rows[0]), items: itemsConIva });
+  } catch (err) {
+    console.error('Error actualizando ítems de la factura:', err);
+    res.status(500).json({ error: 'No se pudieron guardar los ítems de la factura.' });
   }
 });
 
@@ -2896,10 +2999,9 @@ FACTURA DE VENTA (electrónica o física) -- tipo_documento = "factura_venta":
 - Discrimina subtotal, IVA (si aplica) y valor total.
 
 CUENTA DE COBRO -- tipo_documento = "cuenta_cobro":
-- Dice explícitamente "Cuenta de Cobro".
+- NO tiene que decir literalmente "Cuenta de Cobro" para contar como tal -- identifícala por su estructura, no por el título: (1) un proveedor/quien cobra identificado (nombre y NIT/cédula), (2) un adquiriente/quien debe pagar identificado (nombre y NIT/cédula o razón social), (3) un valor total a pagar, y (4) un concepto o descripción detallada del servicio o producto cobrado. Si el documento tiene estos cuatro elementos y NO es una factura electrónica (sin CUFE/QR DIAN/resolución de facturación) ni una factura de servicios públicos, trátalo como cuenta_cobro aunque el título diga otra cosa o no tenga título.
 - La emite típicamente una persona natural NO obligada a facturar (independientes, honorarios, servicios ocasionales) -- NO tiene CUFE, código QR de la DIAN, ni resolución de facturación.
-- Trae: fecha, nombre y NIT/cédula de quien cobra, nombre y NIT/cédula (o razón social) de quien debe pagar, una descripción del servicio o concepto, y el valor total a pagar.
-- A menudo incluye la frase "no obligado(a) a facturar" (o similar) y un espacio de firma.
+- A menudo dice explícitamente "Cuenta de Cobro" y/o incluye la frase "no obligado(a) a facturar" (o similar) y un espacio de firma -- esto confirma el tipo, pero su AUSENCIA no descarta el documento si ya cumple los 4 elementos de arriba.
 
 FACTURA DE SERVICIOS PÚBLICOS DOMICILIARIOS -- tipo_documento = "factura_servicios_publicos":
 - Es la factura periódica (mensual) de una empresa de servicios públicos: acueducto, alcantarillado, energía eléctrica, gas natural, aseo/recolección de basuras, o una combinación de varias en un mismo documento (ej. EPM, Enel-Codensa, Vanti, Aguas de ..., Enviaseo).

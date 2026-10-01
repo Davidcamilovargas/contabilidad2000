@@ -118,6 +118,10 @@
      Gemini generó esta factura (ver tarea "versión del prompt" de la
      hoja de ruta). Discreto a propósito: es un dato para depurar, no
      algo que el contador necesite ver a diario. */
+  .ef-label{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--ink-faint); display:block; margin-bottom:4px;
+  }
   .fd-trazabilidad{
     font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-faint);
     margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);
@@ -204,6 +208,7 @@
   </div>
 </div>
 
+<script src="/retenciones.js"></script>
 <script src="/excepciones.js"></script>
 <script>
 'use strict';
@@ -262,6 +267,16 @@ let filtroTexto = '';
 let miRol = null;
 // asientoActual: { id, estado, lineas:[...] } | null | 'cargando'
 let asientoActual = null;
+// Si está en true, "Datos extraídos por la IA" muestra el formulario
+// completo de edición en vez de la ficha de solo lectura.
+let editandoFactura = false;
+// Ítems línea por línea de la factura seleccionada, tal como están
+// guardados en el servidor (cargarAsientoDeFactura los trae junto con
+// el asiento). itemsEnEdicion es la copia en memoria que el contador va
+// cambiando mientras edita (agrega/quita filas) -- null cuando no se
+// está editando.
+let itemsActuales = [];
+let itemsEnEdicion = null;
 
 function parseConfianza(inv){
   try {
@@ -327,9 +342,14 @@ function renderCola(){
 
 async function cargarAsientoDeFactura(invoiceId){
   asientoActual = 'cargando';
+  itemsActuales = [];
   renderDetalle();
   try {
-    const resLista = await fetch('/api/asientos?invoice_id=' + encodeURIComponent(invoiceId));
+    const [resLista, resItems] = await Promise.all([
+      fetch('/api/asientos?invoice_id=' + encodeURIComponent(invoiceId)),
+      fetch('/api/invoices/' + encodeURIComponent(invoiceId) + '/items'),
+    ]);
+    itemsActuales = resItems.ok ? await resItems.json() : [];
     if (!resLista.ok) throw new Error('No se pudo consultar el asiento.');
     const asientos = await resLista.json();
     if (asientos.length === 0) { asientoActual = null; renderDetalle(); return; }
@@ -369,6 +389,105 @@ function renderFichaFactura(inv){
     ? `<div class="fd-trazabilidad">Leído por ${escapeHtml(inv.modelo_ia) || '—'}${inv.version_prompt ? ` · prompt ${escapeHtml(inv.version_prompt)}` : ''}</div>`
     : '';
   return `<div class="factura-detalle"><div class="fd-table">${filas}</div>${traza}</div>`;
+}
+
+// Opciones de categoría/subcuenta -- misma tabla que ya usa Escanear
+// (CATEGORIA_CONCEPTO_LABELS / SUBCUENTAS_GASTO, cargadas con
+// <script src="/retenciones.js"> arriba) para que el selector de acá
+// nunca quede desalineado de las categorías/cuentas reales.
+function opcionesCategoria(seleccionada){
+  return Object.entries(CATEGORIA_CONCEPTO_LABELS).map(([valor, label]) =>
+    `<option value="${valor}" ${valor === seleccionada ? 'selected' : ''}>${escapeHtml(label)}</option>`
+  ).join('');
+}
+function opcionesSubcuenta(categoria, seleccionada){
+  const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
+  return opciones.map(([codigo, nombre]) =>
+    `<option value="${codigo}" ${codigo === seleccionada ? 'selected' : ''}>${codigo === 'inventario' ? '' : codigo + ' -- '}${escapeHtml(nombre)}</option>`
+  ).join('');
+}
+
+// Lee del DOM los ítems tal como quedaron editados (incluye los que el
+// contador agregó/quitó a mano) -- se usa tanto para guardar como para
+// re-renderizar el formulario sin perder lo ya escrito al agregar o
+// quitar una fila.
+function leerItemsDelFormulario(){
+  return [...document.querySelectorAll('.ef-item-row')].map((row) => ({
+    descripcion: row.querySelector('.ef-item-desc').value,
+    subtotal: row.querySelector('.ef-item-subtotal').value,
+    categoria_concepto: row.querySelector('.ef-item-categoria').value,
+    subcuenta_gasto: row.querySelector('.ef-item-subcuenta').value,
+  }));
+}
+
+// Formulario de edición completo -- reemplaza la ficha de solo lectura
+// mientras editandoFactura está activo. Qué campos de cabecera se
+// muestran depende de si la factura tiene ítems línea por línea
+// (itemsActuales, cargado junto con el asiento): si los tiene, el
+// subtotal/categoría/subcuenta se editan ítem por ítem más abajo (el
+// backend recalcula el subtotal de cabecera solo, a partir de la suma);
+// si no, se editan directo en la cabecera, como siempre.
+function renderFormularioEdicionFactura(inv){
+  const tieneItems = itemsActuales.length > 0;
+  const itemsFuente = itemsEnEdicion || itemsActuales;
+
+  const campoTexto = (id, label, valor) => `
+    <div class="field">
+      <label class="ef-label">${label}</label>
+      <input type="text" id="${id}" value="${escapeHtml(valor ?? '')}"
+        style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-family:'Inter',sans-serif; font-size:12.5px; background:#fff; color:var(--ink);">
+    </div>`;
+  const campoNumero = (id, label, valor) => `
+    <div class="field">
+      <label class="ef-label">${label}</label>
+      <input type="number" id="${id}" value="${Number(valor) || 0}" min="0" step="1"
+        style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-family:'JetBrains Mono',monospace; font-size:12.5px; background:#fff; color:var(--ink);">
+    </div>`;
+
+  const filasItems = itemsFuente.map((it, idx) => `
+    <div class="ef-item-row" data-idx="${idx}" style="display:grid; grid-template-columns:2fr 1fr 1.3fr 1.3fr auto; gap:8px; align-items:end; margin-bottom:8px;">
+      <div class="field"><label class="ef-label">Descripción</label><input type="text" class="ef-item-desc" value="${escapeHtml(it.descripcion)}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"></div>
+      <div class="field"><label class="ef-label">Subtotal</label><input type="number" class="ef-item-subtotal" value="${Number(it.subtotal) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
+      <div class="field"><label class="ef-label">Categoría</label><select class="ef-item-categoria" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;">${opcionesCategoria(it.categoria_concepto)}</select></div>
+      <div class="field"><label class="ef-label">Subcuenta</label><select class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;">${opcionesSubcuenta(it.categoria_concepto, it.subcuenta_gasto)}</select></div>
+      <button type="button" class="btn ghost ef-item-quitar" title="Quitar ítem" style="padding:7px 10px; font-size:12px;">✕</button>
+    </div>`).join('');
+
+  const campoSoloLectura = (label, valor) => `
+    <div class="field">
+      <label class="ef-label">${label}</label>
+      <div style="padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-family:'Inter',sans-serif; font-size:12.5px; background:var(--paper-sunken); color:var(--ink-soft);">${escapeHtml(valor) || '—'}</div>
+    </div>`;
+
+  return `<div class="edicion-factura" style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">
+    <div style="font-family:'Inter',sans-serif; font-size:11.5px; color:var(--ink-faint); margin-bottom:10px;">El proveedor y el NIT identifican quién emitió el documento -- no se editan acá. Si están mal leídos, borra la factura y vuélvela a escanear/digitar.</div>
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(140px,1fr)); gap:10px;">
+      ${campoSoloLectura('Proveedor', inv.nombre_razon_social)}
+      ${campoSoloLectura('NIT / Cédula', inv.nit_cc)}
+      ${campoTexto('editFecha', 'Fecha (AAAA-MM-DD)', inv.fecha_factura)}
+      ${!tieneItems ? campoNumero('editSubtotal', 'Subtotal', inv.valor_sin_iva) : ''}
+      ${campoNumero('editIva', 'IVA', inv.valor_iva)}
+      ${!tieneItems ? `<div class="field"><label class="ef-label">Categoría</label><select id="editCategoria" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;">${opcionesCategoria(inv.categoria_concepto)}</select></div>` : ''}
+      ${!tieneItems ? `<div class="field"><label class="ef-label">Subcuenta (PUC)</label><select id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;">${opcionesSubcuenta(inv.categoria_concepto, inv.subcuenta_gasto)}</select></div>` : ''}
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(3, minmax(110px,1fr)); gap:10px; margin-top:10px;">
+      ${campoNumero('editReteFuente', 'Rete Fuente', inv.rete_fuente)}
+      ${campoNumero('editReteIva', 'Rete IVA', inv.rete_iva)}
+      ${campoNumero('editReteIca', 'Rete ICA', inv.rete_ica)}
+    </div>
+    ${tieneItems ? `
+      <div style="margin-top:16px;">
+        <div class="ef-label" style="margin-bottom:8px;">Ítems de la factura (el subtotal de arriba se recalcula solo a partir de estos)</div>
+        <div id="efItemsLista">${filasItems}</div>
+        <button type="button" class="btn ghost" id="btnAgregarItem" style="padding:7px 14px; font-size:12px; margin-top:4px;">+ Agregar ítem</button>
+      </div>
+    ` : ''}
+    <div style="display:flex; gap:8px; margin-top:16px;">
+      <button type="button" class="btn secondary" id="btnGuardarFactura" style="padding:8px 15px; font-size:12px;">Guardar cambios</button>
+      <button type="button" class="btn ghost" id="btnCancelarEdicionFactura" style="padding:8px 15px; font-size:12px;">Cancelar</button>
+    </div>
+    <div style="font-family:'Inter',sans-serif; font-size:11.5px; color:var(--ink-faint); margin-top:7px;">Al guardar, el asiento contable de abajo se recalcula solo con los nuevos valores.</div>
+  </div>`;
 }
 
 function renderAsientoSeccion(inv){
@@ -448,13 +567,15 @@ function renderDetalle(){
         <div class="det-sub">NIT ${escapeHtml(inv.nit_cc) || '—'} · ${escapeHtml(inv.fecha_factura) || '—'} · ${inv.tipo_movimiento === 'ingreso' ? 'Ingreso' : 'Egreso'}</div>
       </div>
       <div class="det-acciones">
+        ${(puedeAdministrar(miRol) && !editandoFactura) ? '<button type="button" class="btn ghost" id="btnEditarFactura" style="padding:10px 16px; font-size:12.5px;">✎ Editar factura</button>' : ''}
         ${puedeAdministrar(miRol) ? '<button type="button" class="btn primary" id="btnAprobarFactura">Aprobar factura</button>' : ''}
       </div>
     </div>
     ${renderExcepcionesSeccion(inv)}
     <div class="det-seccion">
       <h3>Datos extraídos por la IA</h3>
-      ${renderFichaFactura(inv)}
+      ${editandoFactura ? '' : renderFichaFactura(inv)}
+      ${editandoFactura ? renderFormularioEdicionFactura(inv) : ''}
     </div>
     ${renderAsientoSeccion(inv)}
     ${renderTarifaSeccion(inv)}
@@ -464,6 +585,113 @@ function renderDetalle(){
   if (btnAsiento) btnAsiento.addEventListener('click', () => aprobarAsiento(asientoActual.id, btnAsiento));
   const btnFactura = document.getElementById('btnAprobarFactura');
   if (btnFactura) btnFactura.addEventListener('click', (e) => aprobarFactura(inv.id, e.target));
+  const btnEditarFactura = document.getElementById('btnEditarFactura');
+  if (btnEditarFactura) btnEditarFactura.addEventListener('click', () => {
+    editandoFactura = true;
+    itemsEnEdicion = itemsActuales.map((it) => ({ ...it }));
+    renderDetalle();
+  });
+  const btnCancelarEdicion = document.getElementById('btnCancelarEdicionFactura');
+  if (btnCancelarEdicion) btnCancelarEdicion.addEventListener('click', () => {
+    editandoFactura = false;
+    itemsEnEdicion = null;
+    renderDetalle();
+  });
+  const btnGuardarFactura = document.getElementById('btnGuardarFactura');
+  if (btnGuardarFactura) btnGuardarFactura.addEventListener('click', () => guardarFactura(inv.id, btnGuardarFactura));
+  const editCategoriaEl = document.getElementById('editCategoria');
+  if (editCategoriaEl) editCategoriaEl.addEventListener('change', (e) => {
+    const subcuentaSelect = document.getElementById('editSubcuenta');
+    const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
+    subcuentaSelect.innerHTML = opcionesSubcuenta(e.target.value, opciones[0][0]);
+  });
+  const efItemsLista = document.getElementById('efItemsLista');
+  if (efItemsLista) {
+    efItemsLista.addEventListener('change', (e) => {
+      if (e.target.classList.contains('ef-item-categoria')) {
+        const row = e.target.closest('.ef-item-row');
+        const subcuentaSelect = row.querySelector('.ef-item-subcuenta');
+        const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
+        subcuentaSelect.innerHTML = opcionesSubcuenta(e.target.value, opciones[0][0]);
+      }
+    });
+    efItemsLista.addEventListener('click', (e) => {
+      if (e.target.classList.contains('ef-item-quitar')) {
+        const idx = Number(e.target.closest('.ef-item-row').dataset.idx);
+        const actuales = leerItemsDelFormulario();
+        actuales.splice(idx, 1);
+        itemsEnEdicion = actuales;
+        renderDetalle();
+      }
+    });
+  }
+  const btnAgregarItem = document.getElementById('btnAgregarItem');
+  if (btnAgregarItem) btnAgregarItem.addEventListener('click', () => {
+    const actuales = leerItemsDelFormulario();
+    const opcionesOtro = SUBCUENTAS_GASTO['otro'];
+    actuales.push({ descripcion: '', subtotal: 0, categoria_concepto: 'otro', subcuenta_gasto: opcionesOtro[0][0] });
+    itemsEnEdicion = actuales;
+    renderDetalle();
+  });
+}
+
+// Guarda la cabecera (PUT /api/invoices/:id) y, si la factura tiene
+// ítems línea por línea, también los ítems editados (PUT /api/invoices/
+// :id/items) -- en ese orden, porque el IVA de cabecera que se acaba de
+// guardar es justo lo que el segundo PUT usa para reprorratear. El
+// backend ya recalcula el asiento contable solo en ambos casos.
+async function guardarFactura(invoiceId, btn){
+  const tieneItems = itemsActuales.length > 0;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Guardando…';
+  try {
+    const payloadHeader = {
+      fecha_factura: document.getElementById('editFecha').value,
+      valor_iva: document.getElementById('editIva').value,
+      rete_fuente: document.getElementById('editReteFuente').value,
+      rete_iva: document.getElementById('editReteIva').value,
+      rete_ica: document.getElementById('editReteIca').value,
+    };
+    if (!tieneItems) {
+      payloadHeader.valor_sin_iva = document.getElementById('editSubtotal').value;
+      payloadHeader.categoria_concepto = document.getElementById('editCategoria').value;
+      payloadHeader.subcuenta_gasto = document.getElementById('editSubcuenta').value;
+    }
+
+    let res = await fetch(`/api/invoices/${invoiceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payloadHeader),
+    });
+    let data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar la factura.');
+
+    if (tieneItems) {
+      const itemsAEnviar = leerItemsDelFormulario();
+      if (itemsAEnviar.length === 0) throw new Error('Debes dejar al menos un ítem.');
+      const resItems = await fetch(`/api/invoices/${invoiceId}/items`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: itemsAEnviar }),
+      });
+      const dataItems = await resItems.json();
+      if (!resItems.ok) throw new Error(dataItems.error || 'No se pudieron guardar los ítems.');
+      data = dataItems.factura;
+    }
+
+    const idx = allInvoices.findIndex((i) => i.id === invoiceId);
+    if (idx !== -1) allInvoices[idx] = { ...allInvoices[idx], ...data };
+    editandoFactura = false;
+    itemsEnEdicion = null;
+    Aviso.mostrar('Factura actualizada -- el asiento contable se recalculó.');
+    renderDetalle();
+    cargarAsientoDeFactura(invoiceId); // también refresca itemsActuales con lo que quedó guardado
+  } catch (err) {
+    Aviso.mostrar('No se pudo guardar: ' + err.message, { tipo: 'error' });
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 async function aprobarFactura(id, btn){
@@ -510,6 +738,8 @@ document.getElementById('colaLista').addEventListener('click', (e) => {
   if (!item) return;
   seleccionadaId = item.dataset.id;
   asientoActual = null;
+  editandoFactura = false;
+  itemsEnEdicion = null;
   renderDetalle();
   cargarAsientoDeFactura(seleccionadaId);
 });

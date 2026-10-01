@@ -812,11 +812,25 @@ function tarifaFuenteOpciones(categoria){
 // según la participación de cada ítem en el subtotal. Mismo cálculo en
 // Escanear y en Carga masiva -- de ahí que viva aquí y no en cada página.
 function itemsParaGuardar(items, ivaTotalFactura) {
-  const totalSubtotalItems = (items || []).reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+  const lista = items || [];
+  const totalSubtotalItems = lista.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
   const ivaHeader = Number(ivaTotalFactura) || 0;
-  return (items || []).map((it) => {
+  let acumulado = 0;
+  return lista.map((it, idx) => {
+    const esUltimo = idx === lista.length - 1;
     const subtotal = Number(it.subtotal) || 0;
-    const ivaProrrateado = totalSubtotalItems > 0 ? Math.round(ivaHeader * subtotal / totalSubtotalItems) : 0;
+    let ivaProrrateado;
+    if (totalSubtotalItems <= 0) {
+      ivaProrrateado = 0;
+    } else if (esUltimo) {
+      // El último ítem se lleva lo que falte para cuadrar EXACTO contra
+      // el IVA de cabecera, en vez de dejar 1-2 pesos de diferencia por
+      // redondear cada línea aparte.
+      ivaProrrateado = ivaHeader - acumulado;
+    } else {
+      ivaProrrateado = Math.round(ivaHeader * subtotal / totalSubtotalItems);
+      acumulado += ivaProrrateado;
+    }
     return { ...it, valor_iva: String(ivaProrrateado) };
   });
 }
@@ -936,8 +950,14 @@ function calcularReteIvaSugerido(inv, cliente, perfilTercero){
 // cuenta_puc }. Si no ha elegido ninguna (porque no la ha configurado
 // todavía), esta función no calcula nada -- nunca asume un municipio
 // ni una tarifa por su cuenta.
-function calcularReteIcaSugerido(inv, tarifaIca){
+function calcularReteIcaSugerido(inv, tarifaIca, cliente){
   if (!tarifaIca) return null; // el contador no ha elegido/configurado una tarifa de ICA para este municipio todavía
+  // Defensa adicional: si quien llama SÍ pasó el cliente, esta función no
+  // confía ciegamente en que ya lo haya validado afuera -- si el cliente
+  // no está marcado como agente retenedor de ICA, no sugiere nada. Si no
+  // se pasa cliente (compatibilidad con el único caller actual, que ya
+  // valida esto antes de llamar), el comportamiento no cambia.
+  if (cliente && !cliente.agente_retenedor_ica) return null;
 
   const tarifaPorMil = Number(tarifaIca.tarifa_por_mil);
   if (!tarifaPorMil || tarifaPorMil <= 0) return null;

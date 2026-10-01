@@ -26,15 +26,29 @@
   const ESTILOS = `
     #soporteChatBtn{
       position:fixed; bottom:22px; right:22px; z-index:9999;
-      display:flex; align-items:center; gap:7px;
-      height:42px; padding:0 16px 0 12px; border-radius:100px; border:none;
+      display:flex; align-items:center; gap:8px;
+      height:50px; padding:4px 18px 4px 4px; border-radius:100px; border:none;
       background:#FF5A36; color:#fff; cursor:pointer;
       box-shadow:0 12px 26px -8px rgba(0,0,0,0.5);
       font-family:'Inter', -apple-system, sans-serif; font-size:13px; font-weight:700;
       transition:transform .15s cubic-bezier(0.16,1,0.3,1);
     }
     #soporteChatBtn:hover{ transform:scale(1.04); }
+    #soporteChatBtn:hover .sc-mascot-img{ animation-play-state:paused; transform:translateY(-3px) rotate(0deg); }
     #soporteChatBtn svg{ width:18px; height:18px; flex-shrink:0; }
+    .sc-mascot-img{
+      width:46px; height:46px; object-fit:contain; display:block; flex-shrink:0;
+      animation:scMascotFloat 3.2s ease-in-out infinite;
+      transition:transform .15s cubic-bezier(0.16,1,0.3,1);
+    }
+    @keyframes scMascotFloat{
+      0%,100%{ transform:translateY(0) rotate(-4deg); }
+      50%{ transform:translateY(-4px) rotate(4deg); }
+    }
+    @media (prefers-reduced-motion:reduce){
+      .sc-mascot-img{ animation:none; }
+    }
+    .sc-header-mascot{ width:28px; height:28px; object-fit:contain; display:block; flex-shrink:0; }
     #soporteChatPanel{
       position:fixed; bottom:76px; right:22px; z-index:9999;
       width:320px; max-width:calc(100vw - 32px); height:420px; max-height:66vh;
@@ -111,6 +125,37 @@
     }
     #soporteChatWhatsapp:hover{ background:#20BD5A; }
     #soporteChatWhatsapp svg{ width:16px; height:16px; flex-shrink:0; }
+
+    /* Burbuja proactiva -- "¿necesitas ayuda?" cuando algo sale mal */
+    #scBurbujaAyuda{
+      position:fixed; right:22px; bottom:84px; z-index:9998;
+      width:min(250px, calc(100vw - 32px));
+      background:#fff; border-radius:14px;
+      box-shadow:0 20px 44px -16px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.06);
+      padding:12px 13px; font-family:'Inter', -apple-system, sans-serif;
+      opacity:0; transform:translateY(8px) scale(.98); pointer-events:none;
+      transition:opacity .2s cubic-bezier(0.16,1,0.3,1), transform .2s cubic-bezier(0.16,1,0.3,1), bottom .2s ease;
+    }
+    #scBurbujaAyuda.show{ opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
+    #scBurbujaAyuda::after{
+      content:''; position:absolute; bottom:-7px; right:28px;
+      width:14px; height:14px; background:#fff; transform:rotate(45deg);
+      box-shadow:3px 3px 6px -3px rgba(0,0,0,0.15);
+    }
+    #scBurbujaCerrar{
+      position:absolute; top:6px; right:7px; background:none; border:none;
+      color:#A79C8B; font-size:12px; cursor:pointer; padding:3px 5px; line-height:1; border-radius:4px;
+    }
+    #scBurbujaCerrar:hover{ color:#D8431F; background:#FFF0EA; }
+    .sc-burbuja-fila{ display:flex; align-items:flex-start; gap:9px; margin-bottom:10px; padding-right:14px; }
+    .sc-burbuja-mascota{ width:30px; height:30px; object-fit:contain; flex-shrink:0; }
+    #scBurbujaTexto{ font-size:12.5px; line-height:1.4; color:#1B2420; }
+    #scBurbujaAbrir{
+      display:block; width:100%; background:#FF5A36; color:#fff; border:none; border-radius:9px;
+      font-family:'Inter',sans-serif; font-size:12px; font-weight:700; padding:8px 10px; cursor:pointer;
+      transition:background .12s;
+    }
+    #scBurbujaAbrir:hover{ background:#E64D2B; }
   `;
 
   const ICONO_BOT = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C10.9 2 10 2.9 10 4C10 4.7 10.4 5.4 11 5.7V7H7C5.3 7 4 8.3 4 10V17C4 18.7 5.3 20 7 20H17C18.7 20 20 18.7 20 17V10C20 8.3 18.7 7 17 7H13V5.7C13.6 5.4 14 4.7 14 4C14 2.9 13.1 2 12 2ZM7 9H17C17.6 9 18 9.4 18 10V17C18 17.6 17.6 18 17 18H7C6.4 18 6 17.6 6 17V10C6 9.4 6.4 9 7 9ZM8.5 11.5C7.7 11.5 7 12.2 7 13C7 13.8 7.7 14.5 8.5 14.5C9.3 14.5 10 13.8 10 13C10 12.2 9.3 11.5 8.5 11.5ZM15.5 11.5C14.7 11.5 14 12.2 14 13C14 13.8 14.7 14.5 15.5 14.5C16.3 14.5 17 13.8 17 13C17 12.2 16.3 11.5 15.5 11.5Z" fill="currentColor"/></svg>`;
@@ -132,14 +177,14 @@
   btn.id = 'soporteChatBtn';
   btn.type = 'button';
   btn.title = 'Ayuda de Kárdex IA';
-  btn.innerHTML = ICONO_BOT + '<span>Ayuda</span>';
+  btn.innerHTML = '<img class="sc-mascot-img" src="/img/mascot-wave.png" alt="Mascota de Enlaza"><span>Ayuda</span>';
   document.body.appendChild(btn);
 
   const panel = document.createElement('div');
   panel.id = 'soporteChatPanel';
   panel.innerHTML = `
     <div id="soporteChatHeader">
-      ${ICONO_BOT.replace('fill="currentColor"', 'fill="#FF5A36"')}
+      <img class="sc-header-mascot" src="/img/mascot-wave.png" alt="Mascota de Enlaza">
       <div class="titulos">
         <div class="titulo">Asistente Kárdex IA</div>
         <div class="subtitulo">No es asesoría tributaria</div>
@@ -188,6 +233,7 @@
     panel.classList.add('show');
     abierto = true;
     inputEl.focus();
+    ocultarBurbuja();
   }
   function cerrarPanel() {
     panel.classList.remove('show');
@@ -262,4 +308,84 @@
       inputEl.focus();
     }
   });
+
+  // ---------- Burbuja proactiva: "¿necesitas ayuda?" ante un error ----------
+  // Antes, el chatbot solo ayudaba si el contador pensaba en abrirlo. Esto
+  // hace que la mascota se asome sola quando algo falla -- un error de
+  // JavaScript no atrapado en cualquier parte de la página, o un error ya
+  // atrapado (try/catch) que otra pantalla quiera avisar a propósito --
+  // en vez de dejar al contador solo con un mensaje de error en rojo.
+  const burbuja = document.createElement('div');
+  burbuja.id = 'scBurbujaAyuda';
+  burbuja.innerHTML = `
+    <button type="button" id="scBurbujaCerrar" title="Cerrar">✕</button>
+    <div class="sc-burbuja-fila">
+      <img src="/img/mascot-wave.png" alt="" class="sc-burbuja-mascota">
+      <div id="scBurbujaTexto">Hola, vi que algo no salió bien. ¿Necesitas ayuda?</div>
+    </div>
+    <button type="button" id="scBurbujaAbrir">Sí, ayúdame →</button>
+  `;
+  document.body.appendChild(burbuja);
+  const burbujaTextoEl = document.getElementById('scBurbujaTexto');
+
+  function ocultarBurbuja(){ burbuja.classList.remove('show'); }
+
+  document.getElementById('scBurbujaCerrar').addEventListener('click', ocultarBurbuja);
+  document.getElementById('scBurbujaAbrir').addEventListener('click', () => {
+    ocultarBurbuja();
+    abrirPanel();
+    // Si todavía no había ninguna conversación, se le adelanta al
+    // contador el mismo mensaje de la burbuja ya dentro del chat, como si
+    // la mascota se lo acabara de decir -- así no repite la pregunta desde
+    // cero al entrar.
+    if (!historial.length) {
+      mostrarVistaConversacion();
+      agregarMensaje(burbujaTextoEl.textContent, 'bot');
+    }
+  });
+
+  // No más de un aviso espontáneo cada 5 minutos -- si algo sigue fallando
+  // una y otra vez (ej. un error que se repite en un intervalo), no tiene
+  // sentido bombardear al contador con la misma burbuja cada vez.
+  const CLAVE_ULTIMO_AVISO = 'kardexIA_scUltimoAvisoError';
+  const AVISO_COOLDOWN_MS = 5 * 60 * 1000;
+
+  function puedeAvisarAhora(){
+    try {
+      const ultimo = Number(localStorage.getItem(CLAVE_ULTIMO_AVISO)) || 0;
+      return (Date.now() - ultimo) > AVISO_COOLDOWN_MS;
+    } catch (e) { return true; } // sin localStorage -- se deja avisar, mejor eso que nunca avisar
+  }
+  function marcarAvisoMostrado(){
+    try { localStorage.setItem(CLAVE_ULTIMO_AVISO, String(Date.now())); } catch (e) { /* se ignora */ }
+  }
+
+  function avisarError(mensaje){
+    if (abierto) return; // ya está viendo el chat -- no hace falta la burbuja encima
+    if (!puedeAvisarAhora()) return;
+    marcarAvisoMostrado();
+    burbujaTextoEl.textContent = (mensaje && mensaje.trim())
+      ? mensaje.trim()
+      : 'Hola, vi que algo no salió bien. ¿Necesitas ayuda?';
+    // Si el avisito de "lote completado" (lote-aviso.js) está mostrándose
+    // en este mismo momento, esta burbuja se acomoda más arriba en vez de
+    // superponerse encima de él.
+    const loteAviso = document.getElementById('loteAvisoGlobal');
+    const ocupado = loteAviso && loteAviso.classList.contains('show');
+    burbuja.style.bottom = ocupado ? '172px' : '84px';
+    burbuja.classList.add('show');
+  }
+
+  // API pública -- cualquier otra página que ya incluya este script puede
+  // llamar a esto apenas atrape un error (try/catch) y lo muestre en su
+  // propia pantalla, para que además la mascota se lo ofrezca como ayuda:
+  //   window.EnlazaMascota && window.EnlazaMascota.avisarError('No se pudo subir el lote.');
+  window.EnlazaMascota = { avisarError };
+
+  // Errores de JavaScript que nadie atrapó en ningún otro lado -- estos sí
+  // son bugs reales de la página. (No capturan errores de recursos rotos
+  // como imágenes o scripts de terceros -- esos no burbujean hasta acá sin
+  // useCapture, así que no generan falsas alarmas).
+  window.addEventListener('error', () => avisarError());
+  window.addEventListener('unhandledrejection', () => avisarError());
 })();

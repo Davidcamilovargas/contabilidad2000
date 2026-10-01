@@ -83,6 +83,19 @@
     <a class="la-link" id="loteAvisoLink" href="/masivo.html" hidden>Ver resultados en Carga masiva →</a>
   `;
 
+  // Dos variables en memoria, distintas de CLAVE_VISTO (que vive en
+  // localStorage y sobrevive a cerrar el programa):
+  //  - loteIdMostrado: el lote "completado" que ESTA carga de página ya
+  //    está mostrando. Sirve para no ocultarlo a media lectura solo
+  //    porque, apenas se mostró, ya lo marcamos como visto en
+  //    localStorage (ver más abajo) -- sin esto, el aviso parpadeaba y
+  //    desaparecía solo unos segundos después de aparecer.
+  //  - loteIdDescartado: el lote que el contador cerró a mano con "✕" en
+  //    esta carga de página -- se queda oculto el resto de la sesión
+  //    aunque siga siendo el mismo lote activo.
+  let loteIdMostrado = null;
+  let loteIdDescartado = null;
+
   function montar() {
     document.body.appendChild(wrap);
     const cerrar = document.getElementById('loteAvisoCerrar');
@@ -90,6 +103,7 @@
       const loteId = wrap.dataset.loteId;
       if (loteId) {
         try { localStorage.setItem(CLAVE_VISTO, loteId); } catch (e) { /* localStorage no disponible -- se ignora */ }
+        loteIdDescartado = loteId;
       }
       ocultar();
     });
@@ -133,7 +147,22 @@
       document.getElementById('loteAvisoCerrar').hidden = true; // no se puede descartar mientras sigue en curso
       document.getElementById('loteAvisoLink').hidden = true;
     } else if (lote.estado === 'completado') {
-      if (yaVisto(lote.id)) { ocultar(); return; } // ya se lo mostramos antes en otra página -- no insistir
+      if (loteIdDescartado === lote.id) { ocultar(); return; } // el contador ya le dio "✕" a este lote en esta sesión
+      // Si ESTA carga de página todavía no lo había mostrado, y ya figura
+      // como visto en localStorage (de una sesión anterior, o de otra
+      // pestaña), no insistir. Pero si ya lo estamos mostrando ahora
+      // mismo (loteIdMostrado === lote.id), no lo ocultamos solo porque
+      // el siguiente párrafo lo marcó como visto -- eso haría que el
+      // aviso parpadeara y se cerrara solo a los pocos segundos.
+      if (loteIdMostrado !== lote.id && yaVisto(lote.id)) { ocultar(); return; }
+      if (loteIdMostrado !== lote.id) {
+        loteIdMostrado = lote.id;
+        // Se marca como visto apenas se muestra por primera vez (no solo
+        // al hacer clic en "✕") -- así, si el contador cierra el programa
+        // entero sin descartar el aviso a mano, Enlaza no se lo vuelve a
+        // mostrar duplicado la próxima vez que lo abra.
+        try { localStorage.setItem(CLAVE_VISTO, lote.id); } catch (e) { /* localStorage no disponible -- se ignora */ }
+      }
       wrap.classList.add('show', 'completado');
       document.getElementById('loteAvisoTitulo').textContent = 'Lote completado';
       document.getElementById('loteAvisoTexto').textContent =

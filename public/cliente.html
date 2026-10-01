@@ -41,8 +41,18 @@
     font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
     padding:3px 9px; border-radius:100px; background:var(--moss-soft); color:#fff; white-space:nowrap;
   }
-  .cliente-header-actions{ display:flex; flex-direction:column; gap:10px; align-items:stretch; }
+  .cliente-header-actions{ display:flex; flex-direction:row; flex-wrap:wrap; gap:10px; align-items:stretch; flex-shrink:0; }
   .cliente-header-actions .btn{ text-align:center; white-space:nowrap; text-decoration:none; display:inline-block; }
+  .btn-escanear-grande{ padding:18px 28px; font-size:15px; font-weight:700; }
+
+  .cliente-quick-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .quick-action-btn{
+    display:inline-flex; align-items:center; gap:6px;
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--ink-soft); text-decoration:none; padding:7px 12px; background:var(--paper-raised);
+    border:1px solid var(--line); border-radius:100px; transition:all .15s ease; white-space:nowrap;
+  }
+  .quick-action-btn:hover{ color:var(--ink); border-color:var(--ink-faint); background:var(--paper-sunken); }
 
   .client-tabbar{
     display:flex; align-items:center; gap:8px; flex-wrap:wrap;
@@ -185,11 +195,13 @@
       <div>
         <h2 id="clienteNombre">—</h2>
         <div class="cliente-meta" id="clienteMeta"></div>
+        <div class="cliente-quick-actions">
+          <a class="quick-action-btn" id="btnEditarCliente" href="#">✎ Editar cliente</a>
+        </div>
       </div>
       <div class="cliente-header-actions">
-        <a class="btn primary" id="btnEscanearCliente" href="#">📸 Escanear factura para este cliente</a>
-        <a class="btn ghost" id="btnCargaMasivaCliente" href="#">📦 Carga masiva para este cliente</a>
-        <a class="btn ghost" id="btnEditarCliente" href="#">Editar datos del cliente</a>
+        <a class="btn primary btn-escanear-grande" id="btnEscanearCliente" href="#">📸 Escanear factura para este cliente</a>
+        <a class="btn ghost btn-escanear-grande" id="btnCargaMasivaCliente" href="#">📦 Carga masiva para este cliente</a>
       </div>
     </div>
 

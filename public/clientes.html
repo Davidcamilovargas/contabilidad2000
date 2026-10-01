@@ -112,6 +112,9 @@
   }
   #clientEmpty.show{ display:block; }
 
+  #addClientBtnWrap{ display:none; justify-content:center; margin-top:22px; }
+  #addClientBtnWrap .btn{ padding:15px 30px; font-size:14px; }
+
   #loading{
     font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:20px 0;
@@ -168,11 +171,11 @@
   </header>
   <div class="sub reveal">Las empresas que atiendes — Enlaza usa esta lista para detectar solo si una factura es un ingreso o un egreso.</div>
 
-  <div id="addForm" class="reveal">
+  <div id="addForm" class="reveal" style="display:none;">
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <h2 id="formTitle">Agregar cliente</h2>
       <div style="display:flex; align-items:center; gap:10px;">
-        <button type="button" class="btn ghost" id="btnCancelarEdicion" style="display:none; padding:8px 14px; font-size:12.5px;">Cancelar edición</button>
+        <button type="button" class="btn ghost" id="btnCancelarEdicion" style="display:none; padding:8px 14px; font-size:12.5px;">← Volver al listado</button>
         <span id="planBadge" style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-soft); background:#EAF3F7; padding:6px 12px; border-radius:100px;"></span>
       </div>
     </div>
@@ -346,8 +349,7 @@
         </div>
       </div>
     </div>
-    <!-- Información bancaria (opcional) -->
-<!--    <div class="form-section">
+    <div class="form-section">
       <div class="form-section-title">Información bancaria (opcional)</div>
       <div class="form-row cols-2" style="grid-template-columns:1.5fr 1fr 1.5fr;">
         <div class="field">
@@ -367,7 +369,7 @@
           <input type="text" id="inputNumeroCuenta" placeholder="00000000000">
         </div>
       </div>
-    </div>-->
+    </div>
 
     <button class="btn" id="btnAdd">+ Agregar cliente</button>
     <div id="formError"></div>
@@ -378,7 +380,11 @@
   </div>
 
   <div id="clientList" style="display:none;"></div>
-  <div id="clientEmpty">Todavía no tienes clientes agregados. Agrega el primero arriba.</div>
+  <div id="clientEmpty">Todavía no tienes clientes agregados. Agrega el primero abajo.</div>
+
+  <div id="addClientBtnWrap">
+    <button type="button" class="btn" id="btnMostrarAddForm">+ Agregar cliente nuevo</button>
+  </div>
 
   <footer>Cuando el NIT de una factura coincida con uno de tus clientes, Enlaza marcará Ingreso o Egreso automáticamente.</footer>
 </div>
@@ -426,6 +432,8 @@ const inputTipoCuenta = document.getElementById('inputTipoCuenta');
 const inputNumeroCuenta = document.getElementById('inputNumeroCuenta');
 const btnAdd = document.getElementById('btnAdd');
 const formError = document.getElementById('formError');
+const btnMostrarAddForm = document.getElementById('btnMostrarAddForm');
+const addClientBtnWrap = document.getElementById('addClientBtnWrap');
 
 let clients = [];
 let allInvoices = [];
@@ -664,10 +672,40 @@ function renderClients(){
     clientListEl.appendChild(row);
   });
 
+  mostrarListado();
+}
+
+// La página tiene dos "vistas" que nunca se muestran a la vez: el listado
+// de clientes (con el botón para agregar uno nuevo abajo) o el recuadro
+// del formulario (agregando o editando). mostrarListado()/mostrarFormulario()
+// son el único lugar que decide cuál de las dos se ve en cada momento.
+function mostrarListado(){
+  document.getElementById('addForm').style.display = 'none';
   const hasClients = clients.length > 0;
   clientListEl.style.display = hasClients ? 'block' : 'none';
   clientEmptyEl.classList.toggle('show', !hasClients);
+  addClientBtnWrap.style.display = puedeAdministrar(miRol) ? 'flex' : 'none';
 }
+
+function mostrarFormulario(){
+  document.getElementById('addForm').style.display = '';
+  clientListEl.style.display = 'none';
+  clientEmptyEl.classList.remove('show');
+  addClientBtnWrap.style.display = 'none';
+  document.getElementById('addForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+btnMostrarAddForm.addEventListener('click', () => {
+  editingId = null;
+  resetForm();
+  formTitle.textContent = 'Agregar cliente';
+  btnAdd.textContent = '+ Agregar cliente';
+  btnCancelarEdicion.textContent = '← Volver al listado';
+  btnCancelarEdicion.style.display = 'inline-block';
+  formError.classList.remove('show');
+  renderPlanBadge();
+  mostrarFormulario();
+});
 
 clientListEl.addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-action]');
@@ -777,16 +815,15 @@ function iniciarEdicion(id){
 
   formTitle.textContent = 'Editar cliente';
   btnAdd.textContent = 'Guardar cambios';
+  btnCancelarEdicion.textContent = 'Cancelar edición';
   btnCancelarEdicion.style.display = 'inline-block';
   formError.classList.remove('show');
   renderPlanBadge(); // el límite de plan no debe bloquear guardar una edición
 
   // Editar SÍ está permitido para cualquier rol que pueda escribir (a
   // diferencia de crear un cliente nuevo, que es solo administrador/
-  // contador) -- por eso el formulario se muestra aquí sin importar que
-  // aplicarVisibilidadForm() lo haya ocultado al cargar la página.
-  document.getElementById('addForm').style.display = '';
-  document.getElementById('addForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // contador) -- por eso el formulario se muestra aquí sin importar el rol.
+  mostrarFormulario();
 }
 
 function cancelarEdicion(){
@@ -797,18 +834,7 @@ function cancelarEdicion(){
   btnCancelarEdicion.style.display = 'none';
   formError.classList.remove('show');
   renderPlanBadge();
-  aplicarVisibilidadForm();
-}
-
-// El formulario de "+ Agregar cliente" sirve también para editar uno
-// existente (mismo botón, mismo bloque) -- solo se oculta por completo
-// cuando está en modo CREAR y el rol no puede crear clientes nuevos
-// (administrador/contador). En modo editar se vuelve a mostrar sin
-// importar el rol, siempre que puedan escribir (ver iniciarEdicion).
-function aplicarVisibilidadForm(){
-  const addForm = document.getElementById('addForm');
-  if (!editingId && !puedeAdministrar(miRol)) addForm.style.display = 'none';
-  else addForm.style.display = '';
+  mostrarListado();
 }
 
 btnCancelarEdicion.addEventListener('click', cancelarEdicion);
@@ -818,10 +844,24 @@ btnAdd.addEventListener('click', async () => {
   const nombre = inputNombre.value.trim();
   const nit = inputNit.value.trim();
   const dv = inputDv.value.trim();
+  const contactoNombreVal = inputContactoNombre.value.trim();
+  const contactoTelefonoVal = inputContactoTelefono.value.trim();
+  const contactoCorreoVal = inputContactoCorreo.value.trim();
 
   if (!nombre || !nit) {
     formError.textContent = 'Nombre y NIT son obligatorios.';
     formError.classList.add('show');
+    return;
+  }
+
+  // El contacto principal es obligatorio -- sin esto no hay forma de
+  // avisarle al cliente cuando deje de usar Enlaza ni de pedirle
+  // retroalimentación, así que se exige nombre y al menos un medio de
+  // contacto (teléfono o correo) antes de guardar.
+  if (!contactoNombreVal || (!contactoTelefonoVal && !contactoCorreoVal)) {
+    formError.textContent = 'El contacto principal es obligatorio: ingresa su nombre y al menos un teléfono o correo.';
+    formError.classList.add('show');
+    document.getElementById('inputContactoNombre').scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
 
@@ -879,10 +919,12 @@ btnAdd.addEventListener('click', async () => {
     } else {
       clients.push(data);
       planInfo.clientesActuales += 1;
-      renderPlanBadge();
-      resetForm();
-      inputNombre.focus();
-      Aviso.mostrar('Cliente agregado.');
+      Aviso.mostrar('Cliente agregado. Abriendo su ficha para escanear facturas...');
+      // Al terminar de crear el cliente, se pasa directo a su ficha
+      // (hoja de escaneo de facturas) en vez de volver al listado --
+      // así el contador no tiene que ir a buscarlo de nuevo.
+      window.location.href = '/cliente.html?id=' + encodeURIComponent(data.id);
+      return;
     }
 
     clients.sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -953,7 +995,6 @@ async function requireAuthAndInit(){
     if (!res.ok) { window.location.href = '/login.html'; return; }
     const user = await res.json();
     miRol = user.role;
-    aplicarVisibilidadForm();
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('userAvatar').src = user.avatarUrl || '';
     document.getElementById('userName').textContent = user.nombre || user.email;
