@@ -10,6 +10,10 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="/estadisticas.js"></script>
 <script src="/retenciones.js"></script>
+<!-- Para leer un .xlsx subido en "PUC personalizado" (ver más abajo) --
+     misma librería y versión que ya usan facturas.html/listado-retenciones.html
+     para EXPORTAR xlsx; aquí se usa su lado de LECTURA (workbook.xlsx.load). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
   .wrap{ max-width:1240px; }
 
@@ -274,11 +278,11 @@
       </div>
 
       <div class="puc-import">
-        <h3>O importar varios de una vez</h3>
-        <p class="puc-intro">Un archivo CSV con las columnas <code>categoria_fiscal</code>, <code>codigo</code> y <code>concepto</code> -- una fila por cada código.</p>
+        <h3>O leer varios de una vez</h3>
+        <p class="puc-intro">Un archivo CSV o Excel con columnas de <code>codigo</code> y <code>concepto</code> (la categoría fiscal es opcional, y los nombres de columna pueden variar -- ej. "cuenta", "nombre", "descripción"); o un PDF, foto o captura de pantalla de la lista tal como la ves en tu otro sistema -- en ese caso la lee la misma IA que lee las facturas.</p>
         <div class="puc-form-row">
-          <input type="file" id="pucArchivo" accept=".csv,text/csv">
-          <button class="btn ghost" id="btnImportarPuc" type="button">Importar CSV</button>
+          <input type="file" id="pucArchivo" accept=".csv,.xlsx,.pdf,image/*,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+          <button class="btn primary" id="btnImportarPuc" type="button">Leer y guardar archivo</button>
           <button class="btn ghost" id="btnPlantillaPuc" type="button">Descargar plantilla CSV</button>
         </div>
         <div id="pucImportResultado" class="puc-import-resultado" style="display:none;"></div>
@@ -540,31 +544,126 @@ document.getElementById('btnPlantillaPuc').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-document.getElementById('btnImportarPuc').addEventListener('click', async () => {
-  const input = document.getElementById('pucArchivo');
+// ---- Lectura de "varios códigos de una vez": CSV/Excel se leen tal
+// cual (exactos, sin IA); PDF/foto pasan por la misma IA que lee
+// facturas, porque un documento así no tiene columnas que parsear a
+// mano. Las tres rutas terminan en el mismo mensaje de resultado --
+// tanto el bloque de detalle como un aviso tipo toast, para que nunca
+// quede "mudo" si algo sale mal o si todo salió bien.
+
+function extensionDeArchivoPuc(nombre){
+  const m = /\.([a-z0-9]+)$/i.exec(nombre || '');
+  return m ? m[1].toLowerCase() : '';
+}
+
+function leerArchivoComoBase64Puc(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Convierte la primera hoja de un .xlsx a texto CSV usando ExcelJS (ya
+// cargado en el <head>, misma librería que usan facturas.html y
+// listado-retenciones.html para EXPORTAR) -- así reutilizamos el mismo
+// parser/validación de columnas de /puc/importar en vez de duplicarlo
+// para Excel.
+async function leerXlsxComoCsvPuc(file){
+  const buffer = await file.arrayBuffer();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const hoja = workbook.worksheets[0];
+  if (!hoja) return '';
+  const filas = [];
+  hoja.eachRow({ includeEmpty: false }, (row) => {
+    const valores = row.values.slice(1); // row.values[0] siempre es undefined (ExcelJS es 1-indexado)
+    filas.push(valores.map((v) => {
+      if (v === null || v === undefined) return '';
+      const texto = (typeof v === 'object' && v.text !== undefined) ? v.text : String(v);
+      return /[",\n]/.test(texto) ? '"' + texto.replace(/"/g, '""') + '"' : texto;
+    }).join(','));
+  });
+  return filas.join('\n');
+}
+
+function mostrarResultadoImportacionPuc(data){
   const resultadoEl = document.getElementById('pucImportResultado');
   resultadoEl.style.display = 'block';
-  if (!input.files || !input.files[0]) {
-    resultadoEl.innerHTML = '<span class="puc-fila-error">Elige primero un archivo CSV.</span>';
-    return;
-  }
-  const texto = await input.files[0].text();
-  const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/importar`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csvTexto: texto }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    resultadoEl.innerHTML = `<span class="puc-fila-error">${escapeHtml(data.error || 'No se pudo importar el archivo.')}</span>`;
-    return;
-  }
-  let html = `${data.importados} código(s) importado(s) correctamente.`;
+  let html = `${data.importados} código(s) leído(s) y guardado(s) correctamente.`;
   if (data.errores && data.errores.length) {
     html += '<br>' + data.errores.map((e) => `<span class="puc-fila-error">Fila ${e.fila}: ${escapeHtml(e.motivo)}</span>`).join('<br>');
   }
   resultadoEl.innerHTML = html;
-  input.value = '';
-  recargarListaPuc();
+  Aviso.mostrar(`${data.importados} código(s) PUC leído(s) y guardado(s).`);
+}
+
+document.getElementById('btnImportarPuc').addEventListener('click', async () => {
+  const input = document.getElementById('pucArchivo');
+  const btn = document.getElementById('btnImportarPuc');
+  const resultadoEl = document.getElementById('pucImportResultado');
+  resultadoEl.style.display = 'none';
+  resultadoEl.innerHTML = '';
+
+  if (!input.files || !input.files[0]) {
+    resultadoEl.style.display = 'block';
+    resultadoEl.innerHTML = '<span class="puc-fila-error">Elige primero un archivo (CSV, Excel, PDF o foto).</span>';
+    return;
+  }
+
+  const file = input.files[0];
+  const ext = extensionDeArchivoPuc(file.name);
+  const esImagen = (file.type || '').startsWith('image/');
+  const esPdf = file.type === 'application/pdf' || ext === 'pdf';
+
+  const textoBotonOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Leyendo...';
+
+  try {
+    let data;
+    if (ext === 'csv' || file.type === 'text/csv') {
+      const texto = await file.text();
+      const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/importar`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvTexto: texto }),
+      });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo leer el archivo.');
+    } else if (ext === 'xlsx') {
+      if (typeof ExcelJS === 'undefined') throw new Error('No se pudo cargar el lector de Excel -- revisa tu conexión e intenta de nuevo.');
+      const csvTexto = await leerXlsxComoCsvPuc(file);
+      if (!csvTexto.trim()) throw new Error('El archivo de Excel no parece tener datos en la primera hoja.');
+      const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/importar`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvTexto }),
+      });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo leer el archivo.');
+    } else if (esPdf || esImagen) {
+      const base64 = await leerArchivoComoBase64Puc(file);
+      const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc/leer-ia`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, mediaType: file.type || (esPdf ? 'application/pdf' : 'image/jpeg'), isPdf: esPdf }),
+      });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo leer el archivo.');
+    } else {
+      throw new Error('Formato no soportado -- usa CSV, Excel (.xlsx), PDF o una foto/captura.');
+    }
+
+    mostrarResultadoImportacionPuc(data);
+    input.value = '';
+    recargarListaPuc();
+  } catch (err) {
+    resultadoEl.style.display = 'block';
+    resultadoEl.innerHTML = `<span class="puc-fila-error">${escapeHtml(err.message)}</span>`;
+    Aviso.mostrar('No se pudo leer el archivo: ' + err.message, { tipo: 'error' });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoBotonOriginal;
+  }
 });
 
 async function requireAuthAndInit(){
