@@ -2497,6 +2497,114 @@ app.put('/api/invoices/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Detalle completo de UNA factura -- a diferencia de GET /api/invoices
+// (el listado), este SÍ incluye archivo_original/archivo_original_tipo.
+// Separado a propósito: el listado nunca debe traer el documento
+// completo en base64 de cada factura histórica, solo esta ruta puntual
+// cuando el contador quiere abrir una factura concreta (ej. desde la
+// ficha del cliente o desde Facturas, para ver el documento escaneado
+// de una factura que ya está aprobada).
+app.get('/api/invoices/:id', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
+    if (req.clientesAsignados && !puedeAccederCliente(req, rows[0].cliente_id)) {
+      return res.status(404).json({ error: 'Factura no encontrada.' });
+    }
+    res.json(rowToInvoice(rows[0]));
+  } catch (err) {
+    console.error('Error consultando factura:', err);
+    res.status(500).json({ error: 'No se pudo consultar la factura.' });
+  }
+});
+
+// Corrige si una factura es Ingreso o Egreso DESPUÉS de guardada --
+// tipo_movimiento a propósito NO está en CAMPOS_EDITABLES_FACTURA (ver
+// el comentario ahí): cambiarlo tiene efectos en cascada que ningún
+// otro campo editable tiene --
+//   - el asiento contable (asientos.js) hoy SOLO existe para egresos --
+//     una factura que pasa a "ingreso" debe perder su asiento, y una que
+//     pasa a "egreso" debe generarlo si no lo tenía.
+//   - la conciliación bancaria (movimientos_banco) exige que el tipo del
+//     movimiento coincida con el de la factura -- un emparejamiento ya
+//     hecho bajo el tipo viejo deja de tener sentido.
+// Por eso vive en su propia ruta en vez de colarse en el PUT genérico de
+// arriba, donde sería fácil olvidar esta limpieza.
+app.patch('/api/invoices/:id/tipo-movimiento', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    const nuevoTipo = String(req.body.tipo_movimiento || '').toLowerCase();
+    if (nuevoTipo !== 'ingreso' && nuevoTipo !== 'egreso') {
+      return res.status(400).json({ error: 'tipo_movimiento debe ser "ingreso" o "egreso".' });
+    }
+
+    const { rows } = await pool.query('SELECT * FROM invoices WHERE id = $1 AND contador_id = $2', [req.params.id, req.firmaId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada.' });
+    const invoice = rows[0];
+    if (req.clientesAsignados && !puedeAccederCliente(req, invoice.cliente_id)) {
+      return res.status(404).json({ error: 'Factura no encontrada.' });
+    }
+
+    if (invoice.tipo_movimiento === nuevoTipo) {
+      return res.json({ ok: true, sin_cambios: true, tipo_movimiento: nuevoTipo });
+    }
+
+    // Un asiento ya APROBADO nunca se borra en silencio -- es una
+    // decisión humana que el sistema no deshace solo (mismo principio
+    // que el resto de la app). Si existe uno, se exige confirmación
+    // explícita del contador antes de continuar.
+    const asientoAprobadoRes = await pool.query(
+      `SELECT id FROM asientos_contables WHERE invoice_id = $1 AND estado = 'aprobado'`,
+      [invoice.id]
+    );
+    const teniaAsientoAprobado = asientoAprobadoRes.rows.length > 0;
+    if (teniaAsientoAprobado && !req.body.confirmarBorrarAsientoAprobado) {
+      return res.status(409).json({
+        error: 'asiento_aprobado_pendiente',
+        mensaje: 'Esta factura ya tiene un asiento contable APROBADO. Corregir el tipo de movimiento lo va a eliminar (hoy no hay asientos para ingresos). Confirma para continuar.',
+      });
+    }
+
+    const actualizada = await pool.query(
+      'UPDATE invoices SET tipo_movimiento = $1 WHERE id = $2 AND contador_id = $3 RETURNING *',
+      [nuevoTipo, invoice.id, req.firmaId]
+    );
+
+    if (teniaAsientoAprobado) {
+      const asientoId = asientoAprobadoRes.rows[0].id;
+      await pool.query('DELETE FROM asiento_lineas WHERE asiento_id = $1', [asientoId]);
+      await pool.query('DELETE FROM asientos_contables WHERE id = $1', [asientoId]);
+    }
+
+    // generarYGuardarAsientoParaFactura ya hace exactamente lo correcto
+    // en ambas direcciones: si el nuevo tipo es egreso y los datos
+    // cuadran, genera/reemplaza el asiento 'propuesto'; si es ingreso (o
+    // cualquier otro motivo de error), retira el 'propuesto' que hubiera
+    // quedado de antes -- nunca toca uno ya aprobado (por eso el bloque
+    // de arriba lo maneja aparte).
+    await generarYGuardarAsientoParaFactura(req.firmaId, actualizada.rows[0]);
+
+    // Cualquier movimiento bancario ya conciliado contra esta factura
+    // asumía el tipo viejo (un abono esperaba un ingreso, un cargo un
+    // egreso) -- vuelve a quedar sin conciliar para que el contador lo
+    // revise con el tipo correcto, en vez de dejar una conciliación que
+    // ya no tiene sentido.
+    const desconciliados = await pool.query(
+      `UPDATE movimientos_banco SET estado = 'sin_conciliar', invoice_id = NULL WHERE invoice_id = $1 AND estado = 'conciliado'`,
+      [invoice.id]
+    );
+
+    res.json({
+      ok: true,
+      tipo_movimiento: nuevoTipo,
+      asiento_aprobado_eliminado: teniaAsientoAprobado,
+      movimientos_desconciliados: desconciliados.rowCount,
+    });
+  } catch (err) {
+    console.error('Error corrigiendo tipo_movimiento:', err);
+    res.status(500).json({ error: 'No se pudo corregir el tipo de movimiento.' });
+  }
+});
+
 // Reemplaza por completo los ítems línea por línea de una factura ya
 // guardada (ej. el contador se da cuenta de que una línea quedó en la
 // categoría equivocada, o que faltó/sobró un ítem). El IVA de cabecera

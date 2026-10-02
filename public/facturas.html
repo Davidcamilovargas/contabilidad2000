@@ -232,6 +232,35 @@
     font-size:11.5px; color:#8A9289; margin-top:10px; line-height:1.5;
   }
 
+  .factura-row-clicable{ cursor:pointer; }
+  .factura-row-clicable:hover{ background:#F5FAFC; }
+
+  .modal-doc{ display:none; position:fixed; inset:0; z-index:100; align-items:flex-start; justify-content:center; padding:5vh 16px; overflow-y:auto; }
+  .modal-doc.show{ display:flex; }
+  .modal-doc-backdrop{ position:fixed; inset:0; background:rgba(20,26,24,0.55); }
+  .modal-doc-card{
+    position:relative; background:#FFFFFF; color:#1D2A32; border-radius:14px; width:100%; max-width:760px;
+    padding:26px 28px; box-shadow:0 24px 60px -12px rgba(0,0,0,0.4);
+  }
+  .modal-doc-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px; }
+  .modal-doc-head h3{ font-family:'Newsreader',serif; font-size:21px; margin:0; }
+  .modal-doc-cerrar{
+    background:none; border:none; cursor:pointer; color:#8AA0AC; font-size:18px; line-height:1; padding:4px;
+  }
+  .modal-doc-cerrar:hover{ color:#1D2A32; }
+  .modal-doc-info{ display:grid; grid-template-columns:repeat(2, 1fr); gap:14px 20px; margin-bottom:20px; }
+  .doc-campo{ display:flex; flex-direction:column; gap:3px; }
+  .doc-label{
+    font-family:'JetBrains Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:#8AA0AC;
+  }
+  .doc-tipo-row{ display:flex; align-items:center; gap:10px; }
+  .doc-corregir-btn{ font-size:11.5px; padding:5px 10px; }
+  .modal-doc-visor{ border:1px solid #DCE7EC; border-radius:10px; padding:14px; text-align:center; background:#F8FBFC; }
+  .modal-doc-visor img, .modal-doc-visor embed{ border-radius:6px; }
+  .modal-doc-sin-archivo{ color:#8AA0AC; font-size:12.5px; padding:30px 0; }
+  .modal-doc-link{ display:inline-block; margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#2B5F6B; text-decoration:none; }
+  .modal-doc-link:hover{ text-decoration:underline; }
+
   tfoot td{
     padding:16px 20px; font-family:'JetBrains Mono',monospace; font-size:13px;
     border-top:2px solid var(--ink); background:#EAF3F7;
@@ -499,6 +528,30 @@
   </div>
 </div>
 
+<div class="modal-doc" id="modalDoc">
+  <div class="modal-doc-backdrop" id="modalDocBackdrop"></div>
+  <div class="modal-doc-card">
+    <div class="modal-doc-head">
+      <h3 id="docTitulo">Factura</h3>
+      <button class="modal-doc-cerrar" id="btnCerrarDoc" type="button" title="Cerrar">✕</button>
+    </div>
+    <div class="modal-doc-info">
+      <div class="doc-campo">
+        <span class="doc-label">Tipo de movimiento</span>
+        <div class="doc-tipo-row">
+          <span class="mov-badge" id="docMovBadge"><span class="mov-dot"></span><span id="docMovTexto"></span></span>
+          <button class="btn ghost doc-corregir-btn" id="btnCorregirTipo" type="button" title="Corregir si esta factura quedó mal clasificada como Ingreso/Egreso">Corregir</button>
+        </div>
+      </div>
+      <div class="doc-campo"><span class="doc-label">Contraparte</span><span id="docContraparte"></span></div>
+      <div class="doc-campo"><span class="doc-label">Concepto</span><span id="docConcepto"></span></div>
+      <div class="doc-campo"><span class="doc-label">Fecha</span><span id="docFecha"></span></div>
+      <div class="doc-campo"><span class="doc-label">Total (con IVA)</span><span id="docTotal"></span></div>
+    </div>
+    <div class="modal-doc-visor" id="docVisorWrap"></div>
+  </div>
+</div>
+
 <script>
 // Convierte texto a su versión "segura" para meter en HTML -- evita que
 // un valor guardado (leído por la IA o escrito por un usuario) pueda
@@ -703,6 +756,8 @@ function renderTable(){
     }
 
     const tr = document.createElement('tr');
+    tr.dataset.id = inv.id;
+    tr.classList.add('factura-row-clicable');
     tr.style.animationDelay = (i * 0.04) + 's';
     tr.addEventListener('animationend', () => { tr.style.animation = 'none'; tr.style.opacity = '1'; }, { once: true });
     const retencionTitle = totalRetenciones > 0
@@ -817,6 +872,13 @@ async function loadInvoices(){
 
     populateMonths(invoicesForSelectedClient());
     renderTable();
+
+    // Si se llegó desde la ficha de un cliente con una factura puntual
+    // en mente (ej. "ver esta factura" en la tabla de últimas facturas),
+    // se abre de una vez su detalle -- funciona sin importar el filtro
+    // de cliente/mes activo, porque el detalle se trae aparte del servidor.
+    const facturaUrl = new URLSearchParams(window.location.search).get('factura');
+    if (facturaUrl) abrirDetalleFactura(facturaUrl);
   } catch (e) {
     emptyEl.textContent = 'No se pudieron cargar las facturas: ' + e.message;
     emptyEl.classList.add('show');
@@ -1604,8 +1666,130 @@ tbody.addEventListener('click', async (e) => {
         }
       },
     });
+    return;
   }
+
+  // Click en cualquier otra parte de la fila (no en un botón de acción) --
+  // abre el detalle de la factura, con el documento original y la opción
+  // de corregir Ingreso/Egreso si quedó mal clasificada.
+  const filaClic = e.target.closest('tr[data-id]');
+  if (filaClic) abrirDetalleFactura(filaClic.dataset.id);
 });
+
+// ---------- Detalle de una factura: documento original + corregir Ingreso/Egreso ----------
+//
+// Antes el documento original escaneado SOLO se podía ver en Revisión, y
+// solo mientras la factura estuviera pendiente de aprobar -- en cuanto se
+// aprobaba, desaparecía de esa lista y no había forma de volver a verlo.
+// Este modal lo abre desde Facturas (y desde la ficha del cliente, que
+// enlaza aquí) para CUALQUIER factura, aprobada o no.
+
+let facturaEnModal = null;
+
+async function abrirDetalleFactura(id){
+  try {
+    const res = await fetch('/api/invoices/' + encodeURIComponent(id));
+    if (!res.ok) throw new Error('No se pudo cargar la factura.');
+    facturaEnModal = await res.json();
+    pintarDetalleFactura();
+    document.getElementById('modalDoc').classList.add('show');
+  } catch (err) {
+    Aviso.mostrar('No se pudo abrir la factura: ' + err.message, { tipo: 'error' });
+  }
+}
+
+function pintarDetalleFactura(){
+  const inv = facturaEnModal;
+  if (!inv) return;
+  const movTipo = inv.tipo_movimiento || 'egreso';
+  const contraparte = movTipo === 'ingreso'
+    ? (inv.adquiriente_nombre || 'Sin identificar')
+    : (inv.nombre_razon_social || 'Sin identificar');
+  const sinIva = Number(inv.valor_sin_iva) || 0;
+  const iva = Number(inv.valor_iva) || 0;
+  const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
+
+  document.getElementById('docTitulo').textContent = inv.nombre_razon_social || 'Factura';
+  document.getElementById('docMovBadge').className = `mov-badge ${movTipo}`;
+  document.getElementById('docMovTexto').textContent = movTipo === 'ingreso' ? 'Ingreso' : 'Egreso';
+  document.getElementById('btnCorregirTipo').style.display = puedeAdministrar(miRol) ? 'inline-flex' : 'none';
+  document.getElementById('docContraparte').textContent = contraparte;
+  document.getElementById('docConcepto').textContent = inv.concepto || '—';
+  document.getElementById('docFecha').textContent = inv.fecha_factura || '—';
+  document.getElementById('docTotal').textContent = formatCOP(conIva);
+  document.getElementById('docVisorWrap').innerHTML = renderVisorDocumento(inv);
+}
+
+function renderVisorDocumento(inv){
+  if (!inv.archivo_original) {
+    return '<div class="modal-doc-sin-archivo">Esta factura no tiene el documento original guardado.</div>';
+  }
+  const tipo = inv.archivo_original_tipo || 'image/jpeg';
+  const dataUrl = `data:${tipo};base64,${inv.archivo_original}`;
+  const visor = tipo === 'application/pdf'
+    ? `<embed src="${dataUrl}" type="application/pdf" style="width:100%;height:520px;">`
+    : `<img src="${dataUrl}" alt="Documento original de la factura" style="max-width:100%;max-height:520px;">`;
+  return `${visor}<br><a class="modal-doc-link" href="${dataUrl}" target="_blank" rel="noopener">Abrir en pantalla completa ↗</a>`;
+}
+
+function cerrarDetalleFactura(){
+  document.getElementById('modalDoc').classList.remove('show');
+  facturaEnModal = null;
+}
+document.getElementById('btnCerrarDoc').addEventListener('click', cerrarDetalleFactura);
+document.getElementById('modalDocBackdrop').addEventListener('click', cerrarDetalleFactura);
+
+document.getElementById('btnCorregirTipo').addEventListener('click', async () => {
+  const inv = facturaEnModal;
+  if (!inv) return;
+  const actual = (inv.tipo_movimiento || 'egreso') === 'ingreso' ? 'Ingreso' : 'Egreso';
+  const nuevoTipo = (inv.tipo_movimiento || 'egreso') === 'ingreso' ? 'egreso' : 'ingreso';
+  const nuevoLabel = nuevoTipo === 'ingreso' ? 'Ingreso' : 'Egreso';
+  const ok = await Aviso.confirmar({
+    titulo: 'Corregir tipo de movimiento',
+    mensaje: `¿Cambiar esta factura de ${actual} a ${nuevoLabel}? Si ya tiene un asiento contable o un movimiento bancario conciliado, se van a ajustar automáticamente para que coincidan con el tipo corregido.`,
+    textoConfirmar: `Cambiar a ${nuevoLabel}`,
+  });
+  if (!ok) return;
+  await corregirTipoMovimiento(inv, nuevoTipo);
+});
+
+async function corregirTipoMovimiento(inv, nuevoTipo, forzar){
+  try {
+    const res = await fetch(`/api/invoices/${inv.id}/tipo-movimiento`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tipo_movimiento: nuevoTipo, confirmarBorrarAsientoAprobado: !!forzar }),
+    });
+    const data = await res.json();
+    if (res.status === 409 && data.error === 'asiento_aprobado_pendiente') {
+      const ok = await Aviso.confirmar({
+        titulo: 'Esta factura ya tiene un asiento aprobado',
+        mensaje: data.mensaje,
+        textoConfirmar: 'Eliminar asiento y corregir',
+        peligroso: true,
+      });
+      if (!ok) return;
+      return corregirTipoMovimiento(inv, nuevoTipo, true);
+    }
+    if (!res.ok) throw new Error(data.error || 'No se pudo corregir.');
+
+    // Actualiza en memoria (allInvoices) y en el objeto abierto en el
+    // modal -- sin recargar toda la lista del servidor.
+    inv.tipo_movimiento = data.tipo_movimiento;
+    const enLista = allInvoices.find(i => i.id === inv.id);
+    if (enLista) enLista.tipo_movimiento = data.tipo_movimiento;
+    if (facturaEnModal && facturaEnModal.id === inv.id) pintarDetalleFactura();
+    renderTable();
+
+    let mensaje = `Factura marcada como ${data.tipo_movimiento === 'ingreso' ? 'Ingreso' : 'Egreso'}.`;
+    if (data.asiento_aprobado_eliminado) mensaje += ' Se eliminó el asiento contable aprobado que ya no correspondía.';
+    if (data.movimientos_desconciliados > 0) mensaje += ` ${data.movimientos_desconciliados} movimiento${data.movimientos_desconciliados > 1 ? 's' : ''} bancario${data.movimientos_desconciliados > 1 ? 's' : ''} quedaron sin conciliar -- revísalo${data.movimientos_desconciliados > 1 ? 's' : ''} en Cartera.`;
+    Aviso.mostrar(mensaje, { duracion: data.movimientos_desconciliados > 0 ? 7000 : 4000 });
+  } catch (err) {
+    Aviso.mostrar('No se pudo corregir el tipo de movimiento: ' + err.message, { tipo: 'error' });
+  }
+}
 
 async function requireAuthAndInit(){
   try {

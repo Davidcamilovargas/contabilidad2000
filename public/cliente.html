@@ -99,6 +99,8 @@
   .mini-facturas td.date{ font-family:'JetBrains Mono',monospace; white-space:nowrap; color:#4A5E68; font-size:12.5px; }
   .mini-facturas .contraparte-nombre{ font-weight:600; }
   .mini-facturas .concepto{ color:#4A5E68; font-size:12.5px; }
+  .factura-row-clicable{ cursor:pointer; }
+  .factura-row-clicable:hover td{ background:#F5FAFC; }
 
   .mov-badge{
     display:inline-flex; align-items:center; gap:5px;
@@ -467,7 +469,7 @@ async function cargarYRenderizar(){
     const iva = Number(inv.valor_iva) || 0;
     const conIva = inv.valor_con_iva !== '' && inv.valor_con_iva != null ? Number(inv.valor_con_iva) || 0 : sinIva + iva;
     return `
-      <tr>
+      <tr class="factura-row-clicable" data-id="${escapeHtml(inv.id)}" title="Ver la factura y el documento original">
         <td><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
         <td><div class="contraparte-nombre">${escapeHtml(contraparte)}</div></td>
         <td class="concepto">${escapeHtml(inv.concepto) || '—'}</td>
@@ -476,6 +478,14 @@ async function cargarYRenderizar(){
       </tr>
     `;
   }).join('');
+  // Clic en cualquier fila -- abre esa factura puntual en Facturas, con
+  // su documento original y, si hace falta, la opción de corregir
+  // Ingreso/Egreso -- funciona sin importar si ya está aprobada.
+  tbody.querySelectorAll('tr[data-id]').forEach((tr) => {
+    tr.addEventListener('click', () => {
+      window.location.href = '/facturas.html?cliente=' + encodeURIComponent(cliente.id) + '&factura=' + encodeURIComponent(tr.dataset.id);
+    });
+  });
 }
 
 // ---------- PUC personalizado del cliente ----------
