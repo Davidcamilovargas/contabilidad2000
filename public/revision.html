@@ -406,6 +406,19 @@ function opcionesSubcuenta(categoria, seleccionada){
     `<option value="${codigo}" ${codigo === seleccionada ? 'selected' : ''}>${codigo === 'inventario' ? '' : codigo + ' -- '}${escapeHtml(nombre)}</option>`
   ).join('');
 }
+// "Otro" no tiene una cuenta típica que ofrecer -- en vez de un <select>
+// vacío (sin opciones, inservible) o un default falso, se pide la
+// cuenta escrita a mano. Devuelve el <select> de siempre para el resto
+// de categorías, o un <input> de texto libre para "otro"; ambos
+// exponen el mismo .value, así que leerItemsDelFormulario()/
+// guardarFactura() no necesitan saber cuál de los dos están leyendo.
+function campoSubcuentaHtml(categoria, seleccionada, attrs){
+  const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
+  if (opciones.length === 0) {
+    return `<input type="text" ${attrs} value="${escapeHtml(seleccionada || '')}" placeholder="Código y nombre de la cuenta (ej. 519596 - Diversos)">`;
+  }
+  return `<select ${attrs}>${opcionesSubcuenta(categoria, seleccionada)}</select>`;
+}
 
 // Lee del DOM los ítems tal como quedaron editados (incluye los que el
 // contador agregó/quitó a mano) -- se usa tanto para guardar como para
@@ -449,7 +462,7 @@ function renderFormularioEdicionFactura(inv){
       <div class="field"><label class="ef-label">Descripción</label><input type="text" class="ef-item-desc" value="${escapeHtml(it.descripcion)}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"></div>
       <div class="field"><label class="ef-label">Subtotal</label><input type="number" class="ef-item-subtotal" value="${Number(it.subtotal) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
       <div class="field"><label class="ef-label">Categoría</label><select class="ef-item-categoria" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;">${opcionesCategoria(it.categoria_concepto)}</select></div>
-      <div class="field"><label class="ef-label">Subcuenta</label><select class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;">${opcionesSubcuenta(it.categoria_concepto, it.subcuenta_gasto)}</select></div>
+      <div class="field"><label class="ef-label">Subcuenta</label>${campoSubcuentaHtml(it.categoria_concepto, it.subcuenta_gasto, 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"')}</div>
       <button type="button" class="btn ghost ef-item-quitar" title="Quitar ítem" style="padding:7px 10px; font-size:12px;">✕</button>
     </div>`).join('');
 
@@ -468,7 +481,7 @@ function renderFormularioEdicionFactura(inv){
       ${!tieneItems ? campoNumero('editSubtotal', 'Subtotal', inv.valor_sin_iva) : ''}
       ${campoNumero('editIva', 'IVA', inv.valor_iva)}
       ${!tieneItems ? `<div class="field"><label class="ef-label">Categoría</label><select id="editCategoria" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;">${opcionesCategoria(inv.categoria_concepto)}</select></div>` : ''}
-      ${!tieneItems ? `<div class="field"><label class="ef-label">Subcuenta (PUC)</label><select id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;">${opcionesSubcuenta(inv.categoria_concepto, inv.subcuenta_gasto)}</select></div>` : ''}
+      ${!tieneItems ? `<div class="field"><label class="ef-label">Subcuenta (PUC)</label>${campoSubcuentaHtml(inv.categoria_concepto, inv.subcuenta_gasto, 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"')}</div>` : ''}
     </div>
     <div style="display:grid; grid-template-columns:repeat(3, minmax(110px,1fr)); gap:10px; margin-top:10px;">
       ${campoNumero('editReteFuente', 'Rete Fuente', inv.rete_fuente)}
@@ -601,18 +614,18 @@ function renderDetalle(){
   if (btnGuardarFactura) btnGuardarFactura.addEventListener('click', () => guardarFactura(inv.id, btnGuardarFactura));
   const editCategoriaEl = document.getElementById('editCategoria');
   if (editCategoriaEl) editCategoriaEl.addEventListener('change', (e) => {
-    const subcuentaSelect = document.getElementById('editSubcuenta');
+    const subcuentaActual = document.getElementById('editSubcuenta');
     const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
-    subcuentaSelect.innerHTML = opcionesSubcuenta(e.target.value, opciones[0][0]);
+    subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"');
   });
   const efItemsLista = document.getElementById('efItemsLista');
   if (efItemsLista) {
     efItemsLista.addEventListener('change', (e) => {
       if (e.target.classList.contains('ef-item-categoria')) {
         const row = e.target.closest('.ef-item-row');
-        const subcuentaSelect = row.querySelector('.ef-item-subcuenta');
+        const subcuentaActual = row.querySelector('.ef-item-subcuenta');
         const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
-        subcuentaSelect.innerHTML = opcionesSubcuenta(e.target.value, opciones[0][0]);
+        subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"');
       }
     });
     efItemsLista.addEventListener('click', (e) => {
@@ -629,7 +642,7 @@ function renderDetalle(){
   if (btnAgregarItem) btnAgregarItem.addEventListener('click', () => {
     const actuales = leerItemsDelFormulario();
     const opcionesOtro = SUBCUENTAS_GASTO['otro'];
-    actuales.push({ descripcion: '', subtotal: 0, categoria_concepto: 'otro', subcuenta_gasto: opcionesOtro[0][0] });
+    actuales.push({ descripcion: '', subtotal: 0, categoria_concepto: 'otro', subcuenta_gasto: opcionesOtro[0] ? opcionesOtro[0][0] : '' });
     itemsEnEdicion = actuales;
     renderDetalle();
   });
@@ -758,7 +771,7 @@ document.getElementById('colaSoloExcepciones').addEventListener('change', (e) =>
 async function cargarDatos(){
   try {
     const [resInv, resTarifas] = await Promise.all([
-      fetch('/api/invoices'),
+      fetch('/api/invoices?incluir_borrador=1'),
       fetch('/api/tarifas-aprendidas'),
     ]);
     allInvoices = resInv.ok ? await resInv.json() : [];

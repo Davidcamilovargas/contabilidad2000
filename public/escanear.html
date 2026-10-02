@@ -1960,6 +1960,20 @@ function renderResult(data){
         const personalizados = (pucPersonalizadoPorCliente[currentClienteId] || [])
           .filter((p) => p.categoria_concepto === categoria);
 
+        // "Otro" sin ningún PUC personalizado todavía para este cliente:
+        // no hay nada razonable que preseleccionar (ni un estándar, ni
+        // un personalizado), así que en vez de un selector vacío e
+        // inutilizable se pide escribir la cuenta a mano.
+        if (opciones.length === 0 && personalizados.length === 0) {
+          subSelect.style.display = 'none';
+          subManualInput.style.display = '';
+          subManualInput.value = '';
+          currentSubcuentaGasto = '';
+          return;
+        }
+        subSelect.style.display = '';
+        subManualInput.style.display = 'none';
+
         if (personalizados.length === 0) {
           opciones.forEach(([codigo, nombre]) => {
             const opt = document.createElement('option');
@@ -2007,7 +2021,17 @@ function renderResult(data){
       subSelect.addEventListener('change', () => { currentSubcuentaGasto = subSelect.value; });
       input.addEventListener('change', () => poblarSubcuentas(input.value));
 
+      // Campo manual para cuando la categoría ("Otro", normalmente) no
+      // tiene ninguna cuenta para ofrecer -- ver poblarSubcuentas() arriba.
+      const subManualInput = document.createElement('input');
+      subManualInput.type = 'text';
+      subManualInput.id = 'subcuentaGastoManual';
+      subManualInput.placeholder = 'Código y nombre de la cuenta (ej. 519596 - Diversos no clasificados)';
+      subManualInput.style.display = 'none';
+      subManualInput.addEventListener('input', () => { currentSubcuentaGasto = subManualInput.value.trim(); });
+
       subValueWrap.appendChild(subSelect);
+      subValueWrap.appendChild(subManualInput);
       const subRow = document.createElement('div');
       subRow.className = 'field-row';
       subRow.appendChild(subLabel);
@@ -2826,6 +2850,12 @@ function renderItemsPanel(){
       : `<optgroup label="Personalizado">${personalizadosItem.map((p) =>
           `<option value="${escapeHtml(p.codigo)}"${item.subcuenta_gasto === p.codigo ? ' selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`).join('')}</optgroup>` +
         `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`;
+    // Sin ninguna opción (categoría "Otro" sin PUC personalizado para
+    // este cliente todavía): un <select> vacío no sirve de nada -- se
+    // pide la cuenta escrita a mano en su lugar.
+    const subcuentaFieldHtml = (opcionesSubcuenta.length === 0 && personalizadosItem.length === 0)
+      ? `<input type="text" class="it-subcuenta" style="min-width:170px;" placeholder="Código y nombre de la cuenta" value="${escapeHtml(item.subcuenta_gasto || '')}" title="Esta categoría (\"Otro\") no tiene una cuenta típica -- escribe el código PUC a mano.">`
+      : `<select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select>`;
     const est = estimadoPorItem ? estimadoPorItem.porItem[idx] : null;
     // Selector de tarifa de retención para ESTE ítem puntual -- recomienda
     // la tarifa legal de su categoría (misma tabla que usa el estimado de
@@ -2856,7 +2886,7 @@ function renderItemsPanel(){
       <td><input type="text" class="it-descripcion" value="${escapeHtml(item.descripcion)}" placeholder="Descripción del ítem"></td>
       <td><input type="text" inputmode="numeric" class="money it-subtotal" value="${(Number(item.subtotal) || 0).toLocaleString('es-CO')}"></td>
       <td><select class="it-categoria">${opciones}</select></td>
-      <td><select class="it-subcuenta" style="min-width:170px;" title="Subcuenta del gasto (PUC) para este ítem puntual">${subcuentaOpts}</select></td>
+      <td>${subcuentaFieldHtml}</td>
       <td class="item-aiu-col" title="Componente de AIU (Administración + Imprevistos + Utilidad) de esta línea, solo si la factura lo desglosa -- deja vacío si no se sabe.">${aiuCelda}</td>
       <td class="item-estimado" title="Tarifa de retención recomendada para esta línea, según su categoría -- informativa, el valor real se registra una sola vez en Rete Fuente arriba.">${estTexto}</td>
       <td><label class="item-iva-mv"><input type="checkbox" class="it-iva-mv" ${item.iva_mayor_valor ? 'checked' : ''}> IVA no descontable</label></td>
@@ -2915,7 +2945,10 @@ function renderItemsPanel(){
       // de esa categoría -- el contador la puede corregir después con el
       // selector de subcuenta de al lado, que queda editable aparte.
       const opciones = (typeof SUBCUENTAS_GASTO !== 'undefined') ? (SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro']) : null;
-      currentItems[idx].subcuenta_gasto = opciones ? opciones[0][0] : '';
+      // Sin opciones (ej. "Otro" sin PUC personalizado) no hay nada que
+      // preseleccionar -- se deja en blanco para que el campo manual que
+      // aparece en el próximo render (ver más arriba) obligue a escribirla.
+      currentItems[idx].subcuenta_gasto = (opciones && opciones.length > 0) ? opciones[0][0] : '';
       // La tarifa de retención recomendada también se recalcula para la
       // categoría nueva -- mismo criterio que la subcuenta de arriba.
       const tarifaOpts = (typeof tarifaFuenteOpciones === 'function') ? tarifaFuenteOpciones(e.target.value) : null;
@@ -2946,7 +2979,7 @@ function renderItemsPanel(){
   document.getElementById('btnAgregarItem').addEventListener('click', () => {
     currentItems.push({
       descripcion: '', cantidad: '', valor_unitario: '', subtotal: '0',
-      categoria_concepto: 'otro', subcuenta_gasto: (SUBCUENTAS_GASTO['otro'] || [['', '']])[0][0],
+      categoria_concepto: 'otro', subcuenta_gasto: (SUBCUENTAS_GASTO['otro'] && SUBCUENTAS_GASTO['otro'][0]) ? SUBCUENTAS_GASTO['otro'][0][0] : '',
       iva_mayor_valor: false, aiu: '',
     });
     onItemsChanged();

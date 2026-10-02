@@ -63,6 +63,17 @@
   .mov-badge.ingreso{ background:#E9F0EB; color:#3E6053; }
   .mov-badge .mov-dot{ width:5px; height:5px; border-radius:50%; background:currentColor; }
 
+  /* Factura guardada pero todavía sin aprobar en Revisión (Estado
+     borrador) -- se lista acá para que el contador no la pierda de
+     vista, pero queda fuera de los totales/chips hasta que se apruebe. */
+  .borrador-badge{
+    display:inline-flex; align-items:center; gap:4px;
+    font-family:'JetBrains Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:.06em;
+    padding:2px 7px; border-radius:100px; white-space:nowrap;
+    background:#F3EADA; color:#8A6A2A; border:1px solid #E3D2AC;
+    margin-left:6px;
+  }
+
   /* Las insignias de excepción (.exc-badge/.exc-lista) ya vienen de
      styles.css -- ver Tarea 8 "excepciones unificadas" y
      public/excepciones.js. Aquí solo se ajusta el espaciado para que
@@ -682,10 +693,14 @@ function renderTable(){
     const totalRetenciones = reteFuente + reteIva + reteIca;
     const movTipo = inv.tipo_movimiento || 'egreso';
 
-    sumSinIva += sinIva;
-    sumIva += iva;
-    sumConIva += conIva;
-    sumRetenciones += totalRetenciones;
+    // Estado borrador (estricto): se lista siempre, pero no suma en
+    // ningún total -- ver también sumaTipo() más abajo para los 3 chips.
+    if (inv.aprobado_por_contador) {
+      sumSinIva += sinIva;
+      sumIva += iva;
+      sumConIva += conIva;
+      sumRetenciones += totalRetenciones;
+    }
 
     const tr = document.createElement('tr');
     tr.style.animationDelay = (i * 0.04) + 's';
@@ -705,8 +720,11 @@ function renderTable(){
     const excepcionesBadges = excepcionesFactura.length > 0
       ? `<span class="exc-lista">${excepcionesFactura.map((e) => `<span class="exc-badge" title="${escapeHtml(e.detalle)}">⚠ ${escapeHtml(e.etiqueta)}</span>`).join('')}</span>`
       : '';
+    const borradorBadge = !inv.aprobado_por_contador
+      ? `<span class="borrador-badge" title="Todavía no se aprueba en Revisión -- no cuenta en los totales ni en los reportes.">Borrador</span>`
+      : '';
     tr.innerHTML = `
-      <td ${adquirienteTitle}><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span></td>
+      <td ${adquirienteTitle}><span class="mov-badge ${movTipo}"><span class="mov-dot"></span>${movTipo === 'ingreso' ? 'Ingreso' : 'Egreso'}</span>${borradorBadge}</td>
       <td>
         <div class="proveedor-nombre">${escapeHtml(inv.nombre_razon_social) || '—'}${excepcionesBadges}</div>
         <div class="proveedor-nit">${inv.tipo_doc ? 'Tipo ' + escapeHtml(inv.tipo_doc) + ' · ' : ''}NIT ${escapeHtml(inv.nit_cc) || '—'}${inv.dv ? '-' + escapeHtml(inv.dv) : ''}</div>
@@ -730,7 +748,7 @@ function renderTable(){
   // Los 3 chips de arriba siempre muestran el balance real del MES completo,
   // sin importar el filtro de tipo que esté activo en la tabla de abajo.
   const sumaTipo = (tipo) => monthInvoices
-    .filter(inv => (inv.tipo_movimiento || 'egreso') === tipo)
+    .filter(inv => (inv.tipo_movimiento || 'egreso') === tipo && inv.aprobado_por_contador)
     .reduce((s, inv) => {
       const sinIva = Number(inv.valor_sin_iva) || 0;
       const iva = Number(inv.valor_iva) || 0;
@@ -759,7 +777,7 @@ async function loadInvoices(){
   loadingEl.style.display = 'flex';
   try {
     const [invRes, clientsRes, tarifasRes, integracionesRes] = await Promise.all([
-      fetch('/api/invoices'),
+      fetch('/api/invoices?incluir_borrador=1'),
       fetch('/api/clients'),
       fetch('/api/tarifas-aprendidas'),
       fetch('/api/integraciones')

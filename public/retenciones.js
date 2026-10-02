@@ -263,9 +263,14 @@ const SUBCUENTAS_GASTO = {
     ['519560', 'Casino y restaurante'],
     ['515505', 'Alojamiento y manutención (gastos de viaje)'],
   ],
-  otro: [
-    ['519595', 'Diversos -- Otros'],
-  ],
+  // "Otro" por definición no tiene una cuenta típica -- antes esto traía
+  // un único valor fijo (519595 "Diversos") que quedaba preseleccionado
+  // sin que el contador lo mirara dos veces. Ahora la lista queda vacía
+  // a propósito: Escanear/Revisión detectan que no hay opciones y piden
+  // escribir la cuenta a mano en vez de ofrecer un selector con un solo
+  // default disfrazado de elección (ver poblarSubcuentas() en
+  // escanear.html y campoSubcuentaHtml() en revision.html).
+  otro: [],
   servicios_publicos: [
     ['513528', 'Servicios públicos'],
   ],
@@ -719,7 +724,10 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
   }
   const subcuentaPorDefecto = (categoria) => {
     const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
-    return opciones ? opciones[0][0] : '';
+    // 'otro' (y cualquier categoría sin subcuentas típicas) ya no tiene
+    // un default que adivinar -- queda en blanco y el selector de la
+    // pantalla (Escanear/Carga masiva/Revisión) pide escribirla a mano.
+    return (opciones && opciones.length > 0) ? opciones[0][0] : '';
   };
   // Tarifa de retención recomendada por defecto para esta categoría --
   // la tarifa baja (declarante), o 0 ("Ninguno") si la categoría no
