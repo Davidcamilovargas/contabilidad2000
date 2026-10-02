@@ -80,6 +80,21 @@
     color:var(--ink-faint); margin:0 0 10px;
   }
 
+  /* Documento original (foto/PDF) junto al formulario de edición --
+     en pantallas angostas se apila arriba en vez de ir al lado. */
+  .det-con-original{ display:grid; grid-template-columns:minmax(220px,340px) 1fr; gap:18px; align-items:start; }
+  @media (max-width:880px){ .det-con-original{ grid-template-columns:1fr; } }
+  .det-doc-original h3{
+    font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-faint); margin:0 0 10px;
+  }
+  .det-doc-original img, .det-doc-original embed{
+    width:100%; border-radius:8px; border:1px solid var(--line); display:block; background:#fff;
+  }
+  .det-doc-original .det-doc-link{
+    display:inline-block; margin-top:8px; font-size:12px; color:var(--petroleo); text-decoration:none;
+  }
+
   .fd-row.baja-confianza .fd-value{ background:#FBF3D9; }
   .fd-row.baja-confianza .fd-label{ background:#F6EAC8; color:#7A5C0A; }
   .confianza-pill{
@@ -277,6 +292,10 @@ let editandoFactura = false;
 // está editando.
 let itemsActuales = [];
 let itemsEnEdicion = null;
+// Igual que itemsEnEdicion arriba, pero para las líneas del asiento
+// contable (cuenta, débito, crédito) -- null cuando no se está
+// editando el asiento.
+let lineasAsientoEnEdicion = null;
 
 function parseConfianza(inv){
   try {
@@ -367,6 +386,25 @@ async function cargarAsientoDeFactura(invoiceId){
   renderDetalle();
 }
 
+// Documento original (foto/PDF) con el que se digitó esta factura --
+// solo existe para las guardadas después de este cambio (Escanear y
+// Carga masiva ya lo mandan al guardar); las anteriores no tienen
+// nada que mostrar acá, así que esta sección simplemente no aparece
+// para ellas, en vez de mostrar un hueco vacío.
+function renderDocumentoOriginalPanel(inv){
+  if (!inv.archivo_original) return '';
+  const tipo = inv.archivo_original_tipo || 'image/jpeg';
+  const dataUrl = `data:${tipo};base64,${inv.archivo_original}`;
+  const visor = tipo === 'application/pdf'
+    ? `<embed src="${dataUrl}" type="application/pdf" style="height:420px;">`
+    : `<img src="${dataUrl}" alt="Documento original de la factura">`;
+  return `<div class="det-doc-original">
+    <h3>Documento original</h3>
+    ${visor}
+    <a class="det-doc-link" href="${dataUrl}" target="_blank" rel="noopener">Abrir en pantalla completa ↗</a>
+  </div>`;
+}
+
 function renderFichaFactura(inv){
   const conf = parseConfianza(inv);
   const filas = CAMPOS_CONFIANZA_UI.map((c) => {
@@ -402,9 +440,15 @@ function opcionesCategoria(seleccionada){
 }
 function opcionesSubcuenta(categoria, seleccionada){
   const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
-  return opciones.map(([codigo, nombre]) =>
+  const opcionesHtml = opciones.map(([codigo, nombre]) =>
     `<option value="${codigo}" ${codigo === seleccionada ? 'selected' : ''}>${codigo === 'inventario' ? '' : codigo + ' -- '}${escapeHtml(nombre)}</option>`
   ).join('');
+  // Aparte de la lista estándar (y la personalizada del cliente, si
+  // aplica), siempre se ofrece la opción de escribir el código a mano --
+  // antes solo existía para "otro" (sin ninguna opción); ahora cualquier
+  // categoría la tiene disponible, para cuando la cuenta correcta no es
+  // ninguna de las listadas.
+  return opcionesHtml + `<option value="__manual__">✎ Escribir código a mano...</option>`;
 }
 // "Otro" no tiene una cuenta típica que ofrecer -- en vez de un <select>
 // vacío (sin opciones, inservible) o un default falso, se pide la
@@ -412,10 +456,10 @@ function opcionesSubcuenta(categoria, seleccionada){
 // de categorías, o un <input> de texto libre para "otro"; ambos
 // exponen el mismo .value, así que leerItemsDelFormulario()/
 // guardarFactura() no necesitan saber cuál de los dos están leyendo.
-function campoSubcuentaHtml(categoria, seleccionada, attrs){
+function campoSubcuentaHtml(categoria, seleccionada, attrs, forzarManual){
   const opciones = SUBCUENTAS_GASTO[categoria] || SUBCUENTAS_GASTO['otro'];
-  if (opciones.length === 0) {
-    return `<input type="text" ${attrs} value="${escapeHtml(seleccionada || '')}" placeholder="Código y nombre de la cuenta (ej. 519596 - Diversos)">`;
+  if (opciones.length === 0 || forzarManual) {
+    return `<input type="text" ${attrs} value="${escapeHtml(forzarManual ? '' : (seleccionada || ''))}" placeholder="Código y nombre de la cuenta (ej. 519596 - Diversos)">`;
   }
   return `<select ${attrs}>${opcionesSubcuenta(categoria, seleccionada)}</select>`;
 }
@@ -503,6 +547,31 @@ function renderFormularioEdicionFactura(inv){
   </div>`;
 }
 
+// Una fila editable de línea de asiento -- cuenta, nombre, débito,
+// crédito, y un botón para quitarla (deshabilitado si es la última,
+// mismo criterio que los ítems de la factura: nunca se llega a cero
+// líneas desde la interfaz).
+function filaLineaAsientoHtml(l, idx, esLaUnica){
+  return `<div class="asi-linea-row" data-idx="${idx}" style="display:grid; grid-template-columns:100px 1.6fr 110px 110px auto; gap:8px; align-items:end; margin-bottom:8px;">
+    <div class="field"><label class="ef-label">Código</label><input type="text" class="asi-cuenta-codigo" value="${escapeHtml(l.cuenta_codigo || '')}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
+    <div class="field"><label class="ef-label">Nombre cuenta</label><input type="text" class="asi-cuenta-nombre" value="${escapeHtml(l.cuenta_nombre || '')}" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"></div>
+    <div class="field"><label class="ef-label">Débito</label><input type="number" class="asi-debito" value="${Number(l.debito) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
+    <div class="field"><label class="ef-label">Crédito</label><input type="number" class="asi-credito" value="${Number(l.credito) || 0}" min="0" step="1" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
+    <button type="button" class="btn ghost asi-linea-quitar" title="Quitar línea" style="padding:7px 10px; font-size:12px;" ${esLaUnica ? 'disabled' : ''}>✕</button>
+  </div>`;
+}
+
+// Lee del DOM las líneas tal como quedaron editadas -- mismo patrón que
+// leerItemsDelFormulario() para los ítems de la factura.
+function leerLineasAsientoDelFormulario(){
+  return [...document.querySelectorAll('.asi-linea-row')].map((row) => ({
+    cuenta_codigo: row.querySelector('.asi-cuenta-codigo').value,
+    cuenta_nombre: row.querySelector('.asi-cuenta-nombre').value,
+    debito: row.querySelector('.asi-debito').value,
+    credito: row.querySelector('.asi-credito').value,
+  }));
+}
+
 function renderAsientoSeccion(inv){
   if (asientoActual === 'cargando') {
     return `<div class="det-seccion"><h3>Asiento contable</h3><div class="sin-asiento-nota">Cargando…</div></div>`;
@@ -513,6 +582,23 @@ function renderAsientoSeccion(inv){
       : 'Todavía no se generó un asiento para esta factura -- normalmente falta la subcuenta de gasto, o los valores no cuadran.';
     return `<div class="det-seccion"><h3>Asiento contable</h3><div class="sin-asiento-nota">${motivo}</div></div>`;
   }
+  const aprobado = asientoActual.estado === 'aprobado';
+  const editando = lineasAsientoEnEdicion !== null;
+
+  if (editando) {
+    const lineas = lineasAsientoEnEdicion;
+    const filasEdit = lineas.map((l, idx) => filaLineaAsientoHtml(l, idx, lineas.length <= 1)).join('');
+    return `<div class="det-seccion">
+      <h3>Asiento contable</h3>
+      <div id="asientoLineasEdicion">${filasEdit}</div>
+      <button type="button" class="btn ghost" id="btnAgregarLineaAsiento" style="padding:7px 14px; font-size:12px; margin-top:4px;">+ Agregar línea</button>
+      <div style="display:flex; gap:8px; margin-top:14px;">
+        <button type="button" class="btn secondary" id="btnGuardarAsiento" style="padding:8px 15px; font-size:12px;">Guardar cambios</button>
+        <button type="button" class="btn ghost" id="btnCancelarEdicionAsiento" style="padding:8px 15px; font-size:12px;">Cancelar</button>
+      </div>
+    </div>`;
+  }
+
   const lineas = asientoActual.lineas || [];
   const debe = lineas.reduce((s, l) => s + Number(l.debito), 0);
   const haber = lineas.reduce((s, l) => s + Number(l.credito), 0);
@@ -522,14 +608,15 @@ function renderAsientoSeccion(inv){
     <td class="num">${Number(l.debito) ? formatCOP(l.debito) : ''}</td>
     <td class="num">${Number(l.credito) ? formatCOP(l.credito) : ''}</td>
   </tr>`).join('');
-  const aprobado = asientoActual.estado === 'aprobado';
   return `<div class="det-seccion">
     <h3>Asiento contable</h3>
     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
       <span class="estado-badge ${escapeHtml(asientoActual.estado)}">${aprobado ? 'Aprobado' : 'Propuesto'}</span>
-      ${(!aprobado && puedeAdministrar(miRol))
-        ? '<button type="button" class="btn secondary" id="btnAprobarAsiento" style="padding:8px 16px; font-size:12.5px;">Aprobar asiento</button>'
-        : ''}
+      <div style="display:flex; gap:8px;">
+        ${(!aprobado && puedeAdministrar(miRol))
+          ? '<button type="button" class="btn ghost" id="btnEditarAsiento" style="padding:8px 16px; font-size:12.5px;">✎ Editar asiento</button>'
+          : ''}
+      </div>
     </div>
     <table class="asiento-tabla">
       <thead><tr><th>Cuenta</th><th>Nombre</th><th>Débito</th><th>Crédito</th></tr></thead>
@@ -585,17 +672,48 @@ function renderDetalle(){
       </div>
     </div>
     ${renderExcepcionesSeccion(inv)}
-    <div class="det-seccion">
-      <h3>Datos extraídos por la IA</h3>
-      ${editandoFactura ? '' : renderFichaFactura(inv)}
-      ${editandoFactura ? renderFormularioEdicionFactura(inv) : ''}
+    <div class="det-seccion ${inv.archivo_original ? 'det-con-original' : ''}">
+      ${renderDocumentoOriginalPanel(inv)}
+      <div>
+        <h3>Datos extraídos por la IA</h3>
+        ${editandoFactura ? '' : renderFichaFactura(inv)}
+        ${editandoFactura ? renderFormularioEdicionFactura(inv) : ''}
+      </div>
     </div>
     ${renderAsientoSeccion(inv)}
     ${renderTarifaSeccion(inv)}
   `;
 
-  const btnAsiento = document.getElementById('btnAprobarAsiento');
-  if (btnAsiento) btnAsiento.addEventListener('click', () => aprobarAsiento(asientoActual.id, btnAsiento));
+  const btnEditarAsiento = document.getElementById('btnEditarAsiento');
+  if (btnEditarAsiento) btnEditarAsiento.addEventListener('click', () => {
+    lineasAsientoEnEdicion = (asientoActual.lineas || []).map((l) => ({ ...l }));
+    renderDetalle();
+  });
+  const btnCancelarEdicionAsiento = document.getElementById('btnCancelarEdicionAsiento');
+  if (btnCancelarEdicionAsiento) btnCancelarEdicionAsiento.addEventListener('click', () => {
+    lineasAsientoEnEdicion = null;
+    renderDetalle();
+  });
+  const btnGuardarAsiento = document.getElementById('btnGuardarAsiento');
+  if (btnGuardarAsiento) btnGuardarAsiento.addEventListener('click', () => guardarLineasAsiento(asientoActual.id, btnGuardarAsiento));
+  const btnAgregarLineaAsiento = document.getElementById('btnAgregarLineaAsiento');
+  if (btnAgregarLineaAsiento) btnAgregarLineaAsiento.addEventListener('click', () => {
+    const actuales = leerLineasAsientoDelFormulario();
+    actuales.push({ cuenta_codigo: '', cuenta_nombre: '', debito: 0, credito: 0 });
+    lineasAsientoEnEdicion = actuales;
+    renderDetalle();
+  });
+  const asientoLineasEdicionEl = document.getElementById('asientoLineasEdicion');
+  if (asientoLineasEdicionEl) {
+    asientoLineasEdicionEl.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('asi-linea-quitar') || e.target.disabled) return;
+      const idx = Number(e.target.closest('.asi-linea-row').dataset.idx);
+      const actuales = leerLineasAsientoDelFormulario();
+      actuales.splice(idx, 1);
+      lineasAsientoEnEdicion = actuales;
+      renderDetalle();
+    });
+  }
   const btnFactura = document.getElementById('btnAprobarFactura');
   if (btnFactura) btnFactura.addEventListener('click', (e) => aprobarFactura(inv.id, e.target));
   const btnEditarFactura = document.getElementById('btnEditarFactura');
@@ -618,6 +736,18 @@ function renderDetalle(){
     const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
     subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"');
   });
+  // Elegir "Escribir código a mano" en el selector de subcuenta (en
+  // cualquier categoría, no solo "otro") lo cambia por un campo de
+  // texto libre -- mismo criterio que ya existía para "otro" sin
+  // opciones, solo que ahora el contador lo pide a propósito.
+  const editSubcuentaEl = document.getElementById('editSubcuenta');
+  if (editSubcuentaEl) editSubcuentaEl.addEventListener('change', (e) => {
+    if (e.target.tagName !== 'SELECT' || e.target.value !== '__manual__') return;
+    const categoriaActual = editCategoriaEl ? editCategoriaEl.value : (document.getElementById('editCategoria') ? document.getElementById('editCategoria').value : '');
+    e.target.outerHTML = campoSubcuentaHtml(categoriaActual, '', 'id="editSubcuenta" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px;"', true);
+    const nuevo = document.getElementById('editSubcuenta');
+    if (nuevo) nuevo.focus();
+  });
   const efItemsLista = document.getElementById('efItemsLista');
   if (efItemsLista) {
     efItemsLista.addEventListener('change', (e) => {
@@ -626,6 +756,14 @@ function renderDetalle(){
         const subcuentaActual = row.querySelector('.ef-item-subcuenta');
         const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
         subcuentaActual.outerHTML = campoSubcuentaHtml(e.target.value, opciones[0] ? opciones[0][0] : '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"');
+      } else if (e.target.classList.contains('ef-item-subcuenta') && e.target.tagName === 'SELECT' && e.target.value === '__manual__') {
+        // Mismo caso que arriba, línea por línea: "Escribir código a
+        // mano" en cualquier categoría cambia esa celda a texto libre.
+        const row = e.target.closest('.ef-item-row');
+        const categoriaActual = row.querySelector('.ef-item-categoria').value;
+        e.target.outerHTML = campoSubcuentaHtml(categoriaActual, '', 'class="ef-item-subcuenta" style="width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:12px;"', true);
+        const nuevo = row.querySelector('.ef-item-subcuenta');
+        if (nuevo) nuevo.focus();
       }
     });
     efItemsLista.addEventListener('click', (e) => {
@@ -707,6 +845,13 @@ async function guardarFactura(invoiceId, btn){
   }
 }
 
+// Aprobar la factura ya aprueba de una vez su asiento contable, si
+// este ya cuadra (ver aprobarAsientoSiCuadra() en server.js) -- antes
+// eran dos botones separados que normalmente coincidían de todas
+// formas. Si el asiento todavía no cuadra, la factura se aprueba
+// igual pero el asiento se queda "Propuesto" hasta que el contador lo
+// corrija desde "Editar asiento" -- ahí mismo se aprueba solo apenas
+// cuadre, sin un botón "Aprobar asiento" aparte que recordar pulsar.
 async function aprobarFactura(id, btn){
   btn.disabled = true;
   const original = btn.textContent;
@@ -719,7 +864,9 @@ async function aprobarFactura(id, btn){
     if (inv) { inv.aprobado_por_contador = true; inv.aprobado_at = data.aprobado_at; }
     seleccionadaId = null; // que renderDetalle elija la siguiente pendiente sola
     renderDetalle();
-    Aviso.mostrar('Factura aprobada.');
+    Aviso.mostrar(data.asiento_aprobado
+      ? 'Factura y asiento contable aprobados.'
+      : 'Factura aprobada. El asiento contable todavía no cuadra -- corrígelo desde "Editar asiento" para que se apruebe solo.');
   } catch (err) {
     Aviso.mostrar('No se pudo aprobar: ' + err.message, { tipo: 'error' });
     btn.disabled = false;
@@ -727,20 +874,34 @@ async function aprobarFactura(id, btn){
   }
 }
 
-async function aprobarAsiento(id, btn){
+// Guarda las líneas del asiento tal como quedaron en el formulario
+// (PUT /api/asientos/:id/lineas) -- no bloquea si débito y crédito no
+// cuadran todavía (el contador puede estar corrigiendo una línea a la
+// vez); solo /aprobar exige que sí cuadre.
+async function guardarLineasAsiento(id, btn){
+  const lineas = leerLineasAsientoDelFormulario();
+  const sinCuenta = lineas.some((l) => !l.cuenta_codigo.trim());
+  if (sinCuenta) {
+    Aviso.mostrar('Todas las líneas necesitan un código de cuenta.', { tipo: 'error' });
+    return;
+  }
   btn.disabled = true;
   const original = btn.textContent;
-  btn.textContent = 'Aprobando…';
+  btn.textContent = 'Guardando…';
   try {
-    const res = await fetch(`/api/asientos/${id}/aprobar`, { method: 'POST' });
+    const res = await fetch(`/api/asientos/${id}/lineas`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lineas }),
+    });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'No se pudo aprobar el asiento.');
-    asientoActual.estado = data.estado;
-    asientoActual.aprobado_at = data.aprobado_at;
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar el asiento.');
+    asientoActual.lineas = data.lineas;
+    lineasAsientoEnEdicion = null;
     renderDetalle();
-    Aviso.mostrar('Asiento contable aprobado.');
+    Aviso.mostrar('Asiento contable actualizado.');
   } catch (err) {
-    Aviso.mostrar('No se pudo aprobar el asiento: ' + err.message, { tipo: 'error' });
+    Aviso.mostrar('No se pudo guardar el asiento: ' + err.message, { tipo: 'error' });
     btn.disabled = false;
     btn.textContent = original;
   }
@@ -753,6 +914,7 @@ document.getElementById('colaLista').addEventListener('click', (e) => {
   asientoActual = null;
   editandoFactura = false;
   itemsEnEdicion = null;
+  lineasAsientoEnEdicion = null;
   renderDetalle();
   cargarAsientoDeFactura(seleccionadaId);
 });

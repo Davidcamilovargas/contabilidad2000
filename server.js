@@ -169,6 +169,14 @@ async function ensureSchema() {
   // "digitada" (ya contabilizada afuera) que alguien siga editando acá
   // sin que el número contable quede desincronizado.
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS numero_digitacion TEXT DEFAULT '';`);
+  // El documento original (foto o PDF) con el que se digitó esta
+  // factura -- igual que rut_archivo en clients, se guarda como
+  // base64 para poder mostrarlo de nuevo junto al formulario de
+  // edición en Revisión, en vez de que solo exista mientras se está
+  // escaneando/revisando el lote (antes de guardar, se perdía para
+  // siempre apenas se guardaba la factura).
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS archivo_original TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS archivo_original_tipo TEXT DEFAULT '';`);
   // Avisos informativos que la IA puede detectar en el documento -- no
   // afectan ningún cálculo, solo alimentan un aviso en la interfaz para
   // que el contador revise a mano (ej. una factura de servicios públicos
@@ -336,6 +344,15 @@ async function ensureSchema() {
   // ficha del cliente. Si no está marcado, la app asume por defecto
   // que ICA no aplica y no ofrece calcularlo.
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS agente_retenedor_ica BOOLEAN DEFAULT false;`);
+  // Mismo caso que ICA, pero para Rete IVA: estar marcado con el
+  // código 07 (agente retenedor de RENTA) no significa ser agente de
+  // retención de IVA -- son calidades distintas (art. 437-2 ET: grandes
+  // contribuyentes, entidades estatales, y otros designados puntualmente
+  // por la DIAN). El RUT no tiene una casilla de responsabilidad
+  // separada para esto que se pueda leer sola, así que -- igual que
+  // ICA -- el contador lo marca a mano en la ficha del cliente. Si no
+  // está marcado, la app asume por defecto que Rete IVA no aplica.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS agente_retenedor_iva BOOLEAN DEFAULT false;`);
   // Expansión del modelo de clientes: datos básicos, tributarios, RUT,
   // contacto principal, e información bancaria (para conectar pagos
   // más adelante y hacer relación con la cartera del cliente).
@@ -1548,6 +1565,7 @@ const SAVED_FIELDS = [
   'regimen_simple', 'autorretenedor', 'desglose_categorias', 'desglose_aiu', 'subcuenta_gasto', 'file_hash',
   'tarifa_ica_id', 'numero_digitacion', 'saldo_vencido_detectado', 'anticipo_detectado', 'valor_abonado',
   'confianza_campos', 'modelo_ia', 'version_prompt', 'valor_letras_texto', 'valor_letras_numero',
+  'archivo_original', 'archivo_original_tipo',
 ];
 
 function rowToInvoice(row) {
@@ -1607,7 +1625,7 @@ app.post('/api/clients', requireAuth, requireRole('administrador', 'contador'), 
       nombre, nit, dv, tipo_persona, direccion, ciudad, telefono, correo,
       ciiu, responsabilidades, rut_archivo, rut_archivo_nombre,
       contacto_nombre, contacto_cargo, contacto_telefono, contacto_correo,
-      banco, tipo_cuenta, numero_cuenta, agente_retenedor_ica,
+      banco, tipo_cuenta, numero_cuenta, agente_retenedor_ica, agente_retenedor_iva,
     } = req.body;
     if (!nombre || !nit) {
       return res.status(400).json({ error: 'Nombre y NIT son obligatorios.' });
@@ -1648,15 +1666,15 @@ app.post('/api/clients', requireAuth, requireRole('administrador', 'contador'), 
         tipo_persona, direccion, ciudad, telefono, correo, ciiu, responsabilidades,
         rut_archivo, rut_archivo_nombre,
         contacto_nombre, contacto_cargo, contacto_telefono, contacto_correo,
-        banco, tipo_cuenta, numero_cuenta, agente_retenedor_ica
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+        banco, tipo_cuenta, numero_cuenta, agente_retenedor_ica, agente_retenedor_iva
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
       RETURNING *`,
       [
         id, nombre, nit, dv || '', req.firmaId, agenteRetenedorCalculado,
         tipo_persona || '', direccion || '', ciudad || '', telefono || '', correo || '', ciiu || '', responsabilidadesStr,
         rut_archivo || '', rut_archivo_nombre || '',
         contacto_nombre || '', contacto_cargo || '', contacto_telefono || '', contacto_correo || '',
-        banco || '', tipo_cuenta || '', numero_cuenta || '', !!agente_retenedor_ica,
+        banco || '', tipo_cuenta || '', numero_cuenta || '', !!agente_retenedor_ica, !!agente_retenedor_iva,
       ]
     );
     res.status(201).json(rows[0]);
@@ -1694,10 +1712,9 @@ const CLIENT_EDITABLE_FIELDS = [
   'contacto_nombre', 'contacto_cargo', 'contacto_telefono', 'contacto_correo',
   'banco', 'tipo_cuenta', 'numero_cuenta',
   // A diferencia de "agente_retenedor" (Renta -- se calcula solo de las
-  // responsabilidades del RUT), el ICA es municipal y no viene en esa
-  // lista -- este sí lo marca el contador a mano, así que sí se acepta
-  // directo del cliente.
-  'agente_retenedor_ica',
+  // responsabilidades del RUT), ICA e IVA no vienen de esa lista -- el
+  // contador los marca a mano, así que sí se aceptan directo del cliente.
+  'agente_retenedor_ica', 'agente_retenedor_iva',
 ];
 
 app.patch('/api/clients/:id', requireAuth, async (req, res) => {
@@ -1716,6 +1733,9 @@ app.patch('/api/clients/:id', requireAuth, async (req, res) => {
     }
     if (updates.agente_retenedor_ica !== undefined) {
       updates.agente_retenedor_ica = !!updates.agente_retenedor_ica;
+    }
+    if (updates.agente_retenedor_iva !== undefined) {
+      updates.agente_retenedor_iva = !!updates.agente_retenedor_iva;
     }
 
     const keys = Object.keys(updates);
@@ -2542,6 +2562,32 @@ app.put('/api/invoices/:id/items', requireAuth, async (req, res) => {
 // automático ni se puede desaprobar desde acá -- si el contador se
 // equivocó, corrige los datos primero (PUT de arriba) y aprueba de nuevo
 // cuando esté conforme.
+// Si el asiento (todavía 'propuesto') de esta factura ya cuadra
+// (débito == crédito, misma tolerancia que el resto de la app), lo
+// deja 'aprobado' sin que el contador tenga que darle clic aparte --
+// antes "Aprobar factura" y "Aprobar asiento" eran dos pasos
+// separados que normalmente coincidían de todas formas. Si el
+// asiento no existe, ya está aprobado, o todavía no cuadra, no hace
+// nada (en el último caso, el contador lo corrige desde "Editar
+// asiento" en Revisión y esta misma función lo aprueba sola ahí).
+// Devuelve el nuevo estado del asiento si lo aprobó, o null si no.
+async function aprobarAsientoSiCuadra(invoiceId) {
+  const asiento = await pool.query(
+    `SELECT id, estado FROM asientos_contables WHERE invoice_id = $1 ORDER BY creado_at DESC LIMIT 1`,
+    [invoiceId]
+  );
+  if (asiento.rows.length === 0 || asiento.rows[0].estado !== 'propuesto') return null;
+  const lineas = await pool.query('SELECT debito, credito FROM asiento_lineas WHERE asiento_id = $1', [asiento.rows[0].id]);
+  const debe = lineas.rows.reduce((s, l) => s + Number(l.debito), 0);
+  const haber = lineas.rows.reduce((s, l) => s + Number(l.credito), 0);
+  if (Math.abs(debe - haber) > 1) return null;
+  const { rows } = await pool.query(
+    `UPDATE asientos_contables SET estado = 'aprobado', aprobado_at = now() WHERE id = $1 RETURNING id, estado, aprobado_at`,
+    [asiento.rows[0].id]
+  );
+  return rows[0];
+}
+
 app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
   try {
     const factura = await pool.query(
@@ -2558,7 +2604,11 @@ app.post('/api/invoices/:id/aprobar', requireAuth, requireRole('administrador', 
       `UPDATE invoices SET aprobado_por_contador = true, aprobado_at = now() WHERE id = $1 RETURNING id, aprobado_por_contador, aprobado_at`,
       [req.params.id]
     );
-    res.json(rows[0]);
+    // Aparte de aprobar la factura -- ver aprobarAsientoSiCuadra() arriba,
+    // que deja registrado si el asiento quedó aprobado junto con ella o
+    // si se quedó pendiente de que el contador lo corrija.
+    const asientoAprobado = await aprobarAsientoSiCuadra(req.params.id);
+    res.json({ ...rows[0], asiento_aprobado: !!asientoAprobado });
   } catch (err) {
     console.error('Error aprobando factura:', err);
     res.status(500).json({ error: 'No se pudo aprobar la factura.' });
@@ -2711,6 +2761,80 @@ app.post('/api/asientos/:id/aprobar', requireAuth, requireRole('administrador', 
   } catch (err) {
     console.error('Error aprobando asiento:', err);
     res.status(500).json({ error: 'No se pudo aprobar el asiento.' });
+  }
+});
+
+// Editar directamente las líneas de un asiento PROPUESTO (cuenta,
+// nombre, débito, crédito -- y agregar/quitar línea) -- antes la única
+// forma de cambiar un asiento era editar la factura y dejar que se
+// regenerara solo desde ahí, lo que no alcanza para un ajuste puntual
+// de la cuenta contable o de un valor que el contador quiere corregir
+// directamente en el asiento. No se bloquea si débito y crédito no
+// cuadran todavía -- igual que el resto de la app, se guarda la
+// corrección a medias y es recién /aprobar quien exige que sí cuadre.
+// Un asiento ya aprobado NO se puede editar así -- queda como el
+// registro final; para corregirlo habría que reversarlo aparte (fuera
+// de alcance por ahora).
+app.put('/api/asientos/:id/lineas', requireAuth, requireRole('administrador', 'contador'), async (req, res) => {
+  try {
+    const asiento = await pool.query(
+      'SELECT id, estado, invoice_id FROM asientos_contables WHERE id = $1 AND contador_id = $2',
+      [req.params.id, req.firmaId]
+    );
+    if (asiento.rows.length === 0) return res.status(404).json({ error: 'Asiento no encontrado.' });
+    if (req.clientesAsignados) {
+      const fac = await pool.query('SELECT cliente_id FROM invoices WHERE id = $1', [asiento.rows[0].invoice_id]);
+      if (fac.rows.length === 0 || !puedeAccederCliente(req, fac.rows[0].cliente_id)) {
+        return res.status(404).json({ error: 'Asiento no encontrado.' });
+      }
+    }
+    if (asiento.rows[0].estado === 'aprobado') {
+      return res.status(400).json({ error: 'Este asiento ya está aprobado -- no se puede editar. Si de verdad hace falta corregirlo, avísanos.' });
+    }
+
+    const lineasBody = Array.isArray(req.body.lineas) ? req.body.lineas : [];
+    if (lineasBody.length === 0) {
+      return res.status(400).json({ error: 'El asiento necesita al menos una línea.' });
+    }
+    for (const l of lineasBody) {
+      if (!l || !String(l.cuenta_codigo || '').trim()) {
+        return res.status(400).json({ error: 'Todas las líneas necesitan un código de cuenta.' });
+      }
+    }
+
+    await pool.query('DELETE FROM asiento_lineas WHERE asiento_id = $1', [req.params.id]);
+    let orden = 0;
+    for (const l of lineasBody) {
+      await pool.query(
+        `INSERT INTO asiento_lineas (id, asiento_id, orden, cuenta_codigo, cuenta_nombre, debito, credito)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [crypto.randomUUID(), req.params.id, orden++, String(l.cuenta_codigo).trim(), String(l.cuenta_nombre || '').trim(), Number(l.debito) || 0, Number(l.credito) || 0]
+      );
+    }
+    // Deja constancia de que un humano tocó las líneas directamente --
+    // antes de esto, generado_por solo tomaba el valor 'ia'.
+    await pool.query(`UPDATE asientos_contables SET generado_por = 'contador' WHERE id = $1`, [req.params.id]);
+
+    const lineasFinal = await pool.query(
+      'SELECT cuenta_codigo, cuenta_nombre, debito, credito FROM asiento_lineas WHERE asiento_id = $1 ORDER BY orden',
+      [req.params.id]
+    );
+    // Si la factura ya estaba aprobada (lo normal es corregir el asiento
+    // DESPUÉS de aprobar la factura -- ver aprobarAsientoSiCuadra()) y
+    // esta corrección ya deja al asiento cuadrando, se aprueba solo acá
+    // mismo -- no existe ya un botón "Aprobar asiento" aparte que el
+    // contador tenga que recordar volver a pulsar.
+    let asientoAprobado = null;
+    if (asiento.rows[0].invoice_id) {
+      const facturaRes = await pool.query('SELECT aprobado_por_contador FROM invoices WHERE id = $1', [asiento.rows[0].invoice_id]);
+      if (facturaRes.rows[0] && facturaRes.rows[0].aprobado_por_contador) {
+        asientoAprobado = await aprobarAsientoSiCuadra(asiento.rows[0].invoice_id);
+      }
+    }
+    res.json({ id: req.params.id, lineas: lineasFinal.rows, estado: asientoAprobado ? asientoAprobado.estado : 'propuesto', asiento_aprobado: !!asientoAprobado });
+  } catch (err) {
+    console.error('Error editando líneas del asiento:', err);
+    res.status(500).json({ error: 'No se pudieron guardar los cambios del asiento.' });
   }
 });
 

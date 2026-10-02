@@ -1949,6 +1949,20 @@ function renderResult(data){
       const subSelect = document.createElement('select');
       subSelect.id = 'subcuentaGastoSelect';
 
+      // Campo manual para cuando la categoría no tiene ninguna cuenta
+      // estándar que ofrecer (ej. "Otro" sin PUC personalizado todavía),
+      // o cuando el contador elige escribir el código a mano -- ver
+      // poblarSubcuentas() más abajo. Declarado ANTES de poblarSubcuentas
+      // porque esa función lo usa incondicionalmente y se llama a sí
+      // misma más abajo, antes de que terminara de ejecutarse esta línea
+      // si quedara después (ver nota en el historial de cambios).
+      const subManualInput = document.createElement('input');
+      subManualInput.type = 'text';
+      subManualInput.id = 'subcuentaGastoManual';
+      subManualInput.placeholder = 'Código y nombre de la cuenta (ej. 519596 - Diversos no clasificados)';
+      subManualInput.style.display = 'none';
+      subManualInput.addEventListener('input', () => { currentSubcuentaGasto = subManualInput.value.trim(); });
+
       // Si el cliente de esta factura tiene PUC personalizado para la
       // categoría elegida (ver cliente.html), se ofrece ADEMÁS del
       // estándar -- nunca en su lugar (el contador elige cuál usar,
@@ -1974,6 +1988,18 @@ function renderResult(data){
         subSelect.style.display = '';
         subManualInput.style.display = 'none';
 
+        // Aparte de lo estándar (y lo personalizado, si aplica), siempre
+        // se ofrece escribir el código a mano -- antes solo existía esta
+        // opción cuando la categoría no tenía NADA que ofrecer; ahora
+        // cualquier categoría la tiene disponible, para cuando la cuenta
+        // correcta no es ninguna de las listadas.
+        const agregarOpcionManual = () => {
+          const optManual = document.createElement('option');
+          optManual.value = '__manual__';
+          optManual.textContent = '✎ Escribir código a mano...';
+          subSelect.appendChild(optManual);
+        };
+
         if (personalizados.length === 0) {
           opciones.forEach(([codigo, nombre]) => {
             const opt = document.createElement('option');
@@ -1981,6 +2007,7 @@ function renderResult(data){
             opt.textContent = codigo === 'inventario' ? nombre : `${codigo} — ${nombre}`;
             subSelect.appendChild(opt);
           });
+          agregarOpcionManual();
           currentSubcuentaGasto = opciones[0][0];
           return;
         }
@@ -2005,6 +2032,7 @@ function renderResult(data){
           grupoEstandar.appendChild(opt);
         });
         subSelect.appendChild(grupoEstandar);
+        agregarOpcionManual();
 
         // Con PUC personalizado disponible, se preselecciona el
         // personalizado (es la razón por la que el contador lo
@@ -2018,17 +2046,18 @@ function renderResult(data){
       // ver cargarPucClienteYRefrescar() más arriba.
       window._refrescarSubcuentaGastoSelector = () => poblarSubcuentas(input.value);
 
-      subSelect.addEventListener('change', () => { currentSubcuentaGasto = subSelect.value; });
+      subSelect.addEventListener('change', () => {
+        if (subSelect.value === '__manual__') {
+          subSelect.style.display = 'none';
+          subManualInput.style.display = '';
+          subManualInput.value = '';
+          currentSubcuentaGasto = '';
+          subManualInput.focus();
+          return;
+        }
+        currentSubcuentaGasto = subSelect.value;
+      });
       input.addEventListener('change', () => poblarSubcuentas(input.value));
-
-      // Campo manual para cuando la categoría ("Otro", normalmente) no
-      // tiene ninguna cuenta para ofrecer -- ver poblarSubcuentas() arriba.
-      const subManualInput = document.createElement('input');
-      subManualInput.type = 'text';
-      subManualInput.id = 'subcuentaGastoManual';
-      subManualInput.placeholder = 'Código y nombre de la cuenta (ej. 519596 - Diversos no clasificados)';
-      subManualInput.style.display = 'none';
-      subManualInput.addEventListener('input', () => { currentSubcuentaGasto = subManualInput.value.trim(); });
 
       subValueWrap.appendChild(subSelect);
       subValueWrap.appendChild(subManualInput);
@@ -2773,11 +2802,21 @@ const CATEGORIAS_VALIDAS_ITEM = CATEGORIA_OPCIONES_ITEM.map(([val]) => val);
 // queden mostrando un número calculado con la versión anterior de los
 // ítems.
 function onItemsChanged(){
+  if (typeof autoCompletarAiuDesdeDescripcion === 'function') autoCompletarAiuDesdeDescripcion(currentItems);
   currentDesgloseCategorias = (typeof desgloseDesdeItems === 'function') ? desgloseDesdeItems(currentItems) : {};
-  renderItemsPanel();
   const catSelect = ledger.querySelector('select[data-key="categoria_concepto"]');
   const sinIvaInput = ledger.querySelector('input[data-key="valor_sin_iva"]');
   const ivaInput = ledger.querySelector('input[data-key="valor_iva"]');
+  // El desglose por ítem es la fuente de verdad del subtotal -- en vez
+  // de dejarle al contador la tarea de ir también a corregir a mano el
+  // "Valor Sin IVA" de cabecera cada vez que edita, agrega o quita un
+  // ítem (antes esto solo mostraba un aviso de "no coinciden" más abajo),
+  // se sincroniza solo con la suma de los ítems en cada cambio.
+  if (sinIvaInput && currentItems.length > 0) {
+    const sumaItems = currentItems.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+    sinIvaInput.value = sumaItems.toLocaleString('es-CO');
+  }
+  renderItemsPanel();
   if (catSelect && currentInvoiceData) {
     // Mismo patrón que el <select> de categoría de arriba: se parte del
     // objeto original (para no perder rete_fuente/rete_iva/rete_ica ya
@@ -2845,11 +2884,15 @@ function renderItemsPanel(){
     // ítem) no se quede con una versión distinta del mismo selector.
     const personalizadosItem = (pucPersonalizadoPorCliente[currentClienteId] || [])
       .filter((p) => p.categoria_concepto === item.categoria_concepto);
-    const subcuentaOpts = personalizadosItem.length === 0
+    // Aparte de lo estándar (y lo personalizado, si aplica), siempre se
+    // ofrece escribir el código a mano -- ver manejo del valor
+    // "__manual__" en el listener de 'change' de .it-subcuenta más abajo.
+    const subcuentaOpts = (personalizadosItem.length === 0
       ? estandarOptsHTML
       : `<optgroup label="Personalizado">${personalizadosItem.map((p) =>
           `<option value="${escapeHtml(p.codigo)}"${item.subcuenta_gasto === p.codigo ? ' selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`).join('')}</optgroup>` +
-        `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`;
+        `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`) +
+      `<option value="__manual__">✎ Escribir código a mano...</option>`;
     // Sin ninguna opción (categoría "Otro" sin PUC personalizado para
     // este cliente todavía): un <select> vacío no sirve de nada -- se
     // pide la cuenta escrita a mano en su lugar.
@@ -2935,6 +2978,11 @@ function renderItemsPanel(){
       const limpio = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '');
       currentItems[idx].aiu = limpio;
       onItemsChanged();
+    } else if (e.target.classList.contains('it-subcuenta')) {
+      // Solo entra aquí tras elegir "Escribir código a mano" (ver 'change'
+      // abajo), que cambió el <select> por un <input> de texto libre --
+      // de ahí en adelante se lee como cualquier otro campo de texto.
+      currentItems[idx].subcuenta_gasto = e.target.value;
     }
   });
   tbody.addEventListener('change', (e) => {
@@ -2961,7 +3009,18 @@ function renderItemsPanel(){
       }
       onItemsChanged();
     } else if (e.target.classList.contains('it-subcuenta')) {
-      currentItems[idx].subcuenta_gasto = e.target.value;
+      if (e.target.tagName === 'SELECT' && e.target.value === '__manual__') {
+        // "Escribir código a mano" en cualquier categoría -- se cambia
+        // este <select> puntual por un <input> de texto libre, mismo
+        // patrón que ya existía para categorías sin ninguna opción.
+        e.target.outerHTML = `<input type="text" class="it-subcuenta" style="min-width:170px;" placeholder="Código y nombre de la cuenta" value="" title="Escribe el código PUC a mano.">`;
+        currentItems[idx].subcuenta_gasto = '';
+        const fila = tbody.querySelector(`tr[data-idx="${idx}"]`);
+        const nuevoInput = fila ? fila.querySelector('.it-subcuenta') : null;
+        if (nuevoInput) nuevoInput.focus();
+      } else {
+        currentItems[idx].subcuenta_gasto = e.target.value;
+      }
     } else if (e.target.classList.contains('it-tarifa')) {
       currentItems[idx].tarifa_retencion = Number(e.target.value) || 0;
       onItemsChanged();
@@ -3011,6 +3070,12 @@ function currentFieldValues(){
   out.desglose_aiu = JSON.stringify((typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(currentItems) : {});
   out.subcuenta_gasto = currentSubcuentaGasto || '';
   out.file_hash = currentFileHash || '';
+  // El documento original (foto/PDF) tal como se leyó para esta
+  // captura -- se guarda junto con la factura para poder mostrarlo
+  // de nuevo en Revisión (antes solo existía mientras esta pantalla
+  // seguía abierta, y se perdía para siempre apenas se guardaba).
+  out.archivo_original = currentBase64 || '';
+  out.archivo_original_tipo = currentMediaType || '';
   // "__no_aplica__" es un estado solo de interfaz (el contador marcó a
   // propósito que el ICA no aplica) -- no corresponde a ninguna tarifa
   // real guardada, así que nunca se manda como tarifa_ica_id (esa

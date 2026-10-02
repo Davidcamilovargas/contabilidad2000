@@ -131,6 +131,23 @@
   }
   .btn-eliminar-puc:hover{ color:#A13A2C; }
 
+  .puc-toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
+  .puc-buscar{
+    font-family:inherit; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+    background:#fff; color:var(--ink); flex:1; min-width:200px;
+  }
+  .puc-filtro-categoria{
+    font-family:inherit; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+    background:#fff; color:var(--ink);
+  }
+  .puc-contador{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); white-space:nowrap; }
+  .puc-table-wrap{ max-height:480px; overflow-y:auto; border:1px solid #DCE7EC; border-radius:8px; }
+  .puc-table-wrap table.mini-facturas{ margin:0; }
+  .puc-table-wrap thead th{ position:sticky; top:0; z-index:1; }
+  .puc-th-ordenable{ cursor:pointer; user-select:none; }
+  .puc-th-ordenable:hover{ color:var(--ink-soft); }
+  .puc-flecha{ font-size:9px; }
+
   #loading, #notFound{
     font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--ink-soft);
     display:flex; align-items:center; gap:10px; padding:30px 0;
@@ -265,18 +282,27 @@
       </div>
       <p class="puc-intro">Si la contabilidad de este cliente se lleva en otro sistema (ej. Contaia) con sus propios códigos de cuenta, regístralos aquí -- al escanear una factura de este cliente, podrás elegir entre el código personalizado o el PUC estándar de Enlaza. Si no registras ninguno, este cliente sigue usando siempre el PUC estándar.</p>
 
-      <table class="mini-facturas" id="tablaPuc" style="display:none;">
-        <thead>
-          <tr>
-            <th>Categoría fiscal</th>
-            <th>Código</th>
-            <th>Concepto</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="tablaPucBody"></tbody>
-      </table>
+      <div class="puc-toolbar" id="pucToolbar" style="display:none;">
+        <input type="text" id="pucBuscar" class="puc-buscar" placeholder="Buscar por código o concepto...">
+        <select id="pucFiltroCategoria" class="puc-filtro-categoria"></select>
+        <span class="puc-contador" id="pucContador"></span>
+      </div>
+
+      <div class="puc-table-wrap">
+        <table class="mini-facturas" id="tablaPuc" style="display:none;">
+          <thead>
+            <tr>
+              <th class="puc-th-ordenable" data-campo="categoria_concepto">Categoría fiscal<span class="puc-flecha"></span></th>
+              <th class="puc-th-ordenable" data-campo="codigo">Código<span class="puc-flecha"></span></th>
+              <th class="puc-th-ordenable" data-campo="concepto">Concepto<span class="puc-flecha"></span></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tablaPucBody"></tbody>
+        </table>
+      </div>
       <div id="pucEmpty" class="empty-note">Este cliente todavía usa el PUC estándar de Enlaza -- no tiene códigos personalizados propios.</div>
+      <div id="pucSinResultados" class="empty-note" style="display:none;">Ningún código coincide con tu búsqueda.</div>
 
       <div class="puc-form">
         <h3>Agregar un código a mano</h3>
@@ -394,6 +420,7 @@ async function cargarYRenderizar(){
   if (cliente.correo) metaPartes.push(`<span>${escapeHtml(cliente.correo)}</span>`);
   if (cliente.agente_retenedor) metaPartes.push('<span class="badge-retenedor">● Agente retenedor</span>');
   if (cliente.agente_retenedor_ica) metaPartes.push('<span class="badge-retenedor">● Agente retenedor ICA</span>');
+  if (cliente.agente_retenedor_iva) metaPartes.push('<span class="badge-retenedor">● Agente retenedor IVA</span>');
   document.getElementById('clienteMeta').innerHTML = metaPartes.join('');
 
   // ---- PUC personalizado -- independiente de si ya tiene facturas ----
@@ -454,33 +481,105 @@ async function cargarYRenderizar(){
 // ---------- PUC personalizado del cliente ----------
 
 let clienteActualId = null;
+let pucListaCompleta = [];
+let pucOrden = { campo: 'codigo', dir: 'asc' };
 
 function poblarSelectorCategoriasPuc(selectEl){
   const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
   selectEl.innerHTML = Object.keys(labels).map((k) => `<option value="${k}">${escapeHtml(labels[k])}</option>`).join('');
 }
 
+function poblarFiltroCategoriaPuc(selectEl){
+  const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
+  selectEl.innerHTML = '<option value="">Todas las categorías</option>' +
+    Object.keys(labels).map((k) => `<option value="${k}">${escapeHtml(labels[k])}</option>`).join('');
+}
+
+// Para que buscar "comisiones" encuentre "Comisión" -- ignora may/min y tildes.
+function normalizarTextoPuc(s){
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 async function cargarPuc(clienteId){
   clienteActualId = clienteId;
   poblarSelectorCategoriasPuc(document.getElementById('pucCategoria'));
+  poblarFiltroCategoriaPuc(document.getElementById('pucFiltroCategoria'));
   try {
     const res = await fetch(`/api/clients/${encodeURIComponent(clienteId)}/puc`);
     if (!res.ok) return;
-    renderPuc(await res.json());
+    pucListaCompleta = await res.json();
+    aplicarFiltrosPuc();
   } catch (e) { /* si falla, el cliente sigue viendo el estado vacío -- no es bloqueante */ }
 }
 
+// Filtra (búsqueda + categoría) y ordena pucListaCompleta en memoria --
+// con cuentas en la lista no tiene sentido pedirle de nuevo al servidor
+// cada vez que el contador teclea una letra.
+function aplicarFiltrosPuc(){
+  const termino = normalizarTextoPuc(document.getElementById('pucBuscar').value.trim());
+  const categoria = document.getElementById('pucFiltroCategoria').value;
+  const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
+
+  let filtrada = pucListaCompleta.filter((item) => {
+    if (categoria && item.categoria_concepto !== categoria) return false;
+    if (!termino) return true;
+    return normalizarTextoPuc(item.codigo).includes(termino) || normalizarTextoPuc(item.concepto).includes(termino);
+  });
+
+  const { campo, dir } = pucOrden;
+  filtrada.sort((a, b) => {
+    const va = normalizarTextoPuc(campo === 'categoria_concepto' ? (labels[a.categoria_concepto] || a.categoria_concepto) : a[campo]);
+    const vb = normalizarTextoPuc(campo === 'categoria_concepto' ? (labels[b.categoria_concepto] || b.categoria_concepto) : b[campo]);
+    if (va < vb) return dir === 'asc' ? -1 : 1;
+    if (va > vb) return dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  renderPuc(filtrada);
+}
+
+function actualizarFlechasOrdenPuc(){
+  document.querySelectorAll('#tablaPuc .puc-th-ordenable').forEach((th) => {
+    const flecha = th.querySelector('.puc-flecha');
+    flecha.textContent = th.dataset.campo === pucOrden.campo ? (pucOrden.dir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
+  });
+}
+
 function renderPuc(lista){
+  const toolbar = document.getElementById('pucToolbar');
   const tabla = document.getElementById('tablaPuc');
   const tbody = document.getElementById('tablaPucBody');
   const empty = document.getElementById('pucEmpty');
-  if (!lista || lista.length === 0) {
+  const sinResultados = document.getElementById('pucSinResultados');
+  const contador = document.getElementById('pucContador');
+
+  // Caso base: el cliente no tiene NINGÚN código propio todavía (nada que
+  // buscar ni filtrar) -- se distingue de "el filtro no encontró nada".
+  if (pucListaCompleta.length === 0) {
+    toolbar.style.display = 'none';
     tabla.style.display = 'none';
+    sinResultados.style.display = 'none';
     empty.style.display = 'block';
     return;
   }
-  tabla.style.display = 'table';
+
+  toolbar.style.display = 'flex';
   empty.style.display = 'none';
+  actualizarFlechasOrdenPuc();
+
+  if (lista.length === 0) {
+    tabla.style.display = 'none';
+    sinResultados.style.display = 'block';
+    contador.textContent = `0 de ${pucListaCompleta.length} cuentas`;
+    return;
+  }
+
+  sinResultados.style.display = 'none';
+  tabla.style.display = 'table';
+  contador.textContent = lista.length === pucListaCompleta.length
+    ? `${pucListaCompleta.length} cuenta${pucListaCompleta.length === 1 ? '' : 's'}`
+    : `${lista.length} de ${pucListaCompleta.length} cuentas`;
+
   const labels = (typeof CATEGORIA_CONCEPTO_LABELS !== 'undefined') ? CATEGORIA_CONCEPTO_LABELS : {};
   tbody.innerHTML = lista.map((item) => `
     <tr>
@@ -497,8 +596,25 @@ function renderPuc(lista){
 
 async function recargarListaPuc(){
   const res = await fetch(`/api/clients/${encodeURIComponent(clienteActualId)}/puc`);
-  if (res.ok) renderPuc(await res.json());
+  if (res.ok) {
+    pucListaCompleta = await res.json();
+    aplicarFiltrosPuc();
+  }
 }
+
+document.getElementById('pucBuscar').addEventListener('input', aplicarFiltrosPuc);
+document.getElementById('pucFiltroCategoria').addEventListener('change', aplicarFiltrosPuc);
+document.querySelectorAll('#tablaPuc .puc-th-ordenable').forEach((th) => {
+  th.addEventListener('click', () => {
+    const campo = th.dataset.campo;
+    if (pucOrden.campo === campo) {
+      pucOrden.dir = pucOrden.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      pucOrden = { campo, dir: 'asc' };
+    }
+    aplicarFiltrosPuc();
+  });
+});
 
 async function eliminarPuc(pucId){
   if (!clienteActualId) return;

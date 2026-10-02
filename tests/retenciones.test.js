@@ -32,6 +32,7 @@ const {
   calcularRetencionSugerida,
   calcularReteIvaSugerido,
   calcularReteIcaSugerido,
+  autoCompletarAiuDesdeDescripcion,
   UVT_POR_ANIO,
   UVT_ANIO_MAS_RECIENTE,
   TARIFAS_RETENCION,
@@ -40,6 +41,10 @@ const {
 const UVT_2026 = UVT_POR_ANIO[2026];
 const clienteRetenedor = { agente_retenedor: true };
 const clienteNoRetenedor = { agente_retenedor: false };
+// Agente retenedor de RENTA (07) y agente retenedor de IVA son calidades
+// distintas -- este fixture es el único que debe pasar las pruebas de
+// calcularReteIvaSugerido(), que depende de agente_retenedor_iva.
+const clienteRetenedorIva = { agente_retenedor: true, agente_retenedor_iva: true };
 
 // ---------- UVT / fechas ----------
 
@@ -219,30 +224,38 @@ test('vigilancia_aseo (AIU): AIU declarado por encima del piso -- se calcula sob
 
 test('calcularReteIvaSugerido: null sin IVA en la factura', () => {
   const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 0, fecha_factura: '01/09/2026' };
-  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, null), null);
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedorIva, null), null);
 });
 
-test('calcularReteIvaSugerido: null si el cliente no es agente retenedor', () => {
+test('calcularReteIvaSugerido: null si el cliente no es agente retenedor (ni de renta ni de IVA)', () => {
   const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '01/09/2026' };
   assert.equal(calcularReteIvaSugerido(inv, clienteNoRetenedor, null), null);
 });
 
+test('calcularReteIvaSugerido: null si el cliente es agente retenedor de RENTA pero NO está marcado como agente retenedor de IVA', () => {
+  // Ser agente retenedor (código 07 del RUT, retención de renta) no
+  // implica ser agente de retención de IVA -- son calidades distintas,
+  // y esta es la regresión que cubre justo ese caso.
+  const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '01/09/2026' };
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, null), null);
+});
+
 test('calcularReteIvaSugerido: exento cuando el proveedor ya es Gran Contribuyente o agente de retención de IVA', () => {
   const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '01/09/2026' };
-  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, { gran_contribuyente: true }), null);
-  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, { agente_retencion_iva: true }), null);
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedorIva, { gran_contribuyente: true }), null);
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedorIva, { agente_retencion_iva: true }), null);
 });
 
 test('calcularReteIvaSugerido: Régimen Simple y Autorretenedor NO eximen de Rete IVA (solo eximen Fuente/ICA)', () => {
   const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '01/09/2026' };
   const esperado = Math.round(190000 * 0.15);
-  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, { regimen_simple: true }), esperado);
-  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, { autorretenedor: true }), esperado);
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedorIva, { regimen_simple: true }), esperado);
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedorIva, { autorretenedor: true }), esperado);
 });
 
 test('calcularReteIvaSugerido: 15% del IVA cuando todo aplica', () => {
   const inv = { categoria_concepto: 'servicios', valor_sin_iva: 1000000, valor_iva: 190000, fecha_factura: '01/09/2026' };
-  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedor, null), Math.round(190000 * 0.15));
+  assert.equal(calcularReteIvaSugerido(inv, clienteRetenedorIva, null), Math.round(190000 * 0.15));
 });
 
 // ---------- calcularReteIcaSugerido ----------
@@ -264,3 +277,45 @@ test('calcularReteIcaSugerido: calcula el monto sobre el subtotal cuando supera 
   const r = calcularReteIcaSugerido(inv, tarifa);
   assert.equal(r.monto, Math.round(5000000 * (9.66 / 1000)));
 });
+
+// ---------- autoCompletarAiuDesdeDescripcion ----------
+// Caso real que motivó esta función: una factura de vigilancia que
+// desglosa su propio AIU como una línea aparte (ej. "AIU 10 Art 46 Ley
+// 1607 de 2026") en vez de reportarlo en la columna AIU de la línea de
+// servicio -- el dato ya estaba en la factura, solo en el campo
+// equivocado, y el aviso de "falta el AIU" seguía saliendo.
+
+test('autoCompletarAiuDesdeDescripcion: copia el subtotal al AIU cuando la descripción dice "AIU" y el campo está vacío', () => {
+  const items = [
+    { descripcion: 'Servicio de vigilancia privada', subtotal: '15015414', categoria_concepto: 'vigilancia_aseo', aiu: '' },
+    { descripcion: 'AIU 10 Art 46 Ley 1607 de 2026', subtotal: '2333094', categoria_concepto: 'vigilancia_aseo', aiu: '' },
+  ];
+  autoCompletarAiuDesdeDescripcion(items);
+  assert.equal(items[0].aiu, ''); // esta línea no dice "AIU" en su descripción -- no se toca
+  assert.equal(items[1].aiu, '2333094'); // esta sí, y copia su propio subtotal
+});
+
+test('autoCompletarAiuDesdeDescripcion: nunca pisa un AIU que el contador ya escribió a mano', () => {
+  const items = [
+    { descripcion: 'AIU del contrato de vigilancia', subtotal: '2333094', categoria_concepto: 'vigilancia_aseo', aiu: '1000000' },
+  ];
+  autoCompletarAiuDesdeDescripcion(items);
+  assert.equal(items[0].aiu, '1000000');
+});
+
+test('autoCompletarAiuDesdeDescripcion: no hace nada fuera de las categorías con base especial de AIU', () => {
+  const items = [
+    { descripcion: 'AIU de administración', subtotal: '500000', categoria_concepto: 'servicios', aiu: '' },
+  ];
+  autoCompletarAiuDesdeDescripcion(items);
+  assert.equal(items[0].aiu, '');
+});
+
+test('autoCompletarAiuDesdeDescripcion: no hace nada si la descripción no menciona "AIU" como palabra', () => {
+  const items = [
+    { descripcion: 'Servicio de vigilancia privada mensual', subtotal: '15015414', categoria_concepto: 'servicios_temporales', aiu: '' },
+  ];
+  autoCompletarAiuDesdeDescripcion(items);
+  assert.equal(items[0].aiu, '');
+});
+

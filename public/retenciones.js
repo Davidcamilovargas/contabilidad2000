@@ -98,6 +98,44 @@ function esCategoriaBaseAiu(categoria) {
   return !!(config && config.baseEspecial === 'aiu');
 }
 
+// Si una línea YA DICE en su descripción que ella misma es el AIU (ej.
+// "AIU 10 Art 46 Ley 1607 de 2026"), su propio subtotal completo ES el
+// componente de AIU -- no hace falta que el contador lo vuelva a
+// escribir en la columna AIU aparte. Motivado por un caso real: un
+// proveedor de vigilancia que desglosa el AIU como una línea propia
+// (en ese caso, exactamente el piso presuntivo del 10% del Art. 46 Ley
+// 1607) en vez de reportarlo dentro del subtotal de la línea de
+// servicio -- la factura ya tenía el dato, solo en el campo equivocado.
+//
+// Esto NO es adivinar una categoría fiscal ambigua (lo que este
+// proyecto evita a propósito) -- es leer un texto que el proveedor ya
+// escribió explícitamente. Por eso solo actúa cuando TODO esto se
+// cumple:
+//   - la categoría de la línea tiene base especial de AIU
+//     (vigilancia_aseo/servicios_temporales) -- en cualquier otra
+//     categoría el campo AIU no se usa, y llenarlo no tendría efecto.
+//   - la descripción contiene la palabra "aiu" como palabra completa
+//     (case-insensitive) -- no alcanza con que la categoría sea la
+//     correcta, tiene que estar dicho en el texto.
+//   - el ítem TODAVÍA no tiene un AIU declarado -- nunca pisa un valor
+//     que el contador (o una llamada anterior a esta misma función) ya
+//     haya puesto ahí.
+// Muta los ítems en el lugar (y también los devuelve, por conveniencia)
+// -- se puede llamar las veces que haga falta sin riesgo: en cuanto un
+// ítem queda completado, `item.aiu` deja de estar vacío y la siguiente
+// llamada ya no le hace nada.
+function autoCompletarAiuDesdeDescripcion(items) {
+  (items || []).forEach((item) => {
+    if (!esCategoriaBaseAiu(item.categoria_concepto)) return;
+    if (item.aiu !== undefined && item.aiu !== null && item.aiu !== '') return;
+    if (!/\baiu\b/i.test(String(item.descripcion || ''))) return;
+    const subtotalNum = Number(item.subtotal);
+    if (!subtotalNum) return; // sin subtotal todavía no hay nada que copiar
+    item.aiu = String(subtotalNum);
+  });
+  return items;
+}
+
 // Categorías donde la tarifa baja/alta se resuelve por el ACUMULADO de
 // pagos a ese proveedor en el año, no por declarante/no declarante --
 // hoy solo honorarios_natural. Ver el comentario junto a esa entrada en
@@ -746,7 +784,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
 
   if (!Array.isArray(raw) || raw.length === 0) {
     const categoria = validarCategoria((data.categoria_concepto || 'otro').toLowerCase());
-    return [{
+    return autoCompletarAiuDesdeDescripcion([{
       descripcion: data.concepto || '',
       cantidad: '', valor_unitario: '',
       subtotal: String(data.valor_sin_iva ?? '0'),
@@ -760,9 +798,9 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       // simplemente no se usa. Vacío = "no se sabe todavía", nunca 0 a
       // propósito (0 sí sería un valor real, aunque poco común).
       aiu: data.valor_aiu !== undefined && data.valor_aiu !== null && data.valor_aiu !== '' ? String(data.valor_aiu) : '',
-    }];
+    }]);
   }
-  return raw.map((it) => {
+  return autoCompletarAiuDesdeDescripcion(raw.map((it) => {
     const categoria = validarCategoria(String(it.categoria_concepto || 'otro').toLowerCase());
     return {
       descripcion: it.descripcion || '',
@@ -775,7 +813,7 @@ function normalizarItemsDesdeIA(data, categoriasValidas) {
       iva_mayor_valor: false,
       aiu: it.aiu !== undefined && it.aiu !== null && it.aiu !== '' ? String(it.aiu) : '',
     };
-  });
+  }));
 }
 
 // Opciones de tarifa (%) seleccionables para UNA categoría, para el
@@ -920,8 +958,16 @@ const RETEIVA_TARIFA_GENERAL = 0.15;
 // `perfilTercero` es lo mismo que recibe `calcularRetencionSugerida()`
 // -- opcional, pasa null/undefined si no se cargó (se comporta como
 // antes: no exime por esto, solo por lo que ya cubría).
+//
+// IMPORTANTE: esto NO usa `cliente.agente_retenedor` (que es el código
+// 07 del RUT -- agente retenedor de RENTA). Ser agente de retención de
+// IVA es una calidad distinta (art. 437-2 ET: grandes contribuyentes,
+// entidades estatales, y otros designados puntualmente por la DIAN) que
+// no se deriva de ninguna responsabilidad del RUT que ya se lea sola --
+// por eso usa `cliente.agente_retenedor_iva`, marcado a mano en la
+// ficha del cliente, igual que `agente_retenedor_ica`.
 function calcularReteIvaSugerido(inv, cliente, perfilTercero){
-  if (!cliente || !cliente.agente_retenedor) return null;
+  if (!cliente || !cliente.agente_retenedor_iva) return null;
 
   if (perfilTercero && (perfilTercero.agente_retencion_iva || perfilTercero.gran_contribuyente)) return null;
 
@@ -1141,6 +1187,7 @@ if (typeof module !== 'undefined' && module.exports) {
     CATEGORIA_CONCEPTO_LABELS,
     RETEIVA_TARIFA_GENERAL,
     esCategoriaBaseAiu,
+    autoCompletarAiuDesdeDescripcion,
     esCategoriaCriterioAcumulado,
     umbralAcumuladoPesos,
     montoCategoriaEnFactura,

@@ -1003,10 +1003,14 @@ function renderItemsMiniPanel(item){
     const estandarOptsHTML = opcionesSubcuenta.map(([codigo, nombre]) =>
       `<option value="${codigo}"${it.subcuenta_gasto === codigo ? ' selected' : ''}>${codigo === 'inventario' ? escapeHtml(nombre) : escapeHtml(codigo + ' — ' + nombre)}</option>`).join('');
     const personalizadosItem = (pucPersonalizadoPorCliente[item.clienteId] || []).filter((p) => p.categoria_concepto === it.categoria_concepto);
-    const subcuentaOpts = personalizadosItem.length === 0
+    // Aparte de lo estándar (y lo personalizado, si aplica), siempre se
+    // ofrece escribir el código a mano -- ver manejo del valor
+    // "__manual__" en el listener de 'change' de .im-subcuenta más abajo.
+    const subcuentaOpts = (personalizadosItem.length === 0
       ? estandarOptsHTML
       : `<optgroup label="Personalizado">${personalizadosItem.map((p) => `<option value="${escapeHtml(p.codigo)}"${it.subcuenta_gasto === p.codigo ? ' selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`).join('')}</optgroup>` +
-        `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`;
+        `<optgroup label="Estándar (PUC)">${estandarOptsHTML}</optgroup>`) +
+      `<option value="__manual__">✎ Escribir código a mano...</option>`;
     // Sin ninguna opción (categoría "Otro" sin PUC personalizado para
     // este cliente todavía): un <select> vacío no sirve de nada -- se
     // pide la cuenta escrita a mano en su lugar (mismo patrón de Escanear).
@@ -1066,8 +1070,16 @@ function renderItemsMiniPanel(item){
   `;
 
   function onCambioItems(){
+    if (typeof autoCompletarAiuDesdeDescripcion === 'function') autoCompletarAiuDesdeDescripcion(d.items);
     d.desglose_categorias = (typeof desgloseDesdeItems === 'function') ? desgloseDesdeItems(d.items) : {};
     d.desglose_aiu = (typeof desgloseAiuDesdeItems === 'function') ? desgloseAiuDesdeItems(d.items) : {};
+    // Mismo criterio que Escanear: el desglose por ítem es la fuente de
+    // verdad del subtotal -- se sincroniza solo con "Valor Sin IVA" en
+    // cada edición, agregado o eliminación de un ítem, en vez de dejar
+    // solo el aviso de "no coinciden" más abajo.
+    if (d.items.length > 0) {
+      d.valor_sin_iva = String(d.items.reduce((s, it) => s + (Number(it.subtotal) || 0), 0));
+    }
     guardarEdicionItem(item);
     renderFichaCompleta(item); // re-renderiza todo el modal -- así el estimado de retención de arriba también se refresca
   }
@@ -1085,6 +1097,12 @@ function renderItemsMiniPanel(item){
       // "el AIU es cero" (ver retenciones.js).
       d.items[idx].aiu = e.target.value.replace(/\./g, '').replace(/[^\d-]/g, '');
       onCambioItems();
+    } else if (e.target.classList.contains('im-subcuenta')) {
+      // Solo entra aquí tras elegir "Escribir código a mano" (ver
+      // 'change' abajo), que cambió el <select> por un <input> de
+      // texto libre -- de ahí en adelante se lee como cualquier otro.
+      d.items[idx].subcuenta_gasto = e.target.value;
+      guardarEdicionItem(item);
     }
   });
   tbody.addEventListener('change', (e) => {
@@ -1105,8 +1123,20 @@ function renderItemsMiniPanel(item){
       }
       onCambioItems();
     } else if (e.target.classList.contains('im-subcuenta')) {
-      d.items[idx].subcuenta_gasto = e.target.value;
-      guardarEdicionItem(item);
+      if (e.target.tagName === 'SELECT' && e.target.value === '__manual__') {
+        // "Escribir código a mano" en cualquier categoría -- se cambia
+        // este <select> puntual por un <input> de texto libre, mismo
+        // patrón que ya existía para categorías sin ninguna opción.
+        e.target.outerHTML = `<input type="text" class="im-subcuenta" style="min-width:160px;" placeholder="Código y nombre de la cuenta" value="" title="Escribe el código PUC a mano.">`;
+        d.items[idx].subcuenta_gasto = '';
+        guardarEdicionItem(item);
+        const fila = tbody.querySelector(`tr[data-idx="${idx}"]`);
+        const nuevoInput = fila ? fila.querySelector('.im-subcuenta') : null;
+        if (nuevoInput) nuevoInput.focus();
+      } else {
+        d.items[idx].subcuenta_gasto = e.target.value;
+        guardarEdicionItem(item);
+      }
     } else if (e.target.classList.contains('im-tarifa')) {
       d.items[idx].tarifa_retencion = Number(e.target.value) || 0;
       onCambioItems();
@@ -1957,13 +1987,19 @@ function renderSummary(){
     const estandarOptsActualHTML = opcionesEstandarActual.map(([codigo, nombre]) =>
       `<option value="${codigo}" ${codigo === subcuentaActual ? 'selected' : ''}>${codigo === 'inventario' ? nombre : codigo + ' — ' + nombre}</option>`
     ).join('');
-    const subcuentaOpts = personalizadosActual.length === 0
+    // Aparte de lo estándar (y lo personalizado, si aplica), siempre se
+    // ofrece escribir el código a mano -- antes solo existía esta opción
+    // cuando la categoría no tenía NADA que ofrecer; ahora cualquier
+    // categoría la tiene disponible (ver manejo de data-role="subcuenta"
+    // más abajo, que fuerza el campo de texto cuando se elige).
+    const subcuentaOpts = (personalizadosActual.length === 0
       ? estandarOptsActualHTML
       : `<optgroup label="Personalizado">${personalizadosActual.map((p) =>
           `<option value="${escapeHtml(p.codigo)}" ${p.codigo === subcuentaActual ? 'selected' : ''}>${escapeHtml(p.codigo + ' — ' + p.concepto)}</option>`
         ).join('')}</optgroup>` +
-        `<optgroup label="Estándar (PUC)">${estandarOptsActualHTML}</optgroup>`;
-    const subcuentaCampoHtml = sinOpcionesSubcuenta
+        `<optgroup label="Estándar (PUC)">${estandarOptsActualHTML}</optgroup>`) +
+      `<option value="__manual__">✎ Escribir código a mano...</option>`;
+    const subcuentaCampoHtml = (sinOpcionesSubcuenta || item._subcuentaManual)
       ? `<input type="text" data-idx="${idx}" data-role="subcuenta" placeholder="Código y nombre de la cuenta" value="${escapeHtml(d.subcuenta_gasto || '')}" title="Esta categoría (\"Otro\") no tiene una cuenta típica -- escribe el código PUC a mano.">`
       : `<select data-idx="${idx}" data-role="subcuenta">${subcuentaOpts}</select>`;
 
@@ -2073,11 +2109,22 @@ summaryBody.addEventListener('change', (e) => {
       const opciones = SUBCUENTAS_GASTO[e.target.value] || SUBCUENTAS_GASTO['otro'];
       item.data.subcuenta_gasto = (opciones && opciones.length > 0) ? opciones[0][0] : '';
     }
+    // Cambiar de categoría sale del modo "escribir a mano" -- se vuelve
+    // a mostrar la lista (con el default de la categoría nueva).
+    item._subcuentaManual = false;
     renderSummary();
   }
 
   if (e.target.dataset.role === 'subcuenta') {
-    item.data.subcuenta_gasto = e.target.value;
+    if (e.target.tagName === 'SELECT' && e.target.value === '__manual__') {
+      // "Escribir código a mano" en cualquier categoría -- se repinta
+      // esta tarjeta con el campo de texto libre en vez del selector.
+      item.data.subcuenta_gasto = '';
+      item._subcuentaManual = true;
+      renderSummary();
+    } else {
+      item.data.subcuenta_gasto = e.target.value;
+    }
   }
 
   if (e.target.dataset.role === 'digitacion') {
@@ -2162,8 +2209,25 @@ function construirPayloadFactura(item){
 // para que renderSummary() solo tenga que pintar lo que ya quedó decidido.
 async function guardarUnaFactura(item){
   try {
+    const payload = construirPayloadFactura(item);
+    // El documento original (foto/PDF) de este ítem solo existe en el
+    // lote mientras no se guarda la factura (mismo endpoint que ya usa
+    // el botón "Ver documento" de la tarjeta) -- se trae acá y se
+    // manda junto con el resto de los datos, para que no se pierda al
+    // guardar y se pueda mostrar de nuevo en Revisión.
+    try {
+      const resArchivo = await fetch(`/api/lotes/items/${item.id}/archivo`);
+      if (resArchivo.ok) {
+        const archivo = await resArchivo.json();
+        payload.archivo_original = archivo.base64 || '';
+        payload.archivo_original_tipo = archivo.media_type || '';
+      }
+    } catch (e) {
+      // No bloquea el guardado de la factura si esto falla -- se
+      // guarda igual, solo sin el documento original adjunto.
+    }
     const res = await fetch('/api/invoices', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(construirPayloadFactura(item))
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
     });
     const dataGuardada = res.ok ? await res.json().catch(() => null) : null;
     if (res.ok) {
